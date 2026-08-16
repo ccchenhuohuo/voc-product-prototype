@@ -59,18 +59,8 @@ def ingest_window(ctx, start: datetime, end: datetime) -> dict:
     ]
     all_msgs: list[dict] = []
     all_evi: list[dict] = []
-    # 按 message_id 保存历史电商集合：本窗口若重抽同一消息，必须用新值覆盖
-    # 旧值，不能做简单集合并集，否则已被上游纠正的旧编码仍会误放行社媒。
-    ecommerce_spus_by_message = db.ecommerce_spus_by_message()
-    ecommerce_spus: set[str] | None = None
 
     for src_line, qtype, tf, slice_days in plans:
-        if src_line == "社媒":
-            ecommerce_spus = clean.normalize_spu_set(
-                code
-                for codes in ecommerce_spus_by_message.values()
-                for code in codes
-            )
         blobs, metas = yunting.export_window(qtype, start, end, tf, slice_days, ctx.mode)
         stats["slices"][src_line] = metas
         seen: set[str] = set()
@@ -80,12 +70,7 @@ def ingest_window(ctx, start: datetime, end: datetime) -> dict:
                 if not mid or mid in seen:
                     continue
                 seen.add(mid)
-                allowed_spus = ecommerce_spus if src_line == "社媒" else None
-                msg = clean.to_message(
-                    row, src_line, ctx.run_id, dewater, allowed_spus=allowed_spus,
-                )
-                if src_line == "电商":
-                    ecommerce_spus_by_message[mid] = msg["spu"]
+                msg = clean.to_message(row, src_line, ctx.run_id, dewater)
                 # 保留期（§10.3）
                 pt = msg.get("publish_time")
                 if isinstance(pt, datetime):

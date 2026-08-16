@@ -96,8 +96,8 @@
       <td>不改。降到 1 会让条目涨到 747、多数是单条抱怨，队列被淹没的代价大于覆盖收益</td><td><span class="tag t-sql">不改动</span></td></tr>
     <tr><td class="n">5</td><td><b>SPU 编码规范化</b></td>
       <td>社媒匹配 <span class="n">27 → 31</span>（<code>MT-79</code> ↔ <code>MT79</code>）</td><td><span class="tag t-code">重跑抽取</span></td></tr>
-    <tr><td class="n">6</td><td><b>排除第三方型号</b></td>
-      <td>剔除 <code>NP-FZ100</code> <code>EN-EL15</code> 等相机电池型号</td><td><span class="tag t-code">重跑抽取</span></td></tr>
+    <tr><td class="n">6</td><td><b>抽取层不筛 SPU</b><br><span style="font-size:12px;color:var(--faint)">原为「排除第三方型号」，前提已被实测推翻</span></td>
+      <td>挂到 SPU 即本品（社媒 2,561 条带 SPU 的消息 <code>brands</code> 全含本品，零例外）。<code>NP-FZ100</code> <code>EN-EL15</code> 是本品兼容电池沿用相机电池规格命名，非竞品</td><td><span class="tag t-code">改代码</span></td></tr>
     <tr><td class="n">7</td><td><b>来源线口径统一</b></td>
       <td>代码、文档与机会层来源值统一为 电商 / 社媒；<code>channel</code> 保持需求缺口 / 竞品对标</td><td><span class="tag t-code">代码 + 迁移脚本</span></td></tr>
   </table></div>
@@ -110,7 +110,8 @@
   <p class="lede">这七项不是七件独立的事，它们咬在同一条链路上。分开做会互相推翻。</p>
 
   <ul>
-    <li><b>#5 #6 必须在 #3 之前</b>——社媒接入老品迭代靠 SPU 匹配，编码没规范化、第三方型号没剔除，接进来的就是脏数据。</li>
+    <li><b>#5 必须在 #3 之前</b>——社媒接入老品迭代靠 SPU 匹配，编码没规范化就对不上号（<code>MT-79</code> 和 <code>MT79</code> 会被当成两个产品）。</li>
+    <li><b>#6 从「剔除」改成「不筛」</b>——原方案要用电商 SPU 集合做白名单反向剔除第三方型号。实测推翻了这个前提：社媒 2,561 条带 SPU 的消息，<code>brands</code> 100% 含本品；<code>NP-FZ100</code> 是本品 Tagbatt 兼容电池沿用索尼电池规格命名，不是竞品。按原方案执行会为拦 6 条而误删约 1,380 条本品消息。<b>「社媒独有 SPU 要不要成卡」是展示层口径，移到阶段三的 <code>voc_spu</code> 里定，抽取层不销毁数据。</b></li>
     <li><b>#7 必须在最前或最后</b>——它碰所有文件。夹在中间做，会和 #1 的改动在同一批文件上冲突。<b>决定放最前</b>：后续所有改动都在新口径上写，避免刚改完又要再改一遍。</li>
     <li><b>#1 #2 必须同批重跑</b>——池子扩大 54% 和分类规则改变都只在生成时生效，跑两次是纯浪费 3 小时。</li>
     <li><b>#4 不动</b>——条目阈值维持 <code>≥2</code>。它是展示层口径，改它会和新数据的覆盖率变化混在一起，验收时分不清增量来自哪边；先把数据本身做对，阈值留到有真实效果可看时再单独议。</li>
@@ -127,9 +128,10 @@
     <div class="ph"><span class="num">阶段一</span><span class="nm">口径替换 + 抽取层修正</span>
       <span class="cost">改代码 + 迁移脚本 · 本轮不执行</span></div>
     <div class="pb">
-      <p>做 <b>#7 来源线口径统一</b>、<b>#5 SPU 规范化</b>、<b>#6 排除第三方型号</b>。全部是确定性改动，不碰 LLM；迁移与数据重跑由验收方另行受控执行。</p>
-      <p>SPU 规范化落在<b>抽取层</b>（<code>clean.py</code>），不是在查询里临时 <code>regexp_replace</code>。<code>spu</code> 保存消除连字符、空格与大小写差异后的编码，<code>spu_raw</code> 保留上游原值；第三方型号用电商 SPU 集合做白名单反向剔除，未匹配编码进入 <code>spu_unmatched</code>，不静默丢弃。</p>
-      <div class="gate"><b>闸门 A</b>：① 全仓历史临时线名的文本残留为 0；受控迁移 <code>013_src_line_rename.sql</code> 以 Unicode 转义识别历史存量，并断言迁移后的旧口径残留为 0；② 纯函数单测证明 <code>MT-79</code> 与 <code>MT79</code> 归一；③ 第三方型号从 <code>spu</code> 剔除且可在 <code>spu_unmatched</code> 查到；④ pipeline 与 system 两套离线 pytest 均以退出码 0 结束。本阶段不执行 SQL、不连生产库、不重跑管道，因此消息数、证据数、挂靠数及迁移后存量分布留待验收方执行时核验。</div>
+      <p>做 <b>#7 来源线口径统一</b>、<b>#5 SPU 规范化</b>、<b>#6 抽取层不筛 SPU</b>。全部是确定性改动，不碰 LLM；迁移与数据重跑由验收方另行受控执行。</p>
+      <p>SPU 规范化落在<b>抽取层</b>（<code>clean.py</code>），不是在查询里临时 <code>regexp_replace</code>。<code>spu</code> 保存消除连字符、空格与大小写差异后的编码，<code>spu_raw</code> 保留上游原值，<code>spu_unmatched</code> 只留规范化后为空的无效 token。<b>不按任何名单筛选</b>——云听依本公司产品体系打标，挂到 SPU 即本品。</p>
+      <div class="gate"><b>闸门 A</b>：① 全仓历史临时线名的文本残留为 0；受控迁移 <code>013_src_line_rename.sql</code> 以 Unicode 转义识别历史存量，并断言迁移后的旧口径残留为 0；② 拿真库数据用独立于实现的 SQL 复算：社媒可匹配 SPU <code>27 → 31</code>，且规范化零碰撞（电商 328→328、社媒 83→83）；③ <code>spu_unmatched</code> 只出现规范化后为空的无效 token，不出现任何有效编码；④ 电商消息数、证据总数、挂靠数三个基线不变（<span class="n">26,407 / 63,972 / 1,638</span>）；⑤ pipeline 与 system 两套离线 pytest 均以退出码 0 结束。</div>
+      <div class="callout"><span class="i">⚠️</span><p><b>闸门口径的教训</b>：原闸门 A② 只写「社媒可匹配 SPU ≥31」，<b>只量了留下多少、没量丢掉多少</b>，因此测不出白名单会误删 1,380 条本品消息。定闸门时两头都要量。</p></div>
     </div>
   </div>
 

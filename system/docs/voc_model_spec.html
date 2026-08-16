@@ -393,7 +393,7 @@
     <tr><td>1</td><td><b>产品定级是多值导出</b></td>
         <td><code>clean.highest_grade()</code> 按 PS › S › A › B › C › D › 其他取最高级写入既有 <code>voc_message.product_grade</code>；<code>voc_spu.grade</code> 聚合时再次按同一顺序取值</td></tr>
     <tr><td>2</td><td><b>SPU / SKU / 型号未入库</b></td>
-        <td><code>voc_message.spu</code>、<code>sku</code>、<code>model</code> 已是数组字段；阶段一规定 <code>spu_raw</code> 保留拆分后的原始 token，<code>spu</code> 只保存规范化且命中电商白名单的编码，<code>spu_unmatched</code> 留存未命中的原始 token。<code>voc_spu</code> 以拆开的规范化 SPU 为主键并聚合品名与 SKU；当前物化视图不暴露 <code>model</code></td></tr>
+        <td><code>voc_message.spu</code>、<code>sku</code>、<code>model</code> 已是数组字段；阶段一规定 <code>spu_raw</code> 保留拆分后的原始 token，<code>spu</code> 保存规范化后的全部编码（抽取层不按名单筛选），<code>spu_unmatched</code> 只留规范化后为空的无效 token。<code>voc_spu</code> 以拆开的规范化 SPU 为主键并聚合品名与 SKU；当前物化视图不暴露 <code>model</code></td></tr>
     <tr><td>3</td><td><b><code>tax_l1</code> 是树名而非业务层级</b></td>
         <td><code>voc_evidence.tax_stage / tax_domain / tax_sub / tax_leaf</code> 已按 <code>tax_path</code> 固定位置提取；<code>tax_l1</code> 明确标为 deprecated，应用筛选与面包屑读取新字段</td></tr>
   </table></div>

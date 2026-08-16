@@ -131,7 +131,7 @@
         <dt>带 SPU 归属</dt><dd>25,055 · 94.9%</dd>
         <dt>平均星级</dt><dd>4.48</dd>
       </dl>
-      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。<b>当前展开层唯一准入来源</b>；阶段三才会评估让命中电商 SPU 白名单的社媒证据进入老品迭代。</p>
+      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。<b>当前展开层唯一准入来源</b>；阶段三才会评估让能匹配到在售 SPU 的社媒证据进入老品迭代。</p>
     </div>
     <div class="chan">
       <h4>社交媒体</h4>
@@ -162,7 +162,7 @@
           <div class="tbl"><div class="tn">voc_evidence</div><div class="tv">148,876</div><div class="td">标签 × 情感 × 原声片段</div></div>
           <div class="tbl"><div class="tn">voc_tag_taxonomy</div><div class="tv">7,722</div><div class="td">标签树字典，两棵树</div></div>
         </div>
-        <p><b>SPU 编码在抽取层一次性规范化</b>：<code>spu_raw</code> 保留上游原值，<code>spu</code> 保存去除连字符与空格并统一大小写后的编码；社媒编码只在命中电商 SPU 白名单时进入 <code>spu</code>，未命中的第三方或未知型号进入 <code>spu_unmatched</code> 留痕。查询层直接消费规范值，不重复做正则清洗。</p>
+        <p><b>SPU 编码在抽取层一次性规范化</b>：<code>spu_raw</code> 保留上游原值，<code>spu</code> 保存去除连字符与空格并统一大小写后的编码；<b>抽取层不按任何名单筛选</b>——云听依本公司产品体系打标，挂到 SPU 即本品，<code>spu_unmatched</code> 只留规范化后为空的无效 token。查询层直接消费规范值，不重复做正则清洗。</p>
       </div>
     </div>
 

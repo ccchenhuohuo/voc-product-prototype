@@ -57,7 +57,7 @@ VOC_PG_PASSWORD=<YOUR_VOC_WRITER_PASSWORD>
 ```text
 voc_analytics/        管线核心
   ingest.py           抽取：云听导出 -> xlsx -> voc_message / voc_evidence
-  clean.py            清洗：字段映射、尾部修复、国别归一、SPU 规范化与白名单留痕
+  clean.py            清洗：字段映射、尾部修复、国别归一、SPU 规范化与原值留痕
   taxonomy.py         标签树快照与路径解析
   pipeline.py         编排：分桶 -> 生成机会点 -> 落库
   stages/stage1.py    问题模式切分（分批 + 最大团分解）
@@ -139,4 +139,4 @@ python tests/test_clean_fields.py
 
 `008`/`009` 已在代码中完成产品字段、SPU 展开层和 `n_eff/scope`；`010`–`012` 已补齐应用读权及两个人工状态层的 AFTER 审计触发器。历史事实层是否已完成全量回填仅凭仓库无法确认，需由运维记录或数据库核验。
 
-阶段一已在代码与迁移脚本中统一来源口径，并把 SPU 规范化、原值留痕和第三方型号白名单剔除落到抽取层；本阶段没有执行迁移、重跑抽取或连接生产库。分类解耦与全量重跑仍以 [docs/rework_plan.html](docs/rework_plan.html) 的后续阶段为准。
+阶段一已在代码与迁移脚本中统一来源口径，并把 SPU 规范化与原值留痕落到抽取层。抽取层**不按任何名单筛选 SPU**——云听依本公司产品体系打标，挂到 SPU 即本品；「社媒独有 SPU 是否成卡」是展示层口径，留到阶段三的 `voc_spu` 里定。分类解耦与全量重跑仍以 [docs/rework_plan.html](docs/rework_plan.html) 的后续阶段为准。

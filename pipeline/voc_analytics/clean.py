@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 import re
-from collections.abc import Iterable
 from typing import Any
 
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿]")
@@ -71,24 +70,21 @@ def normalize_spu_code(code: Any) -> str | None:
     return normalized or None
 
 
-def normalize_spu_set(codes: Iterable[Any]) -> set[str]:
-    """把候选白名单应用与消息 SPU 相同的规范化规则。"""
-    normalized: set[str] = set()
-    for code in codes:
-        value = normalize_spu_code(code)
-        if value is not None:
-            normalized.add(value)
-    return normalized
+def clean_spu_codes(v: Any) -> dict[str, list[str]]:
+    """规范化 SPU，并把规范化后为空的原始 token 单独留痕。
 
+    **不按任何名单筛选。** 云听的 SPU 是依照本公司产品体系打的标，
+    实测社媒侧 2,561 条带 SPU 的消息 brands 全部含本品，零例外；
+    而 ``NP-FZ100`` ``EN-EL15`` 这类看似第三方的编码，是本品兼容电池
+    沿用相机电池规格命名（如 Tagbatt），并非竞品混入。曾按「电商出现过的
+    SPU」做白名单，会为拦 6 条而误删约 1,380 条本品社媒消息。
 
-def clean_spu_codes(v: Any, allowed_spus: set[str] | None = None) -> dict[str, list[str]]:
-    """规范化 SPU，并把规范化失败或未命中白名单的原始 token 单独留痕。
+    「社媒独有 SPU 要不要生成产品卡」是展示层口径，由 ``voc_spu``
+    物化视图决定；抽取层只忠实记录，不在此销毁数据。
 
-    ``allowed_spus=None`` 表示不筛选；空集合表示没有编码获准。规范化结果
-    按首次出现顺序去重，原始与未匹配字段保留 ``parse_array`` 后的 token。
+    结果按首次出现顺序去重，``spu_raw`` 保留 ``parse_array`` 后的原始 token。
     """
     raw_values = parse_array(v)
-    allowed = None if allowed_spus is None else normalize_spu_set(allowed_spus)
     matched: list[str] = []
     unmatched: list[str] = []
     seen: set[str] = set()
@@ -96,9 +92,6 @@ def clean_spu_codes(v: Any, allowed_spus: set[str] | None = None) -> dict[str, l
     for raw in raw_values:
         normalized = normalize_spu_code(raw)
         if normalized is None:
-            unmatched.append(raw)
-            continue
-        if allowed is not None and normalized not in allowed:
             unmatched.append(raw)
             continue
         if normalized not in seen:
@@ -219,8 +212,7 @@ def explode(row: dict, tax, src_line: str) -> tuple[list[dict], int]:
     return out, misaligned
 
 
-def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str],
-               allowed_spus: set[str] | None = None) -> dict:
+def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str]) -> dict:
     """把一行导出映射成 voc_message。"""
     star = row.get("评论星级")
     try:
@@ -233,7 +225,7 @@ def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str],
         inter_i = int(float(inter)) if inter not in (None, "") else None
     except (TypeError, ValueError):
         inter_i = None
-    spu_fields = clean_spu_codes(row.get("SPU_"), allowed_spus)
+    spu_fields = clean_spu_codes(row.get("SPU_"))
     return {
         "message_id": row.get("消息ID"),
         "src_line": src_line,

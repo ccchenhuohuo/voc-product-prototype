@@ -98,16 +98,6 @@ def save_unclassified(pairs: Iterable[tuple[str, int]], week: str, reason: str) 
 
 
 # ---------------------------------------------------------------- 领域查询
-def ecommerce_spus_by_message() -> dict[str, list[str]]:
-    """读取事实层全历史电商 SPU；规范化与本窗口覆盖由抽取层完成。"""
-    rows = q("""
-      SELECT message_id, COALESCE(spu, ARRAY[]::text[]) AS spu
-        FROM voc_message
-       WHERE src_line = '电商'
-    """)
-    return {row["message_id"]: list(row["spu"] or []) for row in rows}
-
-
 def line_a_pool(week_start: str | None = None, week_end: str | None = None) -> list[dict]:
     """电商生成池：产品体验分支 + 负面 + 非误标 + 有片段（§4.3）"""
     sql = """

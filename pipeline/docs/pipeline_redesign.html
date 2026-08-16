@@ -128,7 +128,7 @@
           <span class="box b-new mono">prod_line</span><span class="box b-new mono">is_own_brand</span></span></div>
         <div class="lane"><span class="lk">要修的</span><span class="lv">
           <span class="box b-chg">多值当标量 → 数组</span><span class="rt">定级现有 71 种脏取值</span>
-          <span class="box b-chg">SPU 编码规范化 + 电商白名单</span><span class="rt">原始 token 与未匹配 token 分字段留痕</span>
+          <span class="box b-chg">SPU 编码规范化</span><span class="rt">原始 token 与无效 token 分字段留痕；不按名单筛选</span>
           <span class="box b-chg mono">tax_l1</span><span class="rt">历史树名字段保留兼容并标记 deprecated</span>
           <span class="box b-new">拆 tax 层级</span><span class="rt">A 层写 tax_stage，另有 domain / sub / leaf</span></span></div>
         <div class="lane"><span class="lk">落库</span><span class="lv">
