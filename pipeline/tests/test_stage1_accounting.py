@@ -73,3 +73,48 @@ def test_split_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
     )
     assert ctx.llm_failed_modes == 1
 
+
+
+def _parse_batch(monkeypatch, modes, unclassified, idx):
+    payload = {"modes": modes, "unclassified": unclassified}
+    monkeypatch.setattr(stage1.llm, "chat_json", lambda *a, **k: (payload, {}))
+    items = [{"snippet": f"s{i}", "tag": "t", "message_id": f"m{i}", "seq": 1}
+             for i in idx]
+    return stage1.split_batch(items, "老品迭代", idx, {}, 1, 1)
+
+
+def test_duplicate_assignment_is_tolerated_and_counted(monkeypatch) -> None:
+    """一条抱怨同时命中两个失效模式是本设计的预期输入，不是异常。
+
+    Stage1 架构是「分批 × 投票 → 共现 → 最大团」，证据在多次归属中的共现
+    正是构图信号，重叠由最大团一步收敛。2c 曾在此加严格一一对应断言，
+    2026-08-17 单周探针实测：第一批就因 duplicated=1 整批失败，
+    全周只跑了 19 次调用就中止。
+    """
+    out = _parse_batch(
+        monkeypatch,
+        [{"mode_name": "松动", "evidence_idx": [1, 2]},
+         {"mode_name": "断裂", "evidence_idx": [2]}],
+        [],
+        [0, 1],
+    )
+    assert out["duplicated"] == 1
+    assert set(out["modes"]) == {"松动", "断裂"}
+
+
+def test_missing_assignment_falls_into_unclassified(monkeypatch) -> None:
+    """遗漏归进 unclassified 并计数，不中止整轮。
+
+    unclassified 本就是「归不了类的证据」这个语义桶，遗漏落进去不丢数据、
+    可审计、下游已有处理。中止的代价是整轮跑不完：一轮全量跨几千次调用，
+    要求 LLM 零遗漏概率为零。2026-08-17 探针实测 missing=2/10 就中止在
+    第 89 次调用。防「部分失败记成全量成功」的是批次级账本，不是这里。
+    """
+    out = _parse_batch(monkeypatch,
+                       [{"mode_name": "松动", "evidence_idx": [1]}], [], [0, 1])
+    assert out["missing"] == 1
+    assert out["unclassified"] == [1]          # 未被归属的原始下标
+    assert out["modes"]["松动"] == [0]
+    # 守恒：归属 + 未归类 == 输入
+    covered = {m for picks in out["modes"].values() for m in picks} | set(out["unclassified"])
+    assert covered == {0, 1}

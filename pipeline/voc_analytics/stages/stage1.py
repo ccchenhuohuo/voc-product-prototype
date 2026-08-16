@@ -162,17 +162,27 @@ def split_batch(items: list[dict], opp_type: str, idx: list[int], ctx_info: dict
     uncl = [idx[j - 1] for j in obj.get("unclassified", [])
             if isinstance(j, int) and 1 <= j <= len(idx)]
 
-    # Prompt 要求每条证据恰好出现一次。缺失或重复不能伪装成完整批次；否则
-    # aggregate_votes 会把缺失项补成无语义的单例组，run log 仍显示成功。
+    # 归属守恒在这里【只记账不中止】，原因是两类偏差都不是失败：
+    #
+    # · 重复归属是设计预期。一条抱怨同时命中两个失效模式很正常，而 Stage1
+    #   架构本就是「分批 × 投票 → 共现 → 最大团」，多次归属的共现正是构图
+    #   信号，重叠由最大团一步收敛。
+    # · 遗漏是 LLM 的概率性瑕疵。归进 unclassified 即可——那本来就是
+    #   「归不了类的证据」这个语义桶，不丢数据、可审计、下游已有处理。
+    #
+    # 2c 曾在此要求严格一一对应，2026-08-17 单周探针连撞两次：先因
+    # duplicated=1 在 19 次调用后中止，放宽后又因 missing=2 在 89 次调用
+    # 后中止。一轮全量要跨几千次调用，要求零偏差等于这轮永远跑不完。
+    # 真正防「部分失败记成全量成功」的是批次级 planned/completed/failed/
+    # cancelled 账本，那个不能松。
     assigned = [member for picks in modes.values() for member in picks] + uncl
     counts = Counter(assigned)
     missing = [member for member in idx if counts[member] == 0]
-    duplicated = [member for member, count in counts.items() if count != 1]
-    if missing or duplicated or len(assigned) != len(idx):
-        raise llm.LLMError(
-            f"Stage1 批次证据未一一归属: missing={len(missing)}, "
-            f"duplicated={len(duplicated)}, expected={len(idx)}, actual={len(assigned)}")
-    return {"modes": modes, "unclassified": uncl}
+    if missing:
+        uncl = uncl + missing
+    duplicated = sum(count - 1 for count in counts.values() if count > 1)
+    return {"modes": modes, "unclassified": uncl,
+            "missing": len(missing), "duplicated": duplicated}
 
 
 # ---------------------------------------------------------------- 编排
