@@ -257,18 +257,43 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
                 unclassified_rows=len(split["unclassified"]),
                 dropped_rows=len(split["dropped"]))
 
-            def build(group: dict) -> dict:
+            def build(group: dict) -> dict | BaseException:
                 try:
                     result = build_opportunity(
                         items, group, bucket.opp_type, info, ctx,
                         histories[bucket.opp_type])
                     ctx.metric_incr(("generation",), completed_groups=1)
                     return result
-                except Exception:
+                except llm.FatalLLMError:
+                    # 配额/鉴权：继续跑是白费，立刻停整轮。
                     ctx.metric_incr(("generation",), failed_groups=1)
                     raise
+                except Exception as error:  # noqa: BLE001
+                    # 单条产出失败不该杀死整个生命周期。这里是「一个机会点」
+                    # 的边界：Stage2/3/4 的任何质量校验没过（建议段超长、
+                    # 复核 JSON 非法、标题公式不符），只作废这一条，记账后继续。
+                    #
+                    # 2026-08-17 的 2b 连续四轮都死在这类单条校验上：
+                    #   Stage1 JSON 截断 -> Stage4 复核 JSON 非法 ->
+                    #   Stage3 建议段 340 字超出 40–320 上限
+                    # 每次修一个再跑，下一轮暴露下一个。几千条产出里必然有
+                    # 个别条目过不了校验，这是概率问题，不是缺陷。
+                    ctx.metric_incr(("generation",), failed_groups=1)
+                    return error
 
-            built = llm.parallel_map(build, groups)
+            built_raw = llm.parallel_map(build, groups)
+            built = [obj for obj in built_raw if not isinstance(obj, BaseException)]
+            dropped_groups = [obj for obj in built_raw if isinstance(obj, BaseException)]
+            if dropped_groups:
+                ratio = len(dropped_groups) / max(len(groups), 1)
+                if ratio > C.GENERATION_MAX_FAILED_RATIO:
+                    ctx.metric_incr(("generation",), failed_buckets=1)
+                    raise llm.LLMError(
+                        f"桶内机会点失败率过高: {len(dropped_groups)}/{len(groups)} "
+                        f"({ratio:.0%} > {C.GENERATION_MAX_FAILED_RATIO:.0%})，"
+                        f"首个错误: {dropped_groups[0]}")
+                print(f"   [生成] 桶内 {len(dropped_groups)}/{len(groups)} 条产出失败已跳过"
+                      f"：{dropped_groups[0]}")
             ctx.metric_incr(("generation",), completed_buckets=1,
                             planned_persistence=len(built))
             return {"pairs": [(obj, items) for obj in built], "bucket": bucket}

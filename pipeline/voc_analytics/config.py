@@ -73,6 +73,10 @@ BATCH_SIZE = 50
 # 记进批次账本后跳过即可；超过此比例说明是系统性问题（提示词失效、模型
 # 行为变化），继续跑只会产出残缺结果，应中止让人来看。
 STAGE1_MAX_FAILED_RATIO = float(os.environ.get("VOC_STAGE1_MAX_FAILED_RATIO", "0.2"))
+# 同理用于「一个机会点」这一层：Stage2/3/4 的质量校验没过只作废该条，
+# 记账后继续；超过此比例说明是系统性问题，中止让人来看。
+GENERATION_MAX_FAILED_RATIO = float(
+    os.environ.get("VOC_GENERATION_MAX_FAILED_RATIO", "0.2"))
 # 自洽性投票：M2 A/B 实测后【关闭】。两个 240+ 证据桶的对照结果——
 #   整体质量: 投票 47组/30%覆盖/15调用  vs  单次 33组/28%覆盖/5调用
 #   耐用性  : 投票 69组/51%覆盖/15调用  vs  单次 25组/49%覆盖/5调用
