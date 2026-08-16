@@ -87,8 +87,8 @@
 <header class="doc"><div class="wrap">
   <div class="ico">🧭</div>
   <h1>VOC 机会模型规格</h1>
-  <p class="sub">两层结构、两类卡片、一条生命周期。SPU 是长期挂载的容器，问题是有生死的条目；共性问题不进状态机，只作战略观察。本文是开发依据，所有数字取自库内实测。</p>
-  <div class="meta">规格 v1 · 2026-08-15 数据快照 · 生产迁移基线 001–014（013/014 已于 2026-08-16 执行）；015 代码已备、未执行</div>
+  <p class="sub">两层结构、两类卡片、两条互相隔离的生命周期。老品迭代与新品创新分别运转；PM 已接管的 locked 行不在两者之间转换。SPU 是长期挂载的容器，问题是有生死的条目。</p>
+  <div class="meta">规格 v1 · 2026-08-15 历史数据快照 · 2026-08-17 阶段 2c 代码契约 · 仓库迁移链已到 017；本轮 017 未执行，015/016 环境状态未验证</div>
 </div></header>
 
 <div class="wrap"><main>
@@ -96,19 +96,24 @@
 <!-- ======================= 1 -->
 <section>
   <h2><span class="no">1</span>两层结构</h2>
-  <div class="callout"><span class="i">ℹ️</span><p><b>来源口径说明</b>：<code>voc_message.src_line</code> 与 <code>voc_opportunity.src_line</code> 均使用「电商 / 社媒」，表示消息或机会的发现来源，不限制后续交叉供证。<code>voc_opportunity.channel</code> 仍表示「需求缺口 / 竞品对标」，不是消息来源。</p></div>
+  <div class="callout"><span class="i">ℹ️</span><p><b>来源口径说明</b>：<code>voc_message.src_line</code> 是 <code>voc_source_policy</code> 中已登记的证据来源；<code>voc_opportunity.src_line</code> 只是 legacy 单值代表，新建混合组取 <code>sorted(source_lines)[0]</code>，存量 recount 不改写。完整供证事实使用 <code>source_lines</code> 与 <code>evi_by_source</code>。当前策略种子为电商、社媒与待接入的问卷调研；<code>channel</code> 仍是业务子类型。</p></div>
   <h3>阶段 2a 分类契约：看完整证据集，不看渠道</h3>
   <p>老品迭代能路由到具体产品负责人，新品创新进入共享池；决定能否路由的是机会点<b>全部已挂载证据</b>中是否存在 SPU，而不是生成入口或 <code>src_line</code>。规则严格按 R0 → R3 顺序求值，先命中先生效：</p>
   <div class="tablewrap"><table>
     <tr><th>规则</th><th>完整证据集条件</th><th><code>opp_type</code></th><th><code>classification_state</code></th><th>存量测得</th></tr>
     <tr><td><code>R0</code></td><td><code>voc_opp_evidence</code> 中零条证据</td><td>无可判类型</td><td><b>无效</b></td><td>12</td></tr>
     <tr><td><code>R1</code></td><td>任一证据所属消息 <code>cardinality(spu) &gt; 0</code></td><td>老品迭代</td><td>确定</td><td>264</td></tr>
-    <tr><td><code>R2</code></td><td>无 SPU，且任一证据消息来自社媒</td><td>新品创新</td><td>确定</td><td>368</td></tr>
-    <tr><td><code>R3</code></td><td>无 SPU，仅剩电商证据</td><td>无可判类型</td><td><b>无效</b></td><td>1</td></tr>
+    <tr><td><code>R2</code></td><td>无 SPU，且任一证据来源 <code>requires_spu=false</code></td><td>新品创新</td><td>确定</td><td>368</td></tr>
+    <tr><td><code>R3</code></td><td>无 SPU，且全部证据来源均 <code>requires_spu=true</code></td><td>无可判类型</td><td><b>无效</b></td><td>1</td></tr>
   </table></div>
-  <p class="anno"><b>混合证据仍按上述优先级处理</b>：电商与社媒证据混合时，只要任一条挂 SPU 就命中 R1；全部无 SPU 时，只要含社媒就命中 R2，纯电商无 SPU 才命中 R3。生成时可用当前分组先判，但权威结果必须在证据关系写入后按完整集合统一重算；后续 attach 或 cross-line 供证改变集合时也必须再次重算，不能沿用发现渠道。</p>
+  <p class="anno"><b>完整证据集仍按上述优先级处理</b>：任一条挂 SPU 即 R1；全部无 SPU 时，任一来源 <code>requires_spu=false</code> 即 R2，否则 R3。生成期则先对每条证据用同一纯函数求值，形成互斥生命周期桶；关系写入后再按完整集合回算。「用户使用体验」只是入池内容规则，有 SPU 才是老品，无 SPU 仍按来源策略判定。</p>
+  <p class="anno"><b>两次求值存在明确边界</b>：同义问题若由一条有 SPU 证据和一条无 SPU 社媒证据支撑，逐证据阶段分别命中 R1/R2，互斥生命周期不会合流；完整集合的“任一 SPU 即 R1”无法倒推改写已分流的证据。当前跨来源老品合流只保证各证据本身均为 R1 的场景；混合挂载场景需另定 provisional 或跨生命周期规则。</p>
   <div class="callout"><span class="i">🧾</span><p><b>有效性与类型正交</b>：<code>opp_type</code> 仍只有「老品迭代 / 新品创新」，<code>classification_state</code> 只有「确定 / 无效」，<code>classify_rule</code> 记录 R0–R3 供审计与回放。无效机会点及其证据一律保留，所有使用者看板查询必须排除 <code>classification_state = '无效'</code>，诊断侧仍可追查完整证据链。</p></div>
-  <p class="anno"><b>迁移状态</b>：<code>015_classification_contract.sql</code> 代码已备但尚未执行。迁移将在一个事务内回填分类并按关系表实数重算 <code>evi_total</code>；末尾断言「确定老品 264、确定新品 368、无效 13、总计 645、规则为空 0」。这些是执行时必须满足的固定断言，不是本文声称已经落库的新分布；任一不符应使迁移整体回滚。</p>
+  <p class="anno"><b>迁移状态</b>：仓库链已到 017；本轮明确未执行 017，015/016 在各实际环境中的状态未连库核对。「确定老品 264、确定新品 368、无效 13、总计 645、规则为空 0」是 015 脚本的历史自检断言，不是本轮复核的生产结果。</p>
+  <h3>阶段 2c 生成身份与失败契约</h3>
+  <p>统一内容池之后，Stage1 / Stage2 提示词与 L1 候选键都只按 <code>opp_type</code> 选择。新建机会使用 <code>OPP2-</code> + SHA-256 前 128 bit；身份材料与 L1 唯一域一致：老品包含规范化的版本、<code>opp_type</code>、<code>core_tag</code> 与 <code>problem_mode</code>，新品再包含业务 <code>channel</code>，但都不含证据来源、周次或模型版本。存量 <code>OPP-*</code> 不重键，消解命中时继承已有 canonical ID。</p>
+  <p>Arrearage、鉴权失败和硬配额/余额不足会立即打开熔断，不重试、不继续；同一 run 的两个生命周期进程通过原子共享文件传播首因。Stage1 的计划/完成/失败/取消批次及条数写入 run log；账本不闭合或任一生成进程非零时，禁止跨来源汇聚、拆分、快照和放行收尾。监督脚本要求 Bash ≥5.1，并在任何停止/清库动作前检查版本。</p>
+  <p class="anno"><b>统一池的静态毛估</b>：旧社媒候选为 <code>5,005 + 2,623 = 7,628</code> 条消息；「用户使用体验」3,249 条整桶 × 23.4% 负面率 ≈ 毛新增 760，毛候选约 8,388（+10.0%）。这不是机会点新增数；多标签重叠、<code>low_conf</code>、非空门槛与消息/证据粒度差异使精确净增<b>未验证</b>，且不得与电商的 4,232 条证据直接相加。</p>
   <p class="lede">核心判断：<b>状态机是项目生命周期</b>——「在跟进 → 项目中 → 已完成」隐含有人立项、有版本交付。用这把尺子量，跨 30 个型号的共性问题不可能有一个项目能"完成"它，强行入机只会变成看板上的僵尸。</p>
   <div class="tablewrap"><table>
     <tr><th>层</th><th>单位</th><th>进状态机</th><th>回答</th><th>实测量级</th></tr>
@@ -268,7 +273,7 @@
 <!-- ======================= 4 -->
 <section>
   <h2><span class="no">5</span>新品创新卡</h2>
-  <p class="lede">完整证据集没有 SPU、但至少含一条社媒证据的有效机会命中 R2，因此是<b>单层结构</b>——诉求本身就是最小单位，它自己就具备战略层的性质。不与老品迭代强行对称。</p>
+  <p class="lede">完整证据集没有 SPU、但至少含一条来源策略 <code>requires_spu=false</code> 的证据时命中 R2，因此是<b>单层结构</b>——诉求本身就是最小单位，它自己就具备战略层的性质。该表述同时适用社媒、问卷调研与后续登记的同类来源。</p>
 
   <div class="mock">
     <div style="border-left:3px solid #448361;padding-left:15px">
@@ -327,7 +332,7 @@
   <div class="tablewrap"><table>
     <tr><th></th><th>老品迭代（SPU 卡）</th><th>新品创新（诉求卡）</th></tr>
     <tr><td>结构</td><td>两层：容器 + 条目</td><td>单层：卡即条目</td></tr>
-    <tr><td>分类判据</td><td>完整证据集中任一消息挂 SPU；渠道不限</td><td>完整证据集无 SPU 且至少含社媒证据</td></tr>
+    <tr><td>分类判据</td><td>完整证据集中任一消息挂 SPU；来源不限</td><td>完整证据集无 SPU 且至少一个来源 <code>requires_spu=false</code></td></tr>
     <tr><td>归属</td><td>当前未接认证或负责人路由；页面显示「未分配」</td><td><b>共享池</b></td></tr>
     <tr><td>处置节奏</td><td>应用未实现截止或催办</td><td>应用未实现周会提醒</td></tr>
     <tr><td>排序</td><td>卡默认按 Wilson 负面占比置信下界，条目按状态组与证据数</td><td><code>rank_score</code> 降序，再按互动量降序</td></tr>
@@ -384,7 +389,7 @@
     <tr><td>新品创新归属</td><td><b>共享池</b>；<code>voc_opportunity_manual.owner</code> 当前同样不由应用写入</td></tr>
   </table></div>
   <h3>成卡阈值</h3>
-  <p>问题条目要求<b>该 SPU 在该问题上 ≥2 条证据</b>，阈值不因分类解耦而改变。迁移 015 的定义同时要求机会点 <code>opp_type = '老品迭代'</code> 且 <code>classification_state = '确定'</code>，并去掉旧的 <code>m.src_line = '电商'</code> 限制：分类既由 SPU 挂载决定，挂 SPU 的社媒证据也必须能展开到对应产品卡，渠道条件不应继续充当分类代理。</p>
+  <p>问题条目要求<b>该 SPU 在该问题上 ≥2 条证据</b>，阈值不因分类解耦而改变。迁移 015 的定义同时要求机会点 <code>opp_type = '老品迭代'</code> 且 <code>classification_state = '确定'</code>，并去掉旧的 <code>m.src_line = '电商'</code> 限制：分类既由 SPU 挂载决定，任意已登记来源的挂 SPU 证据都必须能展开到对应产品卡，来源条件不应继续充当分类代理。</p>
   <div class="tablewrap"><table>
     <tr><th>阈值</th><th>条目数</th><th>覆盖 SPU</th></tr>
     <tr><td>无</td><td>747</td><td>162</td></tr>
@@ -392,14 +397,14 @@
     <tr><td>≥3 条</td><td>69</td><td>23</td></tr>
     <tr><td>≥5 条</td><td>26</td><td>14</td></tr>
   </table></div>
-  <p class="anno">上表为 2026-08-15、旧 <code>009</code> 定义（仅电商证据）落库后的实测基线，不是尚未执行的 015 新定义结果。此前版本记录的 676 / 126 是部署前估算，且「无阈值」一行的覆盖数误填成了电商共性问题数（现为 215），非 SPU 数。015 执行后因纳入挂 SPU 的社媒证据且排除无效机会，条目数与覆盖 SPU 数需重新实测，本文不预报。</p>
+  <p class="anno">上表为 2026-08-15、旧 <code>009</code> 定义（仅电商证据）的历史实测基线，不能代表 015 契约在任一当前环境的结果。此前版本记录的 676 / 126 是部署前估算，且「无阈值」一行的覆盖数误填成了电商共性问题数（快照为 215），非 SPU 数。015 契约纳入挂 SPU 的社媒证据且排除无效机会，其真实条目数与覆盖 SPU 数需按环境重新实测。</p>
   <div class="callout"><span class="i">✅</span><p><b>阈值与无效标记都不会删除底层证据</b>：旧基线中被成卡阈值挡掉的 586 对仍存在于 <code>voc_message / voc_evidence / voc_opp_evidence</code>；R0/R3 无效机会也保留机器行和现有证据关系。它们不会出现在使用者看板，但诊断侧仍可追查。注意当前 <code>n_eff</code> 仍只读取电商挂靠，不能据此声称所有被挡证据都参与全渠道共性度计算。</p></div>
 </section>
 
 <!-- ======================= 7 -->
 <section>
   <h2><span class="no">8</span>抽取与 SPU 层：已落地基线</h2>
-  <p class="lede">本节原列出的三项阻塞已经落地：产品与标签字段由迁移 <code>008_product_fields.sql</code> 补齐，SPU 容器、问题条目与共性度由 <code>009_spu_layer.sql</code> 建立；阶段一又在抽取层加入 SPU 规范化、白名单匹配和原值/未匹配值留痕，对应字段由 <code>014_spu_clean_fields.sql</code> 提供。抽取映射以当前 <code>pipeline/voc_analytics/clean.py</code> 为准；运维记录显示 013/014 已于 2026-08-16 在生产库执行。</p>
+  <p class="lede">本节原列出的三项阻塞已在仓库代码中落地：产品与标签字段由 <code>008_product_fields.sql</code> 补齐，SPU 容器、问题条目与共性度由 <code>009_spu_layer.sql</code> 建立；阶段一又在抽取层加入 SPU 规范化和原值/未匹配值留痕，<b>不按任何白名单筛 SPU</b>，对应字段由 <code>014_spu_clean_fields.sql</code> 提供。抽取映射以当前 <code>pipeline/voc_analytics/clean.py</code> 为准；具体环境的应用状态仍以迁移记录为准。</p>
   <div class="tablewrap"><table>
     <tr><th>#</th><th>原问题</th><th>当前实现</th></tr>
     <tr><td>1</td><td><b>产品定级是多值导出</b></td>
@@ -439,11 +444,17 @@ voc_spu_issue_manual        -- 普通表；重算永不覆盖
   target_release · release_date · closed_at
   revived_at · revive_reason · updated_by · updated_at
 
+voc_source_policy           -- 来源能力；迁移 017 引入
+  src_line PK
+  requires_spu boolean
+
 voc_opportunity             -- 共性问题 / 新品创新共用的机器表
   opp_type                  -- 老品迭代 / 新品创新
   classification_state      -- 确定 / 无效；迁移 015 增加，与 opp_type 正交
   classify_rule             -- R0 / R1 / R2 / R3；记录完整证据集命中规则
-  src_line                  -- 电商 / 社媒（发现来源）
+  src_line                  -- legacy 单值代表；非完整来源事实
+  source_lines text[]       -- 完整证据关系中的去重来源
+  evi_by_source jsonb       -- 各来源证据数
   channel                   -- 业务子类型：需求缺口 / 竞品对标；不是消息来源
   n_eff · scope             -- 迁移 009 新增；无 SPU 挂靠时同时为 NULL
   merged_into · released_at -- 分别由迁移 006 / 007 新增
@@ -455,7 +466,8 @@ voc_opportunity_manual      -- 新品创新卡的人工状态层
 
 voc_spu_issue_log / voc_status_log
   -- 分别记录 SPU 问题与机会点状态变更；011 / 012 将记账移至 AFTER 触发器</code></pre>
-  <p class="anno"><code>voc_spu</code> 与 <code>voc_spu_issue</code> 是物化视图，由 <code>voc_refresh_spu_layer()</code> 刷新；人工状态分表保存。新品创新不另建卡表：状态为「确定」且 <code>opp_type = '新品创新'</code> 的机会进入共享池，应用再把人工状态写入 <code>voc_opportunity_manual</code>。交叉供证不改变 <code>src_line</code>，但关系改写与完整证据集回算必须共用同一事务；回算同时更新 <code>opp_type / classification_state / classify_rule</code>、证据统计与 <code>dual_source / rank_score</code> 等派生指标。迁移 015 代码已备、未执行，因此上述新增列与新版 <code>voc_spu_issue</code> 仍是待迁移契约；当前生产结构仍以已执行的 001–014 为准。</p>
+  <p class="anno"><code>voc_spu</code> 与 <code>voc_spu_issue</code> 是物化视图，人工状态分表保存。关系改写与完整证据集回算必须共用同一事务；回算同时更新 <code>opp_type / classification_state / classify_rule</code>、<code>evi_total / source_lines / evi_by_source</code> 与 <code>dual_source / rank_score</code>。<code>dual_source</code> 是兼容名称，其通用语义是正证据来源数至少为 2。016 冻结 locked 行的三个分类字段，017 不修改该行为。仓库迁移链已到 017；本轮 017 未执行，015/016 实际环境状态未验证。</p>
+  <div class="callout"><span class="i">🪪</span><p><b>机会身份分代兼容</b>：新建机会使用 <code>OPP2-*</code> 的来源无关身份；存量 <code>OPP-*</code> 不迁移，消解命中后继承既有 canonical ID。这避免破坏人工状态、审计、快照、提案数组、血缘与旧链接。</p></div>
 </section>
 
 <!-- ======================= 9 -->
@@ -466,13 +478,13 @@ voc_spu_issue_log / voc_status_log
     <tr><th>原问题</th><th>结论</th></tr>
     <tr><td>容器身份用 <code>SPU_</code> 还是 <code>品名_</code></td><td>主键用 <b>SPU_</b>（91.6% 覆盖），展示用品名_；<code>型号_</code> 仅 23.2% 覆盖，不可当主键</td></tr>
     <tr><td>一 SPU 多品名是否拆卡</td><td><b>合并一张</b>，多品名与 SKU 以数组列在卡内——PM 立项按 SPU</td></tr>
-    <tr><td>社媒证据如何区分老品迭代与新品创新</td><td><b>不按社媒渠道预设类型</b>：完整证据集任一消息挂 SPU 即为老品迭代；全部无 SPU 且含社媒才是新品创新。分类在证据关系落库后重算，挂 SPU 的社媒证据可进入对应 SPU 问题条目。</td></tr>
+    <tr><td>新来源证据如何区分老品迭代与新品创新</td><td><b>不按来源名预设类型</b>：任一证据挂 SPU 即 R1 老品；全部无 SPU 且任一来源 <code>requires_spu=false</code> 即 R2 新品；否则 R3 无效。社媒与问卷调研都通过来源策略取得这一语义。</td></tr>
   </table></div>
 
   <h3>仍未决</h3>
   <div class="q"><span class="qid">Q1</span>战略动态的知会节奏是<b>每月</b>还是<b>每周</b>？品线级问题形成较慢，每周推大概率经常是空的，每月又可能太迟。</div>
-  <div class="q"><span class="qid">Q2</span><code>rank_score</code> 是否纳入<b>扩散因子</b>？当前公式为「证据数 × (1 + 低星率) × 双源系数（双源为 1.5，否则 1）+ 安全项（安全类 +1000）」，没有纳入 <code>n_eff</code>。相同证据与低星结构下，跨 30 型号与集中在 1 个产品的排序分相同；加入扩散因子会改变 PM 看到的顺序。</div>
+  <div class="q"><span class="qid">Q2</span><code>rank_score</code> 是否纳入<b>扩散因子</b>？当前公式为「证据数 × (1 + 低星率) × 多来源系数（正证据来源数 ≥2 时为 1.5，否则 1）+ 安全项（安全类 +1000）」，没有纳入 <code>n_eff</code>。相同证据与低星结构下，跨 30 型号与集中在 1 个产品的排序分相同；加入扩散因子会改变 PM 看到的顺序。</div>
 </section>
 
-<footer>VOC 机会模型规格 v1 · 2026-08-15 数据快照 · SPU/SKU 与标签层级已由迁移 008、抽取映射及迁移 009 派生层落地；013/014 已于 2026-08-16 执行，阶段 2a 的 015 代码已备、未执行</footer>
+<footer>VOC 机会模型规格 v1 · 2026-08-15 历史数据快照 · 2026-08-17 阶段 2c 契约 · 仓库迁移链已到 017；本轮 017 未执行，015/016 环境状态未验证</footer>
 </main></div>

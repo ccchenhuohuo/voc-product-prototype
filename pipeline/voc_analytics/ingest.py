@@ -47,20 +47,21 @@ def window_bounds(week: str) -> tuple[datetime, datetime]:
 
 
 def ingest_window(ctx, start: datetime, end: datetime) -> dict:
-    """抽取一个时间窗的两条线，落 voc_message + voc_evidence。"""
+    """抽取一个时间窗的已注册来源，落 voc_message + voc_evidence。"""
     tax = taxonomy.load()
     dewater = set(taxonomy.dewater_values())
-    stats: dict = {"slices": {}, "misaligned": 0, "tail_fixed": 0}
+    stats: dict = {"slices": {}, "source_messages": {},
+                   "misaligned": 0, "tail_fixed": 0}
     t0 = time.time()
 
-    plans = [
-        ("电商", "COMMENT", C.COMMENT_FILTER, 30),   # 月切片，实测单月 <5000
-        ("社媒", "SOCIAL", C.SOCIAL_FILTER, 15),     # 半月切片，实测单月约 4500
-    ]
     all_msgs: list[dict] = []
     all_evi: list[dict] = []
 
-    for src_line, qtype, tf, slice_days in plans:
+    for plan in C.INGEST_SOURCE_PLANS:
+        src_line = plan["src_line"]
+        qtype = plan["query_type"]
+        tf = plan["tag_filter"]
+        slice_days = plan["slice_days"]
         blobs, metas = yunting.export_window(qtype, start, end, tf, slice_days, ctx.mode)
         stats["slices"][src_line] = metas
         seen: set[str] = set()
@@ -82,6 +83,8 @@ def ingest_window(ctx, start: datetime, end: datetime) -> dict:
                     if e["snippet"] != e["snippet_raw"]:
                         stats["tail_fixed"] += 1
                 all_evi.extend(evi)
+        stats["source_messages"][src_line] = len(seen)
+        # 保留旧指标键，但新调用方只消费 source_messages。
         stats[f"{src_line}_messages"] = len(seen)
 
     n_msg = db.save_messages(all_msgs)

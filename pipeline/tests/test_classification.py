@@ -17,8 +17,8 @@ class ClassificationTest(unittest.TestCase):
 
     def test_r1_any_spu_makes_existing_product_iteration(self) -> None:
         evidence = [
-            {"src_line": "社媒", "spu": []},
-            {"src_line": "社媒", "spu": ["SPU-A"]},
+            {"source_requires_spu": False, "spu": []},
+            {"source_requires_spu": False, "spu": ["SPU-A"]},
         ]
         self.assertEqual(
             classify_evidence(evidence),
@@ -27,32 +27,46 @@ class ClassificationTest(unittest.TestCase):
 
     def test_r1_evidence_can_span_multiple_spus(self) -> None:
         evidence = [
-            {"src_line": "社媒", "spu": ["SPU-A", "SPU-B"]},
-            {"src_line": "电商", "spu": ["SPU-C"]},
+            {"source_requires_spu": False, "spu": ["SPU-A", "SPU-B"]},
+            {"source_requires_spu": True, "spu": ["SPU-C"]},
         ]
         self.assertEqual(classify_evidence(evidence).classify_rule, "R1")
         self.assertEqual(classify_evidence(evidence).opp_type, "老品迭代")
 
     def test_r2_social_without_spu_is_innovation(self) -> None:
-        result = classify_evidence([{"src_line": "社媒", "spu": []}])
+        result = classify_evidence(
+            [{"source_requires_spu": False, "spu": []}]
+        )
         self.assertEqual(result, Classification("新品创新", "确定", "R2"))
 
     def test_r2_precedes_r3_for_mixed_sources_without_spu(self) -> None:
         evidence = [
-            {"src_line": "电商", "spu": []},
-            {"src_line": "社媒", "spu": None},
+            {"source_requires_spu": True, "spu": []},
+            {"source_requires_spu": False, "spu": None},
         ]
         expected = Classification("新品创新", "确定", "R2")
         self.assertEqual(classify_evidence(evidence), expected)
         self.assertEqual(classify_evidence(reversed(evidence)), expected)
 
     def test_r3_ecommerce_without_spu_is_invalid(self) -> None:
-        result = classify_evidence([{"src_line": "电商", "spu": []}])
+        result = classify_evidence(
+            [{"source_requires_spu": True, "spu": []}]
+        )
         self.assertEqual(result, Classification(None, "无效", "R3"))
 
     def test_spu_must_be_an_array_not_a_string(self) -> None:
         with self.assertRaisesRegex(ValueError, "spu 必须是数组"):
-            classify_evidence([{"src_line": "社媒", "spu": "SPU-A"}])
+            classify_evidence(
+                [{"source_requires_spu": False, "spu": "SPU-A"}]
+            )
+
+    def test_source_policy_is_required_even_when_spu_is_present(self) -> None:
+        with self.assertRaisesRegex(ValueError, "缺少 source_requires_spu"):
+            classify_evidence([{"spu": ["SPU-A"]}])
+
+    def test_source_policy_must_be_a_real_boolean(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_requires_spu 必须是 bool"):
+            classify_evidence([{"source_requires_spu": 0, "spu": []}])
 
 
 if __name__ == "__main__":

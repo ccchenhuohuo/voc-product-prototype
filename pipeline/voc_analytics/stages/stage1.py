@@ -7,7 +7,7 @@
      改用最大团分解 + 单组上限
 """
 from __future__ import annotations
-import hashlib, itertools
+import hashlib, itertools, threading
 from collections import Counter, defaultdict
 from .. import config as C, llm, prompts
 
@@ -98,37 +98,58 @@ def aggregate_votes(co: dict[tuple[int, int], int], members: set[int],
 
 
 # ---------------------------------------------------------------- 单批调用
-def _fmt_a(items: list[dict], idx: list[int]) -> str:
+def _evidence_text(item: dict, limit: int = 400) -> str:
+    """按统一证据契约取原文，不从桶的来源推断字段。"""
+    text = (item.get("evidence_text") or item.get("snippet")
+            or item.get("content") or "")
+    return str(text).replace("\n", " ")[:limit]
+
+
+def _fmt_items(items: list[dict], idx: list[int]) -> str:
+    """逐条展示可用元数据，允许一个生命周期桶包含多个来源。"""
     out = []
     for n, i in enumerate(idx, 1):
         it = items[i]
-        star = f'{it["star"]:.0f}星' if it.get("star") is not None else "无星级"
-        out.append(f'[{n}] {star} | {it.get("country") or "?"} | {it.get("snippet")}')
+        meta: list[str] = []
+        if it.get("star") is not None:
+            star = it["star"]
+            star_text = f"{star:g}" if isinstance(star, (int, float)) else str(star)
+            meta.append(f"星级:{star_text}")
+        if it.get("country"):
+            meta.append(f'国家:{it["country"]}')
+        if it.get("platform"):
+            meta.append(f'平台:{it["platform"]}')
+        brands = it.get("brands")
+        if brands:
+            if isinstance(brands, (list, tuple, set)):
+                brands = ",".join(str(x) for x in brands if x)
+            meta.append(f"品牌:{brands}")
+        out.append(f'[{n}] {" | ".join(meta) or "无可用元数据"} | {_evidence_text(it)}')
     return "\n".join(out)
 
 
-def _fmt_b(items: list[dict], idx: list[int]) -> str:
-    out = []
-    for n, i in enumerate(idx, 1):
-        it = items[i]
-        txt = (it.get("content") or "").replace("\n", " ")[:300]
-        br = ",".join(it.get("brands") or []) or "-"
-        out.append(f'[{n}] {it.get("platform")} | 赞{it.get("interactions") or 0} | {br} | {txt}')
-    return "\n".join(out)
+def _context_line(ctx_info: dict) -> str:
+    fields = (
+        ("品类", "category"), ("标签", "tag"), ("语义路径", "tax_path"),
+        ("内容通道", "channel"),
+    )
+    parts = [f"{label}:{ctx_info[key]}" for label, key in fields if ctx_info.get(key)]
+    return " | ".join(parts) or "未提供额外桶上下文"
 
 
-def split_batch(items: list[dict], idx: list[int], line: str, ctx_info: dict,
+def split_batch(items: list[dict], opp_type: str, idx: list[int], ctx_info: dict,
                 batch_i: int, batch_n: int) -> dict:
     """对一个批次调 Stage 1，返回 {mode_name: [原始下标]} 与 unclassified。"""
-    common = dict(n=len(idx), min_evidence=C.MIN_EVIDENCE[line],
-                  batch_i=batch_i, batch_n=batch_n)
-    if line == "电商":
-        prompt = prompts.STAGE1_A.format(
-            items=_fmt_a(items, idx), category=ctx_info.get("category", "?"),
-            tag=ctx_info.get("tag", "?"), tax_path=ctx_info.get("tax_path", ""), **common)
-    else:
-        prompt = prompts.STAGE1_B.format(
-            items=_fmt_b(items, idx), channel=ctx_info.get("channel", "需求缺口"), **common)
+    prompt_by_type = {
+        "老品迭代": prompts.STAGE1_A,
+        "新品创新": prompts.STAGE1_B,
+    }
+    if opp_type not in prompt_by_type:
+        raise ValueError(f"Stage1 不支持的机会类型: {opp_type!r}")
+    prompt = prompt_by_type[opp_type].format(
+        n=len(idx), min_evidence=C.MIN_EVIDENCE[opp_type],
+        batch_i=batch_i, batch_n=batch_n, context=_context_line(ctx_info),
+        items=_fmt_items(items, idx))
 
     obj, _ = llm.chat_json(prompt, max_tokens=2000, required=["modes"])
     modes: dict[str, list[int]] = {}
@@ -140,17 +161,30 @@ def split_batch(items: list[dict], idx: list[int], line: str, ctx_info: dict,
             modes.setdefault(name, []).extend(picks)
     uncl = [idx[j - 1] for j in obj.get("unclassified", [])
             if isinstance(j, int) and 1 <= j <= len(idx)]
+
+    # Prompt 要求每条证据恰好出现一次。缺失或重复不能伪装成完整批次；否则
+    # aggregate_votes 会把缺失项补成无语义的单例组，run log 仍显示成功。
+    assigned = [member for picks in modes.values() for member in picks] + uncl
+    counts = Counter(assigned)
+    missing = [member for member in idx if counts[member] == 0]
+    duplicated = [member for member, count in counts.items() if count != 1]
+    if missing or duplicated or len(assigned) != len(idx):
+        raise llm.LLMError(
+            f"Stage1 批次证据未一一归属: missing={len(missing)}, "
+            f"duplicated={len(duplicated)}, expected={len(idx)}, actual={len(assigned)}")
     return {"modes": modes, "unclassified": uncl}
 
 
 # ---------------------------------------------------------------- 编排
-def split_bucket(items: list[dict], line: str, ctx_info: dict, ctx,
+def split_bucket(items: list[dict], opp_type: str, ctx_info: dict, ctx,
                  vote: bool | None = None) -> dict:
     """对一个证据桶做完整切分：分批 × 投票 → 共现 → 最大团 → 命名。
 
     返回 {"groups":[{"mode_name":..,"members":[下标..]}], "dropped":[下标..],
           "unclassified":[下标..], "rounds":n}
     """
+    if opp_type not in ("老品迭代", "新品创新"):
+        raise ValueError(f"Stage1 不支持的机会类型: {opp_type!r}")
     if vote is None:
         vote = C.VOTE_ENABLED
     n = len(items)
@@ -166,22 +200,81 @@ def split_bucket(items: list[dict], line: str, ctx_info: dict, ctx,
 
     # 批次并行：早期这里是双层串行循环，5 个批次逐个跑，Stage1 占了整桶
     # 耗时的 ~2/3，而 LLM_CONCURRENCY 的配额大量闲置。
-    jobs = [(bi, bidx, (len(order) + C.BATCH_SIZE - 1) // C.BATCH_SIZE)
-            for order in rounds
-            for bi, bidx in enumerate(batches(order), 1)]
+    jobs = [(job_i, bi, bidx, (len(order) + C.BATCH_SIZE - 1) // C.BATCH_SIZE)
+            for job_i, (order, bi, bidx) in enumerate(
+                ((order, bi, bidx) for order in rounds
+                 for bi, bidx in enumerate(batches(order), 1)), 1)]
     all_batches = len(jobs)
 
-    def _run(job):
-        bi, bidx, bn = job
-        try:
-            return split_batch(items, bidx, line, ctx_info, bi, bn)
-        except Exception:  # noqa: BLE001 —— 批次级失败隔离
-            ctx.bump(failed=1)
-            return None
+    bucket_label = str(ctx_info.get("bucket_key") or ctx_info.get("bucket") or ctx_info.get("tag")
+                       or ctx_info.get("channel") or ctx_info.get("category") or "未命名桶")
+    bucket_fingerprint = hashlib.sha256(repr(sorted(
+        (str(key), repr(value)) for key, value in ctx_info.items())).encode()).hexdigest()[:10]
+    metric_path = ("stage1", opp_type, "buckets", f"{bucket_label}:{bucket_fingerprint}")
+    planned_batch_rows = sum(len(bidx) for _, _, bidx, _ in jobs)
+    ctx.metric_update(
+        metric_path, bucket=bucket_label, status="running", rounds=len(rounds),
+        input_rows=n, accounted_rows=0, planned_batches=all_batches,
+        completed_batches=0, failed_batches=0, cancelled_batches=0,
+        planned_batch_rows=planned_batch_rows, completed_batch_rows=0,
+        failed_batch_rows=0, cancelled_batch_rows=0)
 
-    for r in llm.parallel_map(_run, jobs):
-        if not isinstance(r, dict):
-            continue
+    outcome_lock = threading.Lock()
+    outcomes: dict[int, tuple[str, int]] = {}
+
+    def _record(job_i: int, outcome: str, row_count: int) -> None:
+        with outcome_lock:
+            outcomes[job_i] = (outcome, row_count)
+        ctx.metric_incr(
+            metric_path,
+            **{f"{outcome}_batches": 1, f"{outcome}_batch_rows": row_count})
+
+    def _finalize_metrics(status: str, accounted_rows: int = 0, **values: object) -> None:
+        with outcome_lock:
+            snapshot = dict(outcomes)
+        completed_rows = sum(rows for state, rows in snapshot.values() if state == "completed")
+        failed_rows = sum(rows for state, rows in snapshot.values() if state == "failed")
+        cancelled_jobs = [job for job in jobs if job[0] not in snapshot]
+        cancelled_rows = sum(len(job[2]) for job in cancelled_jobs)
+        ctx.metric_update(
+            metric_path, status=status, accounted_rows=accounted_rows,
+            completed_batches=sum(1 for state, _ in snapshot.values() if state == "completed"),
+            failed_batches=sum(1 for state, _ in snapshot.values() if state == "failed"),
+            cancelled_batches=len(cancelled_jobs), completed_batch_rows=completed_rows,
+            failed_batch_rows=failed_rows, cancelled_batch_rows=cancelled_rows,
+            **values)
+
+    def _run(job):
+        job_i, bi, bidx, bn = job
+        try:
+            result = split_batch(items, opp_type, bidx, ctx_info, bi, bn)
+        except Exception:
+            ctx.bump(failed=1)
+            _record(job_i, "failed", len(bidx))
+            raise
+        _record(job_i, "completed", len(bidx))
+        return result
+
+    try:
+        results = llm.parallel_map(_run, jobs)
+    except Exception:
+        _finalize_metrics("failed")
+        raise
+
+    if len(results) != all_batches:
+        _finalize_metrics("failed")
+        raise llm.LLMError(
+            f"Stage1 并行结果数不匹配: planned={all_batches}, returned={len(results)}")
+    failed_results = [result for result in results if isinstance(result, BaseException)]
+    invalid_results = [result for result in results
+                       if not isinstance(result, dict) and not isinstance(result, BaseException)]
+    if failed_results or invalid_results:
+        _finalize_metrics("failed")
+        if failed_results:
+            raise failed_results[0]
+        raise llm.LLMError(f"Stage1 并行调用返回非法结果: {type(invalid_results[0]).__name__}")
+
+    for r in results:
         for name, members in r["modes"].items():
             for a, b in itertools.combinations(sorted(set(members)), 2):
                 co[(a, b)] += 1
@@ -209,10 +302,30 @@ def split_bucket(items: list[dict], line: str, ctx_info: dict, ctx,
         groups.append({"mode_name": best_name or PLACEHOLDER_MODE,
                        "members": sorted(g)})
 
-    ctx.metrics.setdefault("stage1", {}).setdefault(line, []).append(
-        {"bucket": ctx_info.get("tag") or ctx_info.get("channel"),
-         "n": n, "batches": all_batches, "groups": len(groups),
-         "unclassified": len(unclassified), "dropped": len(dropped)})
+    grouped_members = [member for group in groups for member in group["members"]]
+    accounted = grouped_members + list(unclassified) + list(dropped)
+    if len(accounted) != n or set(accounted) != set(range(n)):
+        _finalize_metrics(
+            "failed", accounted_rows=len(set(accounted)), groups=len(groups),
+            unclassified=len(unclassified), dropped=len(dropped))
+        raise RuntimeError(
+            f"Stage1 桶证据对账失败: input={n}, accounted={len(set(accounted))}, "
+            f"assignments={len(accounted)}")
+
+    with outcome_lock:
+        completed_batches = sum(1 for state, _ in outcomes.values() if state == "completed")
+        completed_rows = sum(rows for state, rows in outcomes.values() if state == "completed")
+    if completed_batches != all_batches or completed_rows != planned_batch_rows:
+        _finalize_metrics(
+            "failed", accounted_rows=n, groups=len(groups),
+            unclassified=len(unclassified), dropped=len(dropped))
+        raise RuntimeError(
+            f"Stage1 批次对账失败: batches={completed_batches}/{all_batches}, "
+            f"rows={completed_rows}/{planned_batch_rows}")
+
+    _finalize_metrics(
+        "completed", accounted_rows=n, groups=len(groups),
+        unclassified=len(unclassified), dropped=len(dropped))
     return {"groups": groups, "dropped": sorted(dropped),
             "unclassified": sorted(unclassified), "rounds": len(rounds)}
 
@@ -243,13 +356,10 @@ def merge_similar_modes(groups: list[dict], ctx) -> list[dict]:
                 continue                  # 合并会超上限，宁可留作两个组
             if llm.cosine(vecs[i], vecs[j]) < C.MODE_MERGE_COS:
                 continue
-            try:
-                obj, _ = llm.chat_json(
-                    prompts.MODE_MERGE.format(a=names[i], b=names[j]),
-                    max_tokens=200, required=["same"])
-                ctx.bump()
-            except Exception:  # noqa: BLE001
-                continue
+            obj, _ = llm.chat_json(
+                prompts.MODE_MERGE.format(a=names[i], b=names[j]),
+                max_tokens=200, required=["same"])
+            ctx.bump()
             if obj.get("same"):
                 groups[i]["members"] = sorted(set(groups[i]["members"]) | set(groups[j]["members"]))
                 groups[i]["mode_name"] = obj.get("merged_name") or names[i]

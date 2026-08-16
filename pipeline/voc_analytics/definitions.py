@@ -16,7 +16,6 @@ from dagster import (AssetCheckResult, AssetExecutionContext, Definitions,
                      define_asset_job)
 
 from . import config as C, db, execute, explode, ingest, lifecycle, llm, pipeline, resolve
-from .stages import stage1
 
 WEEKLY = WeeklyPartitionsDefinition(start_date="2026-02-16", day_offset=0)
 RETRY = RetryPolicy(max_retries=C.LLM_RETRY, delay=2, backoff=Backoff.EXPONENTIAL)
@@ -36,7 +35,7 @@ def _is_backfill(ctx: AssetExecutionContext) -> bool:
 
 # ================================================================ 抽取
 @asset(partitions_def=WEEKLY, retry_policy=RETRY, group_name="facts",
-       description="从云听抽取两条线的原始消息与证据三元组")
+       description="从已注册来源抽取原始消息与证据三元组")
 def voc_facts(context: AssetExecutionContext) -> MaterializeResult:
     week = _week(context)
     rc = C.RunCtx(run_id=f"dag_{week}_{int(time.time())}", week=week,
@@ -47,10 +46,11 @@ def voc_facts(context: AssetExecutionContext) -> MaterializeResult:
     st = ingest.ingest_window(rc, start, end)
     ingest.snapshot_taxonomy(week)
     db.save_run_log(rc, "ingest", window_start=start, window_end=end,
+                    matched_rows=sum(st.get("source_messages", {}).values()),
                     exported_rows=st["messages_written"], status="success",
                     started_at=start, finished_at=datetime.now())
     return MaterializeResult(metadata={
-        "电商消息": st.get("电商_messages", 0), "社媒消息": st.get("社媒_messages", 0),
+        "各来源消息": MetadataValue.json(st.get("source_messages", {})),
         "证据写入": st["evidence_written"], "尾部修复": st["tail_fixed"],
         "数组错位": st["misaligned"], "耗时秒": st["elapsed_s"],
         "模式": rc.mode})
@@ -110,93 +110,71 @@ def execute_proposals(context: AssetExecutionContext) -> MaterializeResult:
 
 
 # ================================================================ 生成
-@asset(partitions_def=WEEKLY, deps=[voc_facts, execute_proposals], retry_policy=RETRY,
+def _save_generation_log(rc: C.RunCtx, status: str, started_at: datetime,
+                         window_start, window_end,
+                         error: BaseException | None = None) -> dict | None:
+    """将生成帐本与 LLM 客户端计数固化到 run log。"""
+    pipeline.sync_llm_usage(rc)
+    generation = rc.metrics.get("generation", {})
+    reconciliation = (pipeline.generation_reconciliation(rc)
+                      if generation else None)
+    db.save_run_log(
+        rc, "generate", status=status,
+        window_start=window_start, window_end=window_end,
+        matched_rows=rc.metrics.get("pool", {}).get("scoped_evidence_rows"),
+        exported_rows=generation.get("completed_persistence"),
+        batch_count=(reconciliation or {}).get(
+            "planned_batches", (reconciliation or {}).get("planned_buckets")),
+        unclassified_rows=generation.get("unclassified_rows"),
+        error_message=(f"{type(error).__name__}: {error}"[:1000]
+                       if error else None),
+        started_at=started_at, finished_at=datetime.now())
+    return reconciliation
+
+
+@asset(partitions_def=WEEKLY, deps=[voc_facts, execute_proposals],
        group_name="generate", op_tags={"voc/llm": "true"},
-       description="电商：分桶 → Stage1 分批投票 → Stage2/3/4 → 消解")
-def opportunities_line_a(context: AssetExecutionContext) -> MaterializeResult:
+       description="统一内容池 → 前置分类 → 按老品迭代/新品创新生成与消解")
+def opportunities_by_lifecycle(context: AssetExecutionContext) -> MaterializeResult:
+    """生成入口只跑一次统一证据池，来源不再是 Dagster 分支。
+
+    本资产故意不配置 ``retry_policy``：底层只对可重试的限流/网络
+    失败做局部重试，欠费、鉴权和硬配额失败不得由调度器重跑。
+    """
     week = _week(context)
-    rc = C.RunCtx(run_id=f"genA_{week}_{int(time.time())}", week=week)
+    rc = C.RunCtx(run_id=f"dag_gen_{week}_{int(time.time())}", week=week)
+    started_at = datetime.now()
+    window_start, window_end = ingest.window_bounds(week)
     llm.reset_usage()
-    # 【必须按分区周过滤】。早期这里不传日期，等于每周把 6 个月的池子整个重算一遍：
-    # 成本随历史线性膨胀，而且同一批证据每周重新分组、重新命名，产出的 opp_id
-    # 跟着漂移——PM 上周标的「项目中」下周就找不到对应条目了。
-    # 窗口与抽取共用 window_bounds（T-8 到 T），否则迟到数据入了库却永远不被生成看到。
-    ws, we = ingest.window_bounds(week)
-    buckets = pipeline.bucket_line_a(ws, we)
-    ranked = sorted(buckets.items(), key=lambda kv: -len(kv[1]))
-    created, groups_total = [], 0
-    hist = [r["problem_mode"] for r in db.q(
-        "SELECT problem_mode FROM voc_opportunity WHERE problem_mode IS NOT NULL "
-        "ORDER BY opp_id LIMIT 20")]
-    for (cat, tag), items in ranked:
-        info = {"category": cat, "tag": tag, "tax_path": items[0].get("tax_path", ""),
-                "prod_line": "灯光" if "灯光" in (cat or "") else "支撑"}
-        split = stage1.split_bucket(items, "电商", info, rc)   # vote 由 config.VOTE_ENABLED 决定
-        gs = stage1.merge_similar_modes(split["groups"], rc)
-        groups_total += len(gs)
-        db.save_unclassified([(items[i]["message_id"], items[i]["seq"])
-                              for i in split["unclassified"]], week, "unclassified")
-        db.save_unclassified([(items[i]["message_id"], items[i]["seq"])
-                              for i in split["dropped"]], week, "vote_dropped")
-        # 必须落库。早期这里只 append 进列表就完了，Dagster 路径跑完
-        # 一条机会点都没写进数据库（落库逻辑当时只在 scripts/run_generate.py 里）。
-        built = [o for o in llm.parallel_map(
-            lambda g: pipeline.build_opportunity(items, g, "电商", info, rc, hist), gs)
-            if isinstance(o, dict)]
-        created += pipeline.persist_opportunities([(o, items) for o in built], week, rc)
-    u = llm.usage()
-    db.save_run_log(rc, "generate_a", status="success")
-    return MaterializeResult(metadata={
-        "桶数": len(ranked), "模式组": groups_total, "产出": len(created),
-        "LLM调用": u["calls"], "tokens": u["tokens"], "失败模式": rc.llm_failed_modes})
+    try:
+        result = pipeline.generate_opportunities(
+            week, rc, week_start=window_start, week_end=window_end)
+        reconciliation = pipeline.generation_reconciliation(rc)
+        if not reconciliation["complete"]:
+            raise RuntimeError(f"生成对账失败：{reconciliation}")
+        _save_generation_log(
+            rc, "success", started_at, window_start, window_end)
+        usage = llm.usage()
+        pool = rc.metrics.get("pool", {})
+        return MaterializeResult(metadata={
+            "证据池行数": result["pool_rows"],
+            "无效证据": result["invalid_rows"],
+            "分类后行数": MetadataValue.json(pool.get("by_lifecycle", {})),
+            "生成机会点": len(set(result["created"])),
+            "对账": MetadataValue.json(reconciliation),
+            "LLM调用": usage["calls"], "tokens": usage["tokens"],
+        })
+    except BaseException as error:
+        try:
+            _save_generation_log(
+                rc, "failed", started_at, window_start, window_end, error)
+        except Exception as log_error:
+            if hasattr(error, "add_note"):
+                error.add_note(f"写入 failed run log 也失败：{log_error}")
+        raise
 
 
-@asset(partitions_def=WEEKLY, deps=[voc_facts, execute_proposals], retry_policy=RETRY,
-       group_name="generate", op_tags={"voc/llm": "true"},
-       description="社媒：诉求门 → Stage1' → Stage2'/3/4（需求缺口 + 竞品对标）")
-def opportunities_line_b(context: AssetExecutionContext) -> MaterializeResult:
-    week = _week(context)
-    rc = C.RunCtx(run_id=f"genB_{week}_{int(time.time())}", week=week)
-    llm.reset_usage()
-    # 早期这个资产只统计候选数就返回了，从不真正产出机会点——社媒的完整管线
-    # 只存在于 scripts/run_generate.py 里。Dagster 是唯一的调度入口（§8），
-    # 资产里缺一段就等于周度调度根本不跑社媒。这里与脚本对齐。
-    ws, we = ingest.window_bounds(week)   # 与抽取同窗口，见 voc_facts
-    out: dict = {}
-    created: list[str] = []
-    for channel, types in (("需求缺口", list(C.DEWATER_GAP)),
-                           ("竞品对标", list(C.DEWATER_COMP))):
-        rows = db.line_b_pool(types, ws, we, multi_brand_only=(channel == "竞品对标"))
-        if channel == "需求缺口":
-            rows, st = pipeline.intent_gate(rows, rc)
-            out[f"{channel}_诉求门"] = st
-        out[f"{channel}_候选"] = len(rows)
-        if not rows:
-            continue
-        info = {"channel": channel, "category": "SOCIAL-NA", "prod_line": "未定"}
-        split = stage1.split_bucket(rows, "社媒", info, rc)
-        groups = stage1.merge_similar_modes(split["groups"], rc)
-        # 社媒的未归类逐条独立成组（R11：弱证据也是机会，不可错过）
-        groups += [{"mode_name": (rows[u].get("content") or "")[:40], "members": [u]}
-                   for u in split["unclassified"]]
-        hist = [r["problem_mode"] for r in db.q(
-            "SELECT problem_mode FROM voc_opportunity WHERE src_line='社媒' "
-            "AND problem_mode IS NOT NULL ORDER BY opp_id LIMIT 20")]
-        built = llm.parallel_map(
-            lambda g: pipeline.build_opportunity(
-                rows, g, "社媒", {**info, "tag": g["mode_name"][:60]}, rc, hist), groups)
-        pairs = [(o, rows) for o in built if isinstance(o, dict)]
-        created += pipeline.persist_opportunities(pairs, week, rc)
-        out[f"{channel}_产出"] = len(pairs)
-    u = llm.usage()
-    db.save_run_log(rc, "generate_b", status="success")
-    return MaterializeResult(metadata={**{k: MetadataValue.json(v) if isinstance(v, dict) else v
-                                          for k, v in out.items()},
-                                       "产出合计": len(set(created)),
-                                       "LLM调用": u["calls"], "tokens": u["tokens"]})
-
-
-@asset_check(asset=opportunities_line_a, blocking=False,
+@asset_check(asset=opportunities_by_lifecycle, blocking=False,
              description="Stage4 打回率 >40% 告警")
 def check_stage4_reject_rate(context) -> AssetCheckResult:
     tot = db.q1("SELECT count(*) FROM voc_opportunity") or 1
@@ -207,28 +185,82 @@ def check_stage4_reject_rate(context) -> AssetCheckResult:
 
 
 # ================================================================ 消解与交付
-@asset(partitions_def=WEEKLY, deps=[opportunities_line_a, opportunities_line_b],
-       retry_policy=RETRY, group_name="resolve", op_tags={"voc/llm": "true"},
-       description="跨线汇聚：dual_source 成立的唯一途径（§6.5）")
-def cross_line_merged(context: AssetExecutionContext) -> MaterializeResult:
+@asset(partitions_def=WEEKLY, deps=[opportunities_by_lifecycle],
+       group_name="resolve", op_tags={"voc/llm": "true"},
+       description="同生命周期跨来源补证，来源数量可扩展（§6.5）")
+def cross_source_merged(context: AssetExecutionContext) -> MaterializeResult:
+    """跨来源收尾也不配置 Dagster 重试，任一目标失败即整体失败。"""
     week = _week(context)
-    rc = C.RunCtx(run_id=f"cross_{week}_{int(time.time())}", week=week)
-    rows = db.q("SELECT opp_id, mode_vec::text v, core_tag, src_line FROM voc_opportunity "
-                "WHERE last_week=%s AND mode_vec IS NOT NULL", [week])
-    total = 0
-    for r in rows:
-        vec = [float(x) for x in r["v"].strip("[]").split(",")]
-        attached = resolve.cross_line_merge(
-            r["opp_id"], vec, r["core_tag"], r["src_line"], week, rc)
-        if attached:
-            # 关系与 recount 同事务；分类、计数与 dual_source 不会半更新。
-            n = pipeline.attach_evidence(r["opp_id"], attached)
-            total += n
-    dual = db.q1("SELECT count(*) FROM voc_opportunity WHERE dual_source") or 0
-    return MaterializeResult(metadata={"跨线挂载": total, "双源印证条目": dual})
+    rc = C.RunCtx(run_id=f"dag_cross_{week}_{int(time.time())}", week=week)
+    started_at = datetime.now()
+    llm.reset_usage()
+    try:
+        rows = db.q("""
+          SELECT opp_id, mode_vec::text AS v, opp_type, source_lines
+            FROM voc_opportunity
+           WHERE last_week=%s
+             AND classification_state='确定'
+             AND merged_into IS NULL
+             AND mode_vec IS NOT NULL
+           ORDER BY opp_id
+        """, [week])
+        rc.metric_update(
+            ("cross_source",), planned_targets=len(rows), completed_targets=0,
+            failed_targets=0, cancelled_targets=0, attached_evidence=0)
+        total = 0
+        for row in rows:
+            try:
+                opp_type, source_lines = pipeline.validate_lifecycle_sources(row)
+                vec = [float(value) for value in row["v"].strip("[]").split(",")]
+                attached = resolve.cross_source_merge(
+                    row["opp_id"], vec, opp_type, source_lines, week, rc)
+                attached_count = 0
+                if attached:
+                    # 关系与 recount 同事务；分类与来源统计不会半更新。
+                    attached_count = pipeline.attach_evidence(row["opp_id"], attached)
+                    total += attached_count
+                rc.metric_incr(
+                    ("cross_source",), completed_targets=1,
+                    attached_evidence=attached_count)
+            except Exception:
+                rc.metric_incr(("cross_source",), failed_targets=1)
+                raise
+        pipeline.sync_llm_usage(rc)
+        db.save_run_log(
+            rc, "cross_source", status="success", matched_rows=len(rows),
+            exported_rows=total, batch_count=len(rows), started_at=started_at,
+            finished_at=datetime.now())
+        multi_source = db.q1(
+            "SELECT count(*) FROM voc_opportunity WHERE dual_source") or 0
+        return MaterializeResult(metadata={
+            "跨来源挂载": total, "多来源印证条目": multi_source,
+            "处理机会点": len(rows),
+        })
+    except BaseException as error:
+        cross = rc.metrics.get("cross_source", {})
+        if cross:
+            rc.metric_update(
+                ("cross_source",),
+                cancelled_targets=max(
+                    int(cross.get("planned_targets", 0))
+                    - int(cross.get("completed_targets", 0))
+                    - int(cross.get("failed_targets", 0)), 0))
+        try:
+            pipeline.sync_llm_usage(rc)
+            db.save_run_log(
+                rc, "cross_source", status="failed",
+                matched_rows=cross.get("planned_targets"),
+                exported_rows=cross.get("attached_evidence"),
+                batch_count=cross.get("planned_targets"),
+                error_message=f"{type(error).__name__}: {error}"[:1000],
+                started_at=started_at, finished_at=datetime.now())
+        except Exception as log_error:
+            if hasattr(error, "add_note"):
+                error.add_note(f"写入 failed run log 也失败：{log_error}")
+        raise
 
 
-@asset(partitions_def=WEEKLY, deps=[cross_line_merged], group_name="resolve",
+@asset(partitions_def=WEEKLY, deps=[cross_source_merged], group_name="resolve",
        description="纯 SQL 展开：SPU 容器、问题条目与共性度")
 def spu_layer(context: AssetExecutionContext) -> MaterializeResult:
     stat = explode.refresh(_week(context))
@@ -298,8 +330,8 @@ weekly_schedule = ScheduleDefinition(job=weekly_job, cron_schedule="0 2 * * 1",
                                      execution_timezone="Asia/Shanghai")
 
 defs = Definitions(
-    assets=[voc_facts, execute_proposals, opportunities_line_a, opportunities_line_b,
-            cross_line_merged, spu_layer, proposals, snapshots, release_to_pm],
+    assets=[voc_facts, execute_proposals, opportunities_by_lifecycle,
+            cross_source_merged, spu_layer, proposals, snapshots, release_to_pm],
     asset_checks=[check_no_zero_match, check_volume_not_collapsed,
                   check_array_alignment, check_stage4_reject_rate],
     jobs=[weekly_job], schedules=[weekly_schedule])

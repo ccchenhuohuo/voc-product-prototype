@@ -48,12 +48,16 @@ def main() -> int:
         try:
             st = ingest.ingest_window(ctx, s, e)
             ingest.snapshot_taxonomy(wk)
+            source_messages = st.get("source_messages", {})
             db.save_run_log(ctx, "ingest", window_start=s, window_end=e,
-                            matched_rows=st.get("电商_messages", 0) + st.get("社媒_messages", 0),
+                            matched_rows=sum(source_messages.values()),
                             exported_rows=st["messages_written"],
                             status="success", started_at=datetime.fromtimestamp(t0),
                             finished_at=datetime.now())
-            print(f"  {wk}  电商 {st.get('电商_messages',0):>4}  社媒 {st.get('社媒_messages',0):>4}"
+            source_summary = "  ".join(
+                f"{source} {count:>4}"
+                for source, count in sorted(source_messages.items()))
+            print(f"  {wk}  {source_summary}"
                   f"  证据 {st['evidence_written']:>5}  尾部修复 {st['tail_fixed']:>4}"
                   f"  错位 {st['misaligned']}  {st['elapsed_s']}s")
             ok += 1

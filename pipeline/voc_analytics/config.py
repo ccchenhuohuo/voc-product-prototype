@@ -1,6 +1,7 @@
 """集中配置。所有密钥从环境变量注入，不落盘到仓库（PRD v8 §10.2）。"""
 from __future__ import annotations
 import os
+import threading
 from dataclasses import dataclass, field
 
 # ---- 云听 ----
@@ -43,7 +44,18 @@ BRAND_OWN = "VIJIM"                    # 系统内本品代号
 COMMENT_FILTER = {"本竞品": ["本品"]}    # 电商
 SOCIAL_FILTER = {"品牌": [BRAND_OWN]}   # 社媒（本竞品字段在社媒恒为空，见 §1.2）
 
-# 社媒去水标签分流（§4.4）
+# 当前云听连接器的已注册抽取计划。生成与分类不读这个名单；
+# 新来源可以使用其他连接器写入同一事实层，只需在
+# voc_source_policy 注册 requires_spu。若也由云听抽取，则在此追加计划。
+INGEST_SOURCE_PLANS = (
+    {"src_line": "电商", "query_type": "COMMENT",
+     "tag_filter": COMMENT_FILTER, "slice_days": 30},
+    {"src_line": "社媒", "query_type": "SOCIAL",
+     "tag_filter": SOCIAL_FILTER, "slice_days": 15},
+)
+
+# 内容标签分流（§4.4）。来源只负责提供内容；机会类型由生命周期分类决定。
+DEWATER_EXPERIENCE = {"用户使用体验"}
 DEWATER_GAP = {"用户咨询", "其他"}          # 需求缺口通道（"其他"首月抽检后再定）
 DEWATER_COMP = {"产品评测", "竞品拉踩"}     # 竞品对标通道
 
@@ -57,7 +69,7 @@ BATCH_SIZE = 50
 # 保留实现与开关，M5 标定后可重新评估。
 VOTE_ENABLED = False
 MAX_GROUP_SIZE = 40        # 防最大团粘连
-MIN_EVIDENCE = {"电商": 2, "社媒": 1}    # §5.2
+MIN_EVIDENCE = {"老品迭代": 2, "新品创新": 1}    # §5.2
 
 # 诉求门（§5.6）
 INTENT_PASS = 0.6
@@ -85,11 +97,37 @@ class RunCtx:
     llm_tokens: int = 0
     llm_failed_modes: int = 0
     metrics: dict = field(default_factory=dict)
+    _metrics_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False, compare=False)
 
     def bump(self, calls: int = 0, tokens: int = 0, failed: int = 0) -> None:
-        self.llm_calls += calls
-        self.llm_tokens += tokens
-        self.llm_failed_modes += failed
+        with self._metrics_lock:
+            self.llm_calls += calls
+            self.llm_tokens += tokens
+            self.llm_failed_modes += failed
+
+    def set_llm_usage(self, calls: int, tokens: int) -> None:
+        """以客户端权威计数覆盖旧调用点的零散累计。"""
+        with self._metrics_lock:
+            self.llm_calls = calls
+            self.llm_tokens = tokens
+
+    def metric_update(self, path: tuple[str, ...], **values: object) -> None:
+        """线程安全地更新运行账本中的一个嵌套节点。"""
+        with self._metrics_lock:
+            node = self.metrics
+            for part in path:
+                node = node.setdefault(part, {})
+            node.update(values)
+
+    def metric_incr(self, path: tuple[str, ...], **deltas: int) -> None:
+        """线程安全地累加运行账本计数。"""
+        with self._metrics_lock:
+            node = self.metrics
+            for part in path:
+                node = node.setdefault(part, {})
+            for key, delta in deltas.items():
+                node[key] = int(node.get(key, 0)) + delta
 
 
 def require(name: str, value: str) -> str:

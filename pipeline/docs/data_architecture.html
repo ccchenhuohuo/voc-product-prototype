@@ -114,16 +114,16 @@
   <div class="ico">🗂️</div>
   <h1>VOC 数据架构</h1>
   <p class="sub">这套库里现在装着什么、分几层、每层的单位是什么，以及一条真实评论如何从原始文本走到 PM 手里的一张卡。</p>
-  <p class="meta">2026-08-15 库内实测（阶段 2a 迁移前快照） · PostgreSQL 18 + pgvector · 生产实例 <code>voc-postgres</code></p>
+  <p class="meta">2026-08-15 库内历史快照 · 阶段 2c 代码与迁移 017 更新于 2026-08-17 · PostgreSQL 18 + pgvector</p>
 </header>
 
 <main>
 
-<div class="callout"><span class="i">🚧</span><p><b>阶段 2a 状态：代码与 <code>015_classification_contract.sql</code> 已准备，迁移未执行。</b>本页的 51 张 SPU 卡、161 个问题条目及其他库内规模数字均是迁移前快照，不是迁移后实测。264 / 368 / 13 / 645 是迁移的目标自检断言，执行前不代表现网结果。</p></div>
+<div class="callout"><span class="i">🚧</span><p><b>本页分开记录「历史快照」与「阶段 2c 代码契约」。</b>51 张 SPU 卡、161 个问题条目、264 / 368 / 13 / 645 等数字来自既有文档或迁移自检口径。仓库迁移链已到 017；本轮明确未执行 017，015/016 实际环境状态未连库核对，2c 新池规模也<b>未验证</b>。</p></div>
 
 <section>
   <h2><span class="no">1</span>数据从哪来</h2>
-  <p class="lede">上游只有云听 CEM 一个供应商，但走两个渠道。两个渠道的价值完全不同，差别不在数据量，而在<b>能不能挂到具体产品上</b>。</p>
+  <p class="lede">历史快照来自云听 CEM 的电商与社媒两条线；但数据模型不再假设永远只有两个来源。生命周期分类需要的不是来源名字，而是<b>该来源是否保证挂载 SPU</b>。</p>
 
   <div class="chans">
     <div class="chan">
@@ -133,7 +133,7 @@
         <dt>带 SPU 归属</dt><dd>25,055 · 94.9%</dd>
         <dt>平均星级</dt><dd>4.48</dd>
       </dl>
-      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。阶段 2a 的 <code>line_a_pool</code> 只让 <code>cardinality(spu) &gt; 0</code> 的电商消息进入生成池；无 SPU 电商消息仍保留在事实层，但作为上游打标缺陷，不应再产生机会点。</p>
+      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。在 2c 的统一内容池中，电商的来源策略是 <code>requires_spu=true</code>：无 SPU 消息仍保留在事实层，但命中 R3 无效且不进生成池。</p>
     </div>
     <div class="chan">
       <h4>社交媒体</h4>
@@ -142,11 +142,17 @@
         <dt>带 SPU 归属</dt><dd>2,561 · 10.5%</dd>
         <dt>平均星级</dt><dd>—（无评分）</dd>
       </dl>
-      <p class="role">发帖人很少自报型号，九成消息挂不到产品；这部分证据服务新品创新。但云听挂到 SPU 的社媒消息就是本品证据：执行 015 后，其机会点归为老品迭代，并可按实际 SPU 路由到产品卡。</p>
+      <p class="role">发帖人很少自报型号。社媒策略是 <code>requires_spu=false</code>：已挂 SPU 的证据命中 R1，归老品迭代；无 SPU 的证据命中 R2，归新品创新。「用户使用体验」负面只是补回的内容入池分支，不能直接把无 SPU 社媒判为老品。</p>
     </div>
   </div>
 
-  <div class="callout"><span class="i">🚫</span><p><b>客服会话不接</b>——业务判断价值不足，明确排除在处理范围外。所以库里只有上面两条线，没有第三条。</p></div>
+  <div class="tablewrap"><table>
+    <tr><th>来源策略种子</th><th><code>requires_spu</code></th><th>无 SPU 结果</th></tr>
+    <tr><td>电商</td><td><code>true</code></td><td>R3 无效，不进生成池</td></tr>
+    <tr><td>社媒</td><td><code>false</code></td><td>R2 新品创新</td></tr>
+    <tr><td>问卷调研（待接入）</td><td><code>false</code></td><td>R2 新品创新</td></tr>
+  </table></div>
+  <div class="callout"><span class="i">🚫</span><p><b>客服会话仍不接</b>，但这是业务范围决定，不是模型只能容纳两条来源。迁移 017 用 <code>voc_source_policy</code> 登记新来源，以外键替代消息与机会表的电商/社媒两值 CHECK。</p></div>
 </section>
 
 <section>
@@ -216,12 +222,18 @@
     <tr><th>规则</th><th>条件（按顺序）</th><th><code>opp_type</code></th><th><code>classification_state</code></th><th>目标数</th></tr>
     <tr><td class="num">R0</td><td>在 <code>voc_opp_evidence</code> 中零条证据</td><td>—</td><td>无效</td><td class="num">12</td></tr>
     <tr><td class="num">R1</td><td>任一证据所属消息 <code>cardinality(spu) &gt; 0</code></td><td>老品迭代</td><td>确定</td><td class="num">264</td></tr>
-    <tr><td class="num">R2</td><td>无 SPU，且证据集含 <code>src_line = '社媒'</code></td><td>新品创新</td><td>确定</td><td class="num">368</td></tr>
-    <tr><td class="num">R3</td><td>无 SPU 且前规则未命中（仅有电商证据）</td><td>—</td><td>无效</td><td class="num">1</td></tr>
+    <tr><td class="num">R2</td><td>无 SPU，且任一证据来源 <code>requires_spu=false</code></td><td>新品创新</td><td>确定</td><td class="num">368</td></tr>
+    <tr><td class="num">R3</td><td>无 SPU，且全部证据来源均 <code>requires_spu=true</code></td><td>—</td><td>无效</td><td class="num">1</td></tr>
   </table></div>
   <p><code>classification_state</code> 只取「确定 / 无效」，与 <code>opp_type</code> 的「老品迭代 / 新品创新」正交；不给 <code>opp_type</code> 塞入第三个取值。<code>classify_rule</code> 记录本次命中的 R0–R3，供审计和回放。R0 / R3 只做无效标记，<b>不删除机会点或证据</b>；迁移后的所有使用者看板必须用 <code>classification_state = '确定'</code> 排除它们，排查端仍可保留完整证据链。</p>
   <p><code>evi_total</code> 以 <code>voc_opp_evidence</code> 的实际关系行数为唯一口径。015 对全部 645 个机会点重算该字段，不信任旧写入值；其中 12 个零关系机会点的目标值为 0。</p>
-  <div class="callout"><span class="i">✅</span><p><b>015 的目标断言（尚未执行）</b>：确定的老品迭代 264，确定的新品创新 368，无效 13，总计 645，<code>classify_rule IS NULL</code> 为 0。任一不符即异常并回滚整个单事务迁移。</p></div>
+  <div class="callout"><span class="i">✅</span><p><b>015 脚本的历史目标断言（本轮未复核环境结果）</b>：确定的老品迭代 264，确定的新品创新 368，无效 13，总计 645，<code>classify_rule IS NULL</code> 为 0。这是脚本契约，不是本轮连库验证的结果。</p></div>
+
+  <h3>阶段 2c：生成前按生命周期路由</h3>
+  <p><code>generation_pool()</code> 以真实 <code>(message_id, seq)</code> 为证据身份，按产品体验、「用户使用体验」负面、需求缺口和竞品对标等内容条件取数，不再维护电商/社媒两个并行池。每条证据先调用唯一的 <code>classification.py</code> 纯函数，再进入互斥的「老品迭代 / 新品创新」内容桶；Stage1、Stage2 提示词与 L1 候选键都只按 <code>opp_type</code> 选择。机会挂证后仍以完整证据集回算 R0–R3，该回算不取代生成前的互斥分流。</p>
+  <p class="anno"><b>前置单条分类与完整集合分类并不等价</b>：同义问题若由“有 SPU 的电商证据 + 无 SPU 的社媒证据”共同支撑，前者先入 R1、后者先入 R2，两个互斥生命周期不会合流；只有两条证据各自都命中 R1 时，当前老品桶才会跨来源合并。覆盖混合挂载场景需要新增 provisional 或跨生命周期规则，本阶段没有越权增加。</p>
+  <p>迁移 017 为 <code>voc_opportunity</code> 增加 <code>source_lines text[]</code> 和 <code>evi_by_source jsonb</code>，从证据关系回填完整供证来源；<code>evi_by_source</code> 中的计数合计必须与关系层 <code>evi_total</code> 对齐。旧 <code>src_line</code> 只作 legacy 单值代表：新建混合组取 <code>sorted(source_lines)[0]</code>，存量 recount 不改写原值；不得用它代替完整供证事实。新建机会的身份为 <code>OPP2-</code> + SHA-256 前 128 bit；老品哈希包含生命周期、规范化主题和问题模式，新品再包含业务 <code>channel</code>，两者都不含证据来源；存量 <code>OPP-*</code> 不重键。</p>
+  <div class="callout"><span class="i">📊</span><p><b>静态池规模估算</b>：旧社媒毛候选为 <code>5,005 + 2,623 = 7,628</code> 条消息；补回的「用户使用体验」为 3,249 条整桶、负面率 23.4%，毛新增约 <code>3,249 × 23.4% ≈ 760</code> 条，即毛候选约 8,388（+10.0%）。但多值标签重叠、<code>low_conf</code>、非空片段与业务门槛都会减少净新增，而新池是证据粒度，所以精确差异<b>未验证</b>；电商 4,232 是证据数，不能与社媒消息数直接相加。</p></div>
 
   <p class="anno"><b>当前仍有的来源限制</b>：阶段 2a 只把 <code>voc_spu_issue</code> 改为按任何来源的实际 SPU 展开；<code>voc_spu</code> 容器和 <code>n_eff</code> 计算仍保留 <code>m.src_line = '电商'</code> 条件，本阶段没有对它们做渠道解耦。</p>
 
@@ -328,7 +340,7 @@
       <td>按 SPU / 品类 / 标签路径查，我的新品上市反响如何</td>
     </tr>
   </table></div>
-  <p class="anno">按 015 契约，迁移后共性问题事实层仍完整保留 645 行；普通看板只展示目标状态为「确定」的 632 个机会点，13 个「无效」机会点仅供数据质量排查。这里的 632 是 015 自检目标推导值，尚未执行验证。</p>
+  <p class="anno">按 015 脚本契约，共性问题事实层应完整保留 645 行，普通看板展示其中「确定」的 632 个机会点，13 个「无效」机会点仅供数据质量排查。这些是自检目标推导值，实际环境结果本轮未验证。</p>
 
   <h3>共性度：一个问题扩散多广</h3>
   <p>当前每个共性问题的 <code>n_eff</code>（有效产品数，Simpson 倒数）只使用电商来源的 SPU 挂靠计算，据此打上范围标签。<code>n_eff = 1.82</code> 意思是「在纳入计算的电商证据里，虽然涉及好几个 SPU，但抱怨主要压在其中不到 2 个身上」。阶段 2a 不改变这个口径，因此不能把它表述成已经覆盖带 SPU 的社媒证据。</p>
@@ -378,5 +390,5 @@
 </section>
 
 </main>
-<footer>VOC 数据架构 · 2026-08-15 迁移前库内快照 · 阶段 2a 的 015 迁移尚未执行 · 配套〈数据管道重构〉与〈机会模型规格〉</footer>
+<footer>VOC 数据架构 · 2026-08-15 历史快照 · 2026-08-17 阶段 2c 代码/迁移 017 契约 · 本轮未执行 SQL 或管道</footer>
 </div>

@@ -84,6 +84,30 @@ def upsert_in_transaction(c, table: str, rows: list[dict], keys: Sequence[str],
 
 # ---------------------------------------------------------------- 领域写入
 def save_messages(rows: list[dict]) -> int:
+    """message_id 是全局证据身份，不允许新来源抢占已有 ID。"""
+    if not rows:
+        return 0
+    incoming: dict[str, str] = {}
+    for row in rows:
+        message_id = row.get("message_id")
+        src_line = row.get("src_line")
+        if not isinstance(message_id, str) or not message_id:
+            raise ValueError(f"消息缺少有效 message_id：{message_id!r}")
+        if not isinstance(src_line, str) or not src_line:
+            raise ValueError(f"{message_id} 缺少有效 src_line：{src_line!r}")
+        previous = incoming.setdefault(message_id, src_line)
+        if previous != src_line:
+            raise ValueError(
+                f"message_id 跨来源冲突：{message_id} -> {previous!r}/{src_line!r}")
+    existing = q(
+        "SELECT message_id, src_line FROM voc_message WHERE message_id = ANY(%s)",
+        [sorted(incoming)])
+    for row in existing:
+        expected = incoming[row["message_id"]]
+        if row["src_line"] != expected:
+            raise ValueError(
+                f"message_id 已属于其他来源：{row['message_id']} -> "
+                f"{row['src_line']!r}，新值 {expected!r}")
     return upsert("voc_message", rows, ["message_id"])
 
 
@@ -106,45 +130,79 @@ def save_unclassified(pairs: Iterable[tuple[str, int]], week: str, reason: str) 
 
 
 # ---------------------------------------------------------------- 领域查询
-def line_a_pool(week_start: str | None = None, week_end: str | None = None) -> list[dict]:
-    """电商生成池：产品体验分支 + 负面 + 非误标 + 有片段（§4.3）"""
-    sql = """
-      SELECT e.message_id, e.seq, e.tag, e.snippet, e.tax_path,
-             m.category, m.star, m.country, m.product_name, m.platform, m.lang,
-             m.src_line, m.spu
-        FROM voc_evidence e JOIN voc_message m USING (message_id)
-       WHERE e.is_product AND NOT e.low_conf
-         AND e.sentiment = '负面' AND e.snippet IS NOT NULL
-         AND m.src_line = '电商'
-         -- 电商消息理论上必须挂 SPU；未挂载是上游数据缺陷，
-         -- 不应进入生成池产出新的机会点（分类契约 R3）。
-         AND cardinality(m.spu) > 0
-    """
-    params: list = []
-    if week_start:
-        sql += " AND m.publish_time >= %s"; params.append(week_start)
-    if week_end:
-        sql += " AND m.publish_time < %s"; params.append(week_end)
-    sql += " ORDER BY m.star ASC NULLS LAST, e.message_id ASC, e.seq ASC"
-    return q(sql, params)
+def generation_pool(week_start: str | None = None,
+                    week_end: str | None = None) -> list[dict]:
+    """统一证据生成池：先按内容取数，来源能力只负责执行 R3 入池约束。
 
-
-def line_b_pool(channel_types: Sequence[str], week_start: str | None = None,
-                week_end: str | None = None, multi_brand_only: bool = False) -> list[dict]:
-    sql = """
-      SELECT m.message_id, m.content, m.content_zh, m.platform, m.interactions,
-             m.brands, m.content_type, m.url, m.lang, m.src_line, m.spu
-        FROM voc_message m
-       WHERE m.src_line = '社媒' AND m.content_type && %s
+    返回的每一行都有真实 ``(message_id, seq)``，不再把消息级社媒内容
+    伪装成 ``seq=0``。产品体验与「用户使用体验」负面分支要求非空片段；
+    需求/对标分支允许以正文补足片段，但仍锚定命中内容标签的真实证据行。
     """
-    params: list = [list(channel_types)]
-    if multi_brand_only:
-        sql += " AND array_length(m.brands,1) >= 2"
+    sql = """
+      WITH route AS (
+        SELECT %s::text[] AS experience_tags,
+               %s::text[] AS comparison_tags,
+               %s::text[] AS gap_tags
+      )
+      SELECT e.message_id, e.seq, e.tag, e.tag_raw, e.sentiment,
+             e.snippet, e.tax_path, e.tax_stage, e.tax_domain,
+             e.tax_sub, e.tax_leaf, e.is_product, e.low_conf,
+             m.content, m.content_zh, m.category, m.star, m.country,
+             m.product_name, m.platform, m.lang, m.interactions,
+             m.brands, m.content_type, m.url, m.src_line, m.spu,
+             m.prod_line,
+             p.requires_spu AS source_requires_spu,
+             COALESCE(NULLIF(btrim(e.snippet), ''),
+                      NULLIF(btrim(m.content), '')) AS evidence_text,
+             CASE
+               WHEN branch.product_experience THEN '产品体验'
+               WHEN branch.user_experience THEN '用户使用体验'
+               WHEN branch.comparison THEN '竞品对标'
+               ELSE '需求缺口'
+             END AS content_branch,
+             CASE
+               WHEN branch.comparison THEN '竞品对标'
+               WHEN branch.gap THEN '需求缺口'
+               ELSE '产品体验'
+             END AS channel
+        FROM voc_evidence e
+        JOIN voc_message m USING (message_id)
+       JOIN voc_source_policy p USING (src_line)
+       CROSS JOIN route r
+       -- content_type 是消息级多值内容标签；e.tag 是证据的问题主题。
+       -- 两者不可互代，否则「用户使用体验」仍然会被漏掉。
+       CROSS JOIN LATERAL (
+         SELECT
+           (e.is_product
+            AND NOT e.low_conf
+            AND e.sentiment = '负面'
+            AND NULLIF(btrim(e.snippet), '') IS NOT NULL) AS product_experience,
+           (COALESCE(m.content_type, ARRAY[]::text[]) && r.experience_tags
+            AND NOT e.low_conf
+            AND e.sentiment = '负面'
+            AND NULLIF(btrim(e.snippet), '') IS NOT NULL) AS user_experience,
+           (COALESCE(m.content_type, ARRAY[]::text[]) && r.comparison_tags
+            AND COALESCE(NULLIF(btrim(e.snippet), ''),
+                         NULLIF(btrim(m.content), '')) IS NOT NULL
+            AND COALESCE(cardinality(m.brands), 0) >= 2) AS comparison,
+           (COALESCE(m.content_type, ARRAY[]::text[]) && r.gap_tags
+            AND COALESCE(NULLIF(btrim(e.snippet), ''),
+                         NULLIF(btrim(m.content), '')) IS NOT NULL) AS gap
+       ) branch
+       WHERE (branch.product_experience OR branch.user_experience
+              OR branch.comparison OR branch.gap)
+         -- 对所有“保证挂 SPU”的来源统一执行 R3 约束；不比较来源名称。
+         AND (NOT p.requires_spu OR COALESCE(cardinality(m.spu), 0) > 0)
+    """
+    params: list = [list(C.DEWATER_EXPERIENCE), list(C.DEWATER_COMP),
+                    list(C.DEWATER_GAP)]
     if week_start:
-        sql += " AND m.publish_time >= %s"; params.append(week_start)
+        sql += " AND m.publish_time >= %s"
+        params.append(week_start)
     if week_end:
-        sql += " AND m.publish_time < %s"; params.append(week_end)
-    sql += " ORDER BY m.message_id ASC"
+        sql += " AND m.publish_time < %s"
+        params.append(week_end)
+    sql += " ORDER BY e.message_id ASC, e.seq ASC"
     return q(sql, params)
 
 
@@ -153,7 +211,7 @@ def low_conf_intersection() -> dict:
 
     必须过滤 src_line='电商' —— 电商的定义就是电商评论。早期漏了这个条件，
     把社媒证据也算进池子，会把覆盖率分母虚高近一倍。可生成池还必须与
-    ``line_a_pool`` 的 R3 入池契约一致：未挂 SPU 的电商消息是数据缺陷。
+    统一池中“保证挂 SPU”来源的 R3 入池契约一致：未挂 SPU 的电商消息是数据缺陷。
     """
     return q("""
       WITH pool AS (

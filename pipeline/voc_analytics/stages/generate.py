@@ -8,18 +8,34 @@ from .. import llm, prompts
 from . import validate
 
 
-def _fmt_items(items: list[dict], idx: Sequence[int], line: str) -> str:
+def _evidence_text(item: dict, limit: int = 400) -> str:
+    text = (item.get("evidence_text") or item.get("snippet")
+            or item.get("content") or "")
+    return str(text).replace("\n", " ")[:limit]
+
+
+def _fmt_items(items: list[dict], idx: Sequence[int]) -> str:
+    """逐条格式化混合来源证据，不用整组来源猜测字段。"""
     out = []
     for n, i in enumerate(idx, 1):
         it = items[i]
-        if line == "电商":
-            star = f'{it["star"]:.0f}星' if it.get("star") is not None else "无星级"
-            out.append(f'[{n}] {star} | {it.get("country") or "?"} | '
-                       f'{it.get("product_name") or "?"} | {it.get("snippet")}')
-        else:
-            txt = (it.get("content") or "").replace("\n", " ")[:400]
-            br = ",".join(it.get("brands") or []) or "-"
-            out.append(f'[{n}] {it.get("platform")} | 赞{it.get("interactions") or 0} | {br} | {txt}')
+        meta: list[str] = []
+        if it.get("star") is not None:
+            star = it["star"]
+            star_text = f"{star:g}" if isinstance(star, (int, float)) else str(star)
+            meta.append(f"星级:{star_text}")
+        if it.get("country"):
+            meta.append(f'国家:{it["country"]}')
+        if it.get("platform"):
+            meta.append(f'平台:{it["platform"]}')
+        brands = it.get("brands")
+        if brands:
+            if isinstance(brands, (list, tuple, set)):
+                brands = ",".join(sorted(str(x) for x in brands if x))
+            meta.append(f"品牌:{brands}")
+        if it.get("product_name"):
+            meta.append(f'品名:{it["product_name"]}')
+        out.append(f'[{n}] {" | ".join(meta) or "无可用元数据"} | {_evidence_text(it)}')
     return "\n".join(out)
 
 
@@ -33,23 +49,30 @@ def _uniq(seq: Sequence[Any]) -> list:
 
 # ---------------------------------------------------------------- Stage 2
 def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
-                    line: str, ctx_info: dict, opp_type: str, ctx) -> dict | None:
+                    opp_type: str, ctx_info: dict, ctx) -> dict:
     idx = list(members)
-    if line == "电商":
-        unit = "失效模式"
-        ctx_line = (f'品类 {ctx_info.get("category","?")} | 标签 {ctx_info.get("tag","?")} | '
-                    f'失效模式 {mode_name} | 1-2星占比 {ctx_info.get("low_star_rate","?")}')
-    else:
-        unit = "诉求主题"
-        ctx_line = (f'通道 {ctx_info.get("channel","需求缺口")} | 诉求主题 {mode_name} | '
-                    f'互动量合计 {sum(items[i].get("interactions") or 0 for i in idx)}')
+    unit_by_type = {"老品迭代": "失效模式", "新品创新": "诉求主题"}
+    if opp_type not in unit_by_type:
+        raise ValueError(f"Stage2 不支持的机会类型: {opp_type!r}")
+    unit = unit_by_type[opp_type]
+    context_parts = [f"生命周期 {opp_type}", f"{unit} {mode_name}"]
+    for label, key in (("品类", "category"), ("标签", "tag"),
+                       ("语义路径", "tax_path"), ("内容通道", "channel")):
+        if ctx_info.get(key):
+            context_parts.append(f"{label} {ctx_info[key]}")
+    if ctx_info.get("low_star_rate") is not None:
+        context_parts.append(f'1-2星占比 {ctx_info["low_star_rate"]}')
+    interactions = sum(items[i].get("interactions") or 0 for i in idx)
+    if interactions:
+        context_parts.append(f"互动量合计 {interactions}")
+    ctx_line = " | ".join(context_parts)
 
     prompt = prompts.STAGE2.format(
         unit_name=unit, actions=" ".join(prompts.ACTIONS),
         banned="、".join(prompts.BANNED_WORDS), context_line=ctx_line,
         n=len(idx), countries=",".join(_uniq(items[i].get("country") for i in idx))[:60] or "-",
         product_names=",".join(_uniq(items[i].get("product_name") for i in idx))[:80] or "-",
-        items=_fmt_items(items, idx, line), opp_type=opp_type)
+        items=_fmt_items(items, idx), opp_type=opp_type)
 
     last_err: list[str] = []
     last_obj: dict | None = None
@@ -61,9 +84,12 @@ def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
             obj, meta = llm.chat_json(p, max_tokens=1800,
                                       required=["title", "desc_phenomenon", "desc_attribution"])
             ctx.bump(tokens=meta.get("tokens", 0))
-        except Exception as e:  # noqa: BLE001
-            last_err = [f"模型调用失败: {str(e)[:120]}"]
-            continue
+        except llm.LLMError as e:
+            # 这三轮只给「调用成功但业务校验不通过」使用。
+            # transport 层已经完成自己的瞬时错误重试；耗尽后必须
+            # 直接失败，不能再被外层当成三次「校验纠错」。
+            ctx.bump(failed=1)
+            raise
         last_obj, last_meta = obj, meta
         errs = validate.validate_stage2(obj, items, idx)
         if not errs:
@@ -75,7 +101,7 @@ def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
     # 三次仍不过：落库并标记 needs_review，不阻断整批（§5.9）
     if last_obj is None:
         ctx.bump(failed=1)
-        return None
+        raise llm.LLMError("Stage2 三次尝试均未取得可解析响应")
     last_obj["_meta"] = last_meta
     last_obj["_needs_review"] = True
     last_obj["_errors"] = last_err
@@ -98,14 +124,17 @@ def write_suggestion(title: str, phenomenon: str, attribution: str,
         try:
             obj, meta = llm.chat_json(p, max_tokens=600, required=["desc_suggestion"])
             ctx.bump(tokens=meta.get("tokens", 0))
-        except Exception as e:  # noqa: BLE001
-            last_err = [str(e)[:120]]; continue
+        except llm.LLMError as e:
+            ctx.bump(failed=1)
+            raise
         text = (obj.get("desc_suggestion") or "").strip()
         errs = validate.check_suggestion(text)
         if not errs:
             return text, ctx_hash
         last_err = errs
-    return "", ctx_hash
+    ctx.bump(failed=1)
+    detail = "; ".join(last_err)[:300] or "未返回有效建议"
+    raise llm.LLMError(f"Stage3 三次尝试均失败: {detail}")
 
 
 # ---------------------------------------------------------------- Stage 4
@@ -130,16 +159,15 @@ def _filter_soft(issues: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 def llm_review(obj: dict, suggestion: str, items: list[dict],
-               members: Sequence[int], line: str, ctx) -> dict:
+               members: Sequence[int], opp_type: str, ctx) -> dict:
     """对每条产出都跑一次独立复核（不只在程序化校验失败时）。"""
+    if opp_type not in ("老品迭代", "新品创新"):
+        raise ValueError(f"Stage4 不支持的机会类型: {opp_type!r}")
     prompt = prompts.STAGE4_REVIEW.format(
         title=obj.get("title", ""), phenomenon=obj.get("desc_phenomenon", ""),
         attribution=obj.get("desc_attribution", ""), suggestion=suggestion,
-        n=len(list(members)), items=_fmt_items(items, list(members), line))
-    try:
-        r, meta = llm.chat_json(prompt, max_tokens=2000, required=["ok"])  # 900 会截断 JSON
-        ctx.bump(tokens=meta.get("tokens", 0))
-        hard, soft = _filter_soft(r.get("issues") or [])
-        return {"ok": not hard, "issues": hard, "soft_issues": soft}
-    except Exception as e:  # noqa: BLE001
-        return {"ok": True, "issues": [], "review_error": str(e)[:150]}
+        opp_type=opp_type, n=len(list(members)), items=_fmt_items(items, list(members)))
+    r, meta = llm.chat_json(prompt, max_tokens=2000, required=["ok"])  # 900 会截断 JSON
+    ctx.bump(tokens=meta.get("tokens", 0))
+    hard, soft = _filter_soft(r.get("issues") or [])
+    return {"ok": not hard, "issues": hard, "soft_issues": soft}

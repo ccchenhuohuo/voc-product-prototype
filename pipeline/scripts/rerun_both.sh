@@ -1,22 +1,195 @@
 #!/usr/bin/env bash
-# 清库 + 两条线并行重跑 + 统一收尾。
+# 清库 + 两个生命周期并行重跑 + 统一收尾。
 # 用法：bash ~/voc-analytics/scripts/rerun_both.sh
 # 前置条件：~/voc-analytics 下已有 .env、.venv 与事实层数据；voc-postgres 正常；
-#   百炼/LLM 凭据与配额可用。目标周当前固定为 2026-W33，可用 BUCKETS 和
-#   PER_PROC_CONCURRENCY 调整规模/并发。
+#   百炼/LLM 凭据与配额可用。目标周当前固定为 2026-W33；
+#   PER_PROC_CONCURRENCY 可调整并发。BUCKETS 默认 0（全量），若设置后实际
+#   截断了桶，生成程序会在调用 LLM 前失败，绝不以子集冒充全量。
 # 警告：脚本会终止匹配 run_generate.py 的进程并清空机会点层；若存在受外键保护的
 # 人工决策则按设计中止。执行前应确认备份并排除其他生成任务。
 #
-# 两段式不是为了好看，是正确性要求：跨线汇聚要读【对侧已落库的机会点】，
-# 两条线并行时先收工的那条看到的对侧是残缺的（实测电商 13:00 完、社媒 13:41 完，
-# 电商的汇聚等于对着半个库跑）。所以并行只到生成为止，汇聚/拆分/快照/放行
-# 等两条线都结束后统一做一遍。
+# 两段式是正确性要求：并行阶段只做生成，汇聚/拆分/快照/放行必须
+# 等老品迭代与新品创新两个生命周期都成功后再统一做一遍。
 set -euo pipefail
+
+# wait -n -p/-t 是监督正确性的硬依赖。必须在停止进程、清库等任何
+# 破坏性动作之前失败，不能等后台任务已启动后才发现系统 Bash 过旧。
+if (( BASH_VERSINFO[0] < 5 ||
+      (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then
+  echo "!! rerun_both.sh 需要 Bash >= 5.1（当前 ${BASH_VERSION}），未做任何变更。" >&2
+  exit 2
+fi
 cd ~/voc-analytics
+
+# 所有应用环境变量都在任何停止/清库动作前加载；后续监督契约据最终值校验。
+set -a; . ./.env; set +a
 
 # 全局闸门 _GATE 是【进程内】的信号量，两个进程各持一份。实测拐点是合计 64，
 # 128 会触发 429 Throttling，所以每个进程分一半。
 PER_PROC_CONCURRENCY="${PER_PROC_CONCURRENCY:-32}"
+RUN_ID="${RUN_ID:-gen_2026W33_$(date -u +%Y%m%dT%H%M%SZ)_$$}"
+# 两个 Python 进程共享首个 fatal；文件路径按本次 supervisor PID 隔离。
+# llm.py 用原子发布保留首因，另一进程每次请求前都会检查。
+VOC_LLM_CIRCUIT_FILE="${VOC_LLM_CIRCUIT_FILE:-/tmp/voc_llm_circuit_$$}"
+if [[ -e "$VOC_LLM_CIRCUIT_FILE" ]]; then
+  echo "!! 共享熔断文件已存在，拒绝在状态不明时清库：$VOC_LLM_CIRCUIT_FILE" >&2
+  exit 2
+fi
+# llm.py 用同目录临时文件 + hard link 原子发布首因。现在先验证目录可写且
+# 文件系统支持该原子操作，避免清库后才退化成单进程熔断。
+CIRCUIT_PROBE="${VOC_LLM_CIRCUIT_FILE}.probe.$$"
+CIRCUIT_PROBE_LINK="${VOC_LLM_CIRCUIT_FILE}.probe-link.$$"
+if ! (umask 077 && : > "$CIRCUIT_PROBE" && ln "$CIRCUIT_PROBE" "$CIRCUIT_PROBE_LINK"); then
+  rm -f -- "$CIRCUIT_PROBE" "$CIRCUIT_PROBE_LINK"
+  echo "!! 共享熔断路径不支持原子发布，未做任何变更：$VOC_LLM_CIRCUIT_FILE" >&2
+  exit 2
+fi
+rm -f -- "$CIRCUIT_PROBE" "$CIRCUIT_PROBE_LINK"
+export VOC_LLM_CIRCUIT_FILE
+
+PID_EXISTING=""
+PID_INNOVATION=""
+PID_FINALIZE=""
+CHILDREN_DRAINED=1
+
+terminate_and_drain() {
+  local pid="$1"
+  local result_var="$2"
+  local finished_pid=""
+  local rc=0
+
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+  fi
+  # Python 收到 TERM 后会发布协作取消、停止重试，并尽量等当前在飞 I/O
+  # 返回后写失败 run log。70 秒覆盖正常的 60 秒 HTTP 上限；若底层 I/O
+  # 仍不响应而被 KILL，该 lifecycle 日志可能缺失，整个共享 run 必须判不完整。
+  if wait -n -p finished_pid -t 70 "$pid"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ -z "$finished_pid" ]]; then
+    echo "!! pid=$pid 在 70 秒内未回应 TERM，发送 KILL。"
+    kill -KILL "$pid" 2>/dev/null || true
+    if wait "$pid"; then
+      rc=0
+    else
+      rc=$?
+    fi
+  fi
+  printf -v "$result_var" '%s' "$rc"
+}
+
+wait_publisher_and_drain() {
+  local pid="$1"
+  local result_var="$2"
+  local finished_pid=""
+  local rc=0
+
+  # 该进程是共享 fatal 的首因发布者，不向它发送 TERM，以免打断
+  # shutdown(wait=True) 后的稳定账本；给同样的 70 秒自然退出窗口。
+  if wait -n -p finished_pid -t 70 "$pid"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if [[ -z "$finished_pid" ]]; then
+    echo "!! fatal 发布者 pid=$pid 在 70 秒内未退出，发送 KILL。"
+    kill -KILL "$pid" 2>/dev/null || true
+    if wait "$pid"; then
+      rc=0
+    else
+      rc=$?
+    fi
+  fi
+  printf -v "$result_var" '%s' "$rc"
+}
+
+stop_and_drain_children() {
+  local pids=()
+  local candidate pid seen i running
+
+  for candidate in "$PID_EXISTING" "$PID_INNOVATION" "$PID_FINALIZE"; do
+    [[ -n "$candidate" ]] || continue
+    seen=0
+    for pid in "${pids[@]}"; do
+      if [[ "$pid" == "$candidate" ]]; then
+        seen=1
+        break
+      fi
+    done
+    (( seen == 1 )) || pids+=("$candidate")
+  done
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    seen=0
+    for pid in "${pids[@]}"; do
+      if [[ "$pid" == "$candidate" ]]; then
+        seen=1
+        break
+      fi
+    done
+    (( seen == 1 )) || pids+=("$candidate")
+  done < <(jobs -pr)
+
+  for pid in "${pids[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for ((i = 1; i <= 350; i++)); do
+    running=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        running=1
+        break
+      fi
+    done
+    if (( running == 0 )); then
+      break
+    fi
+    sleep 0.2
+  done
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+  PID_EXISTING=""
+  PID_INNOVATION=""
+  PID_FINALIZE=""
+  CHILDREN_DRAINED=1
+}
+
+handle_signal() {
+  local signal="$1"
+  local rc=1
+  trap '' INT TERM
+  if [[ "$signal" == "INT" ]]; then
+    rc=130
+  elif [[ "$signal" == "TERM" ]]; then
+    rc=143
+  fi
+  echo "!! 收到 $signal，终止并回收所有后台生成进程。"
+  stop_and_drain_children
+  exit "$rc"
+}
+
+handle_exit() {
+  local rc=$?
+  trap - EXIT
+  trap '' INT TERM
+  if (( CHILDREN_DRAINED == 0 )); then
+    stop_and_drain_children
+  fi
+  exit "$rc"
+}
+
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
+trap handle_exit EXIT
 
 echo "== 停止旧进程 =="
 RC_STOP=0
@@ -60,34 +233,102 @@ OPP_COUNT="$(docker exec voc-postgres psql -U voc_admin -d voc -tAc \
   'SELECT count(*) FROM voc_opportunity')"
 echo "   机会点: $OPP_COUNT"
 
-set -a; . ./.env; set +a
 export VOC_LLM_CONCURRENCY="$PER_PROC_CONCURRENCY"
 
-echo "== 阶段一：两条线并行生成（每进程并发 ${PER_PROC_CONCURRENCY}）=="
-nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --line A \
-      --limit-buckets "${BUCKETS:-12}" --skip-cross > /tmp/gen_a.log 2>&1 &
-PID_A=$!
-nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --line B \
-      --skip-cross > /tmp/gen_b.log 2>&1 &
-PID_B=$!
-echo "   电商 pid=$PID_A  社媒 pid=$PID_B"
+echo "== 阶段一：两个生命周期并行生成（每进程并发 ${PER_PROC_CONCURRENCY}，run_id=${RUN_ID}）=="
+CHILDREN_DRAINED=0
+nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
+      --lifecycle existing --run-id "$RUN_ID" --limit-buckets "${BUCKETS:-0}" \
+      --skip-finalize > /tmp/gen_existing.log 2>&1 &
+PID_EXISTING=$!
+nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
+      --lifecycle innovation --run-id "$RUN_ID" --limit-buckets "${BUCKETS:-0}" \
+      --skip-finalize > /tmp/gen_innovation.log 2>&1 &
+PID_INNOVATION=$!
+echo "   老品迭代 pid=$PID_EXISTING  新品创新 pid=$PID_INNOVATION"
 
-RC_A=0
-wait "$PID_A" || RC_A=$?
-RC_B=0
-wait "$PID_B" || RC_B=$?
-echo "   电商退出码 $RC_A / 社媒退出码 $RC_B"
-if (( RC_A != 0 || RC_B != 0 )); then
-  echo "!! 至少一条生成线失败，不执行统一收尾。"
-  exit 1
+RC_EXISTING=-1
+RC_INNOVATION=-1
+FIRST_RC=0
+FIRST_PID=""
+FAIL_RC=0
+if wait -n -p FIRST_PID "$PID_EXISTING" "$PID_INNOVATION"; then
+  FIRST_RC=0
+else
+  FIRST_RC=$?
+fi
+FATAL_PUBLISHER_PID=""
+if [[ -s "$VOC_LLM_CIRCUIT_FILE" ]]; then
+  IFS= read -r FATAL_PUBLISHER_LINE < "$VOC_LLM_CIRCUIT_FILE" || true
+  if [[ "$FATAL_PUBLISHER_LINE" =~ ^pid=([0-9]+)$ ]]; then
+    FATAL_PUBLISHER_PID="${BASH_REMATCH[1]}"
+  fi
 fi
 
-echo "== 阶段二：统一收尾（跨线汇聚 + 拆分检测 + 快照 + 放行）=="
+if [[ "$FIRST_PID" == "$PID_EXISTING" ]]; then
+  RC_EXISTING=$FIRST_RC
+  PID_EXISTING=""
+  if (( FIRST_RC != 0 )); then
+    FAIL_RC=$FIRST_RC
+    if [[ "$FATAL_PUBLISHER_PID" == "$PID_INNOVATION" ]]; then
+      echo "!! 老品迭代先退出但新品创新是 fatal 首因发布者；等待其稳定账本。"
+      wait_publisher_and_drain "$PID_INNOVATION" RC_INNOVATION
+    else
+      echo "!! 老品迭代首先失败（退出码 $FIRST_RC），立即终止新品创新。"
+      terminate_and_drain "$PID_INNOVATION" RC_INNOVATION
+    fi
+  elif wait "$PID_INNOVATION"; then
+    RC_INNOVATION=0
+  else
+    RC_INNOVATION=$?
+    FAIL_RC=$RC_INNOVATION
+  fi
+  PID_INNOVATION=""
+else
+  RC_INNOVATION=$FIRST_RC
+  PID_INNOVATION=""
+  if (( FIRST_RC != 0 )); then
+    FAIL_RC=$FIRST_RC
+    if [[ "$FATAL_PUBLISHER_PID" == "$PID_EXISTING" ]]; then
+      echo "!! 新品创新先退出但老品迭代是 fatal 首因发布者；等待其稳定账本。"
+      wait_publisher_and_drain "$PID_EXISTING" RC_EXISTING
+    else
+      echo "!! 新品创新首先失败（退出码 $FIRST_RC），立即终止老品迭代。"
+      terminate_and_drain "$PID_EXISTING" RC_EXISTING
+    fi
+  elif wait "$PID_EXISTING"; then
+    RC_EXISTING=0
+  else
+    RC_EXISTING=$?
+    FAIL_RC=$RC_EXISTING
+  fi
+  PID_EXISTING=""
+fi
+CHILDREN_DRAINED=1
+
+echo "   老品迭代退出码 $RC_EXISTING / 新品创新退出码 $RC_INNOVATION"
+if (( RC_EXISTING != 0 || RC_INNOVATION != 0 )); then
+  (( FAIL_RC != 0 )) || FAIL_RC=1
+  echo "!! 至少一个生命周期生成失败，不执行统一收尾。"
+  exit "$FAIL_RC"
+fi
+
+echo "== 阶段二：统一收尾（汇聚 + 拆分检测 + 快照 + 放行）=="
 # 收尾单进程，可以用满整个并发额度
 export VOC_LLM_CONCURRENCY=64
-RC_CROSS=0
-.venv/bin/python -u scripts/run_generate.py --week 2026-W33 --cross-only \
-      > /tmp/gen_cross.log 2>&1 || RC_CROSS=$?
-echo "   收尾退出码 $RC_CROSS"
-tail -6 /tmp/gen_cross.log || true
-(( RC_CROSS == 0 )) || exit "$RC_CROSS"
+RC_FINALIZE=0
+CHILDREN_DRAINED=0
+.venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
+      --lifecycle both --run-id "$RUN_ID" --finalize-only \
+      > /tmp/gen_finalize.log 2>&1 &
+PID_FINALIZE=$!
+if wait "$PID_FINALIZE"; then
+  RC_FINALIZE=0
+else
+  RC_FINALIZE=$?
+fi
+PID_FINALIZE=""
+CHILDREN_DRAINED=1
+echo "   收尾退出码 $RC_FINALIZE"
+tail -6 /tmp/gen_finalize.log || true
+(( RC_FINALIZE == 0 )) || exit "$RC_FINALIZE"

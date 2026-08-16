@@ -15,37 +15,35 @@
 
 前置条件：
   Python 3.11+ 及项目依赖已安装；数据库连接和百炼/LLM 凭据已配置；事实层中
-  至少存在一个含 30--60 条证据的电商桶，并允许访问模型服务。本脚本只读数据库。
+  至少存在一个含 30--60 条证据的老品迭代桶，并允许访问模型服务。本脚本只读数据库。
 """
 from __future__ import annotations
 import sys
 sys.path.insert(0, "/home/sdy/voc-analytics")
-from voc_analytics import config as C, db, llm, pipeline  # noqa: E402
+from voc_analytics import config as C, db, llm, pipeline, routing  # noqa: E402
 from voc_analytics.stages import stage1  # noqa: E402
 import re  # noqa: E402
 from voc_analytics import prompts  # noqa: E402
 
-# 取一个中等桶（30-60 条）做两轮全流程
-rows = db.line_a_pool()
-buckets: dict = {}
-for r in rows:
-    buckets.setdefault((r.get("category") or "未知", r["tag"]), []).append(r)
-cand = [(k, v) for k, v in buckets.items() if 30 <= len(v) <= 60]
-(cat, tag), items = sorted(cand, key=lambda kv: -len(kv[1]))[0]
-print(f"稳定性测试桶: {cat}/{tag}  n={len(items)}\n")
-
-info = {"category": cat, "tag": tag, "tax_path": items[0].get("tax_path", ""),
-        "low_star_rate": "?", "prod_line": "支撑"}
+# 取一个中等老品迭代桶（30-60 条）做两轮全流程
+routed = routing.route_evidence_by_lifecycle(db.generation_pool())
+cand = [(bucket, items) for bucket, items in routed.buckets.items()
+        if bucket.opp_type == "老品迭代" and 30 <= len(items) <= 60]
+bucket, items = sorted(cand, key=lambda kv: -len(kv[1]))[0]
+for item in items:
+    item.setdefault("_opp_type", bucket.opp_type)
+info = pipeline._bucket_context(bucket, items)
+print(f"稳定性测试桶: {info['category']}/{bucket.topic}  n={len(items)}\n")
 ACT = re.compile("|".join(prompts.ACTIONS))
 
 runs = []
 for k in (1, 2):
     ctx = C.RunCtx(run_id=f"stab{k}", week="2026-W33")
-    split = stage1.split_bucket(items, "电商", info, ctx, vote=False)
+    split = stage1.split_bucket(items, bucket.opp_type, info, ctx, vote=False)
     groups = stage1.merge_similar_modes(split["groups"], ctx)
     built = []
     for g in groups[:5]:                       # 每轮取前 5 组做 Stage2，控制成本
-        opp = pipeline.build_opportunity(items, g, "电商", info, ctx, [])
+        opp = pipeline.build_opportunity(items, g, bucket.opp_type, info, ctx, [])
         if opp:
             built.append({"members": frozenset(g["members"]),
                           "mode": opp["problem_mode"], "title": opp["title"]})

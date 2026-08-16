@@ -4,11 +4,11 @@
 为什么需要它——冷启动跑了两轮才发现的问题，本来都该在这里被挡住：
   · 放行策略从没执行（逻辑只在 Dagster 资产里，脚本路径绕过）
   · Dagster 生成资产 build 完不落库
-  · 跨线汇聚 350/350 空转（社媒 core_tag 与电商 tag 取值域不相交）
+  · 跨来源汇聚 350/350 空转（旧按渠道分组使 core_tag 取值域不相交）
   · problem_mode 退化成分类名，593 条只有 63 个不同向量
   · opp_id 碰撞导致「evi_total=91 而描述只讲了 1 条」
 上一个探针漏掉它们，是因为：在脏库上跑、被 timeout 砍在跨线汇聚之前、只跑了电商。
-所以本脚本的三条硬要求是：干净切片、跑到最后一步、两条线都覆盖。
+所以本脚本的三条硬要求是：干净切片、跑到最后一步、两个生命周期都覆盖。
 
 用法：
   cd /home/sdy/voc-analytics
@@ -27,7 +27,9 @@ from __future__ import annotations
 import argparse, re, subprocess, sys, time, unicodedata
 
 sys.path.insert(0, "/home/sdy/voc-analytics")
-from voc_analytics import config as C, db, lifecycle, llm, pipeline, resolve  # noqa: E402
+from voc_analytics import (  # noqa: E402
+    config as C, db, lifecycle, llm, pipeline, resolve, routing,
+)
 from voc_analytics.stages import stage1, validate  # noqa: E402
 
 SMOKE_WEEK = "9999-W01"          # 哨兵周：探针产出全部打这个标，便于精确清理
@@ -176,10 +178,10 @@ def run_acceptance(week: str) -> None:
                       WHERE o.first_week=%s AND m.message_id IS NULL""", [week]) or 0
     chk("挂载证据都能溯到原始消息", orphan == 0, f"断链 {orphan} 条")
 
-    # 7. 跨线汇聚 —— dual_source 是它唯一的验收口径
+    # 7. 跨来源汇聚 —— 关系表 match_by 保留兼容值 cross_line
     xline = db.q1("""SELECT count(*) FROM voc_opp_evidence oe JOIN voc_opportunity o USING(opp_id)
                       WHERE o.first_week=%s AND oe.match_by='cross_line'""", [week]) or 0
-    chk("跨线汇聚有挂载产生", xline > 0, f"{xline} 条对侧证据")
+    chk("跨来源汇聚有挂载产生", xline > 0, f"{xline} 条其他来源证据")
 
     # 8. 放行 —— 不放行等于 PM 什么都看不到
     rel = db.q1("SELECT count(*) FROM voc_opportunity WHERE first_week=%s "
@@ -194,46 +196,64 @@ def run_acceptance(week: str) -> None:
 # ---------------------------------------------------------------- 两条执行路径
 def run_script_path(ctx) -> None:
     """脚本路径：直接调 pipeline 的函数，与 run_generate.py 同一套实现。"""
-    buckets = pipeline.bucket_line_a()
-    ranked = sorted(buckets.items(), key=lambda kv: len(kv[1]))
+    routed = routing.route_evidence_by_lifecycle(db.generation_pool())
+
+    old_buckets = [(bucket, items) for bucket, items in routed.buckets.items()
+                   if bucket.opp_type == "老品迭代"]
+    ranked = sorted(old_buckets, key=lambda kv: len(kv[1]))
     # 取一个【小】桶：目的是跑通全链路，不是压测
     small = [(k, v) for k, v in ranked if 6 <= len(v) <= 14][:1]
     if not small:
         small = ranked[-1:]
-    (cat, tag), items = small[0]
-    print(f"[电商] {cat}/{tag}  n={len(items)}")
-    info = {"category": cat, "tag": tag, "tax_path": items[0].get("tax_path", ""),
-            "prod_line": "灯光" if "灯光" in (cat or "") else "支撑"}
-    split = stage1.split_bucket(items, "电商", info, ctx)
+    if not small:
+        raise RuntimeError("统一生成池中没有可用的老品迭代桶")
+    old_bucket, items = small[0]
+    for item in items:
+        item.setdefault("_opp_type", old_bucket.opp_type)
+    info = pipeline._bucket_context(old_bucket, items)
+    print(f"[老品迭代] {info['category']}/{old_bucket.topic}  n={len(items)}")
+    split = stage1.split_bucket(items, old_bucket.opp_type, info, ctx)
     groups = stage1.merge_similar_modes(split["groups"], ctx)
     built = [o for o in llm.parallel_map(
-        lambda g: pipeline.build_opportunity(items, g, "电商", info, ctx, []), groups)
+        lambda g: pipeline.build_opportunity(
+            items, g, old_bucket.opp_type, info, ctx, []), groups)
         if isinstance(o, dict)]
     pipeline.persist_opportunities([(o, items) for o in built], SMOKE_WEEK, ctx, verbose=True)
 
-    rows = db.line_b_pool(list(C.DEWATER_COMP), multi_brand_only=True)[:8]
-    print(f"[社媒] 竞品对标 n={len(rows)}")
+    new_buckets = [(bucket, items) for bucket, items in routed.buckets.items()
+                   if bucket.opp_type == "新品创新" and bucket.channel == "竞品对标"]
+    new_buckets.sort(key=lambda kv: -len(kv[1]))
+    if not new_buckets:
+        raise RuntimeError("统一生成池中没有可用的新品创新·竞品对标桶")
+    new_bucket, rows = new_buckets[0][0], new_buckets[0][1][:8]
+    print(f"[新品创新] 竞品对标 n={len(rows)}")
     if rows:
-        binfo = {"channel": "竞品对标", "category": "SOCIAL-NA", "prod_line": "未定"}
-        bsplit = stage1.split_bucket(rows, "社媒", binfo, ctx)
+        for row in rows:
+            row.setdefault("_opp_type", new_bucket.opp_type)
+        binfo = pipeline._bucket_context(new_bucket, rows)
+        bsplit = stage1.split_bucket(rows, new_bucket.opp_type, binfo, ctx)
         bgroups = stage1.merge_similar_modes(bsplit["groups"], ctx)
-        bgroups += [{"mode_name": (rows[u].get("content") or "")[:40], "members": [u]}
+        bgroups += [{"mode_name": (rows[u].get("evidence_text")
+                                    or rows[u].get("content") or "")[:40],
+                     "members": [u]}
                     for u in bsplit["unclassified"]]
         bbuilt = [o for o in llm.parallel_map(
             lambda g: pipeline.build_opportunity(
-                rows, g, "社媒", {**binfo, "tag": g["mode_name"][:60]}, ctx, []), bgroups)
+                rows, g, new_bucket.opp_type, binfo, ctx, []), bgroups)
             if isinstance(o, dict)]
         pipeline.persist_opportunities([(o, rows) for o in bbuilt], SMOKE_WEEK, ctx,
                                        verbose=True)
 
     # 收尾三件套：上一个探针就是死在没跑到这里
-    print("[收尾] 跨线汇聚 / 拆分 / 快照 / 放行")
-    for r in db.q("SELECT opp_id, mode_vec::text v, core_tag, src_line FROM voc_opportunity "
+    print("[收尾] 跨来源汇聚 / 拆分 / 快照 / 放行")
+    for r in db.q("SELECT opp_id, mode_vec::text v, opp_type, source_lines, src_line "
+                  "FROM voc_opportunity "
                   "WHERE first_week=%s AND mode_vec IS NOT NULL", [SMOKE_WEEK]):
         vec = resolve._parse_vec(r["v"])
         if vec:
-            attached = resolve.cross_line_merge(
-                r["opp_id"], vec, r["core_tag"], r["src_line"], SMOKE_WEEK, ctx)
+            attached = resolve.cross_source_merge(
+                r["opp_id"], vec, r["opp_type"],
+                r.get("source_lines") or [r["src_line"]], SMOKE_WEEK, ctx)
             if attached:
                 pipeline.attach_evidence(r["opp_id"], attached)
     db.execute("""INSERT INTO voc_opp_snapshot(opp_id,week,evi_total,rank_score,title,
@@ -252,7 +272,7 @@ def run_dagster_path() -> None:
     from datetime import datetime
     key = datetime.fromisocalendar(int(y), int(w), 1).strftime("%Y-%m-%d")
     cmd = ["dagster", "asset", "materialize", "-m", "voc_analytics.definitions",
-           "--select", "opportunities_line_a,opportunities_line_b,cross_line_merged,"
+           "--select", "opportunities_by_lifecycle,cross_source_merged,"
                        "snapshots,release_to_pm", "--partition", key]
     print(f"[Dagster] {' '.join(cmd)}")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)

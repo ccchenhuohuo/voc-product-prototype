@@ -87,7 +87,7 @@
   <div class="ico">⚙️</div>
   <h1>数据管道重构</h1>
   <p class="sub">按新的机会模型（两层结构 · SPU 容器 + 问题条目）重新设计从云听到卡片的处理链路。核心结论：<b>生成层保持产品无关，SPU 维度在新增的展开层派生</b>——一次生成同时喂养战略层与执行层。</p>
-  <div class="meta">设计 v1 · 2026-08-15 · 代码对齐至迁移 014 · 配套〈VOC 机会模型规格〉· 文中库内数量为 2026-08-15 历史快照，本轮未连接生产库复核</div>
+  <div class="meta">设计 v1 · 2026-08-17 阶段 2c 代码契约 · 配套〈VOC 机会模型规格〉· 文中库内数量为 2026-08-15 历史快照，本轮未连接生产库复核</div>
 </div></header>
 
 <div class="wrap"><main>
@@ -95,18 +95,18 @@
 <!-- =============== 0 -->
 <section>
   <h2><span class="no">0</span>一句话说清改了什么</h2>
-  <p class="lede">这是目标链路与当前落地状态的合并说明：① 抽取字段与 ⑤ SPU 展开已经实现；② 分类解耦与 ⑥ 自动负责人路由尚未实现；③④保留核心算法，但分类改造仍需调整编排和字段契约。</p>
-  <div class="callout"><span class="i">ℹ️</span><p><b>术语与状态说明</b>：事实表与机会表的 <code>src_line</code> 均使用「电商/社媒」，表示发现来源；<code>voc_opportunity.channel</code> 仍只表示「需求缺口/竞品对标」，不是来源字段。迁移 013/014 本阶段只交付脚本、未执行，生产应用状态仍待迁移记录或数据库核验。下文会明确区分“已落地”与“计划”。</p></div>
+  <p class="lede">阶段 2c 已在代码与迁移脚本中将生成主轴改为「统一内容池 → 逐证据分类 → 生命周期桶 → 生命周期提示词/L1」。这是静态代码状态；本轮未执行迁移、未调 LLM、未重跑生成，运行结果均未验证。</p>
+  <div class="callout"><span class="i">ℹ️</span><p><b>术语与状态说明</b>：<code>voc_message.src_line</code> 是已登记的证据来源，生命周期分类读取 <code>voc_source_policy.requires_spu</code>。<code>voc_opportunity.src_line</code> 只是 legacy 单值代表：新建混合组取排序后第一个来源，存量 recount 不改写；完整事实以 <code>source_lines/evi_by_source</code> 为准。<code>channel</code> 仍只是业务子类型。迁移 <code>017_generation_lifecycle_routing.sql</code> 本轮只交付文件。</p></div>
   <div class="tablewrap"><table>
     <tr><th>阶段</th><th>处置</th><th>为什么</th><th>要不要重跑 LLM</th></tr>
     <tr><td>① 抽取</td><td><span class="tag t-chg">代码已落地</span></td><td><code>clean.py</code> 与迁移 008 已补产品字段、多值数组和标签四级字段；阶段一补 SPU 规范化及迁移 014 留痕字段，014 未执行</td><td>代码/迁移不需 LLM；历史回填状态需运维确认</td></tr>
-    <tr><td>② 分流</td><td><span class="tag t-chg">计划</span></td><td>来源值虽已统一为电商/社媒，生成逻辑仍把来源与机会类型绑定；社媒生成只遍历 <code>DEWATER_GAP</code> / <code>DEWATER_COMP</code>，不含「用户使用体验」</td><td><b>落地后社媒需要</b> · 电商不需要</td></tr>
-    <tr><td>③ 生成</td><td><span class="tag t-keep">保留核心</span></td><td>分桶、切分、生成与校验可复用；当前仍按 line 写死 <code>opp_type</code>，输入契约需改</td><td>—</td></tr>
-    <tr><td>④ 消解</td><td><span class="tag t-keep">保留核心</span></td><td>字段等值候选 + 向量排序 + L3 判定可复用；按 line 分支仍需适配</td><td>—</td></tr>
+    <tr><td>② 分流</td><td><span class="tag t-new">2c 代码已落地</span></td><td>统一 evidence 粒度内容池；每条证据用 <code>classification.py</code> 与 <code>requires_spu</code> 分类，再进互斥生命周期桶；补回「用户使用体验」负面分支</td><td><b>只有受控重跑才调 LLM</b></td></tr>
+    <tr><td>③ 生成</td><td><span class="tag t-new">2c 代码已落地</span></td><td>Stage1 / Stage2 按 <code>opp_type</code> 选提示词；混合来源证据逐行格式化；批次异常不再被吞掉</td><td>—</td></tr>
+    <tr><td>④ 消解</td><td><span class="tag t-new">2c 代码已落地</span></td><td>L1 键的形状仅由生命周期决定，同生命周期可跨来源召回；不同生命周期不合并</td><td>—</td></tr>
     <tr><td>⑤ 展开</td><td><span class="tag t-new">已落地</span></td><td>迁移 009 已实现 SPU 容器、问题条目、人工层与共性度</td><td><b>否 · 纯 SQL</b></td></tr>
-    <tr><td>⑥ 放行</td><td><span class="tag t-keep">计划</span></td><td>当前只按安全/双源/Top-N 放行，尚无 SPU/品类到负责人的自动映射</td><td>否</td></tr>
+    <tr><td>⑥ 放行</td><td><span class="tag t-keep">计划</span></td><td>当前只按安全/多来源（兼容字段 <code>dual_source</code>）/Top-N 放行，尚无 SPU/品类到负责人的自动映射</td><td>否</td></tr>
   </table></div>
-  <div class="callout"><span class="i">🔑</span><p><b>最关键的设计选择在 ⑤</b>：生成层<b>不</b>按 SPU 分桶。共性问题就该是跨产品的——「S支架类整体偏重」必须由 30 个型号的证据一起产生，按 SPU 切开就再也看不见它。SPU 维度是在生成完成之后<b>派生</b>出来的，因此一次生成同时服务两层，不必跑两遍。</p></div>
+  <div class="callout"><span class="i">🔑</span><p><b>最关键的设计选择在 ② 与 ⑤ 之间</b>：生成前只使用「是否挂 SPU」判定生命周期，<b>不把具体 SPU 编码放进分桶键</b>。因此「S支架类整体偏重」仍可由 30 个型号的证据共同产生；生成完成后，再沿每条证据的具体 SPU 派生问题条目。</p></div>
 </section>
 
 <!-- =============== 1 -->
@@ -121,6 +121,7 @@
         <div class="lane"><span class="lk">数据源</span><span class="lv">
           <span class="box">云听 COMMENT · 电商评论</span>
           <span class="box">云听 SOCIAL · 社交媒体</span>
+          <span class="box b-new">问卷调研 · 待接入</span>
           <span class="box b-drop">SERVICE 客服会话</span><span class="rt">价值不足，明确排除</span></span></div>
         <div class="lane"><span class="lk">要补的字段</span><span class="lv">
           <span class="box b-new mono">spu_raw[]</span><span class="box b-new mono">spu[]</span><span class="box b-new mono">spu_unmatched[]</span><span class="box b-new mono">sku[]</span>
@@ -139,35 +140,38 @@
     <div class="arrow">↓</div>
 
     <div class="stage">
-      <div class="sh"><span class="num">②</span> 分流 · 目标态 <span class="tag t-chg">计划 · 未落地</span></div>
+      <div class="sh"><span class="num">②</span> 统一取证与分流 <span class="tag t-new">2c 代码已落地 · 未执行</span></div>
       <div class="sb">
         <p style="margin:0 0 9px;color:var(--muted);font-size:12.5px">
-          来源命名已经统一，但<b>来源</b>与<b>机会类型</b>在生成逻辑中仍被绑定。目标是让两个正交字段各守其责：
-          <code>src_line</code>（电商 / 社媒）× <code>opp_type</code>（老品迭代 / 新品创新）。<code>voc_opportunity.channel</code> 仍为业务子类型（需求缺口 / 竞品对标），不迁移成来源字段。</p>
-        <div class="lane"><span class="lk">电商评论</span><span class="lv">
-          <b>100% → 老品迭代</b><span class="rt">按业务经验固化为规则，不再让模型判断</span></span></div>
-        <div class="lane"><span class="lk" style="padding-top:6px">社交媒体</span><span class="lv">
-          <div style="font-size:12.5px;color:var(--muted);margin-bottom:5px">依据 <code>content_type</code> + 情感，<b>不用产品标签树</b>——树是主题维度（在聊哪个部件），不是意图维度（想干什么）；社媒 87.8% 都落在 A4.Act/产品体验，用它判定会把几乎全部社媒判成老品迭代。</div>
-          <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:12.5px;align-items:center">
-            <span class="box b-new">用户使用体验 · 负面</span><span>→ <b>老品迭代</b>（多数无 SPU 挂靠）<span class="rt">3,249 条 · 负面率 23.4% 最高 · 现未进入生成</span></span>
-            <span class="box">用户咨询 / 其他</span><span>→ 新品创新 · 需求缺口<span class="rt">5,005 条</span></span>
-            <span class="box">产品评测 / 竞品拉踩</span><span>→ 新品创新 · 竞品对标<span class="rt">2,623 条</span></span>
-            <span class="box b-drop">产品种草广告 / 二手转让</span><span>丢弃<span class="rt">13,630 条 · 负面率仅 1.3%，是广告</span></span>
-          </div>
-          <div style="margin-top:8px;font-size:12.5px;color:var(--muted);border-top:1px dashed var(--line);padding-top:7px">
-            <b>判定次序</b>（content_type 是数组，一条消息可命中多个，故必须定序）：
-            ① 命中丢弃类 → 丢弃 · ② 用户使用体验 <b>且负面</b> → 老品迭代 ·
-            ③ 产品评测 / 竞品拉踩 → 竞品对标 · ④ 用户咨询 / 其他 → 需求缺口 ·
-            ⑤ 其余（含非负面的用户使用体验约 2,490 条、无 content_type 的 76 条）→ <b>需求缺口候选</b>，走诉求门再筛。
-            <br>各桶计数为<b>整桶量</b>，非过滤后子集——② 的 3,249 条中仅 23.4% 为负面。
-          </div></span></div>
-        <div class="cost">当前代码尚未实现：<code>definitions.py</code> 只遍历 <code>DEWATER_GAP</code> 与 <code>DEWATER_COMP</code>，未把「用户使用体验」送入生成；社媒仍只生成新品创新</div>
+          <code>db.generation_pool()</code> 先在同一个 evidence 粒度入口按内容取证，返回真实 <code>(message_id, seq)</code>。情感与内容标签只决定是否入池及 <code>content_branch/channel</code>，<b>不直接决定 <code>opp_type</code></b>。</p>
+        <div class="lane"><span class="lk">内容入池</span><span class="lv">
+          <span class="box">产品体验负面</span>
+          <span class="box b-new">用户使用体验 · 负面</span>
+          <span class="box">需求缺口</span>
+          <span class="box">竞品对标</span>
+          <span class="rt">片段/正文非空；需求和竞品保留原业务门槛</span></span></div>
+        <div class="lane"><span class="lk">来源策略</span><span class="lv">
+          <span class="box">电商 <code>requires_spu=true</code></span>
+          <span class="box">社媒 <code>false</code></span>
+          <span class="box">问卷调研 <code>false</code></span>
+          <span class="rt">读布尔属性，不比较来源名</span></span></div>
+        <div class="lane"><span class="lk">逐证据分类</span><span class="lv">
+          R1：有 SPU → <b>老品迭代</b> ·
+          R2：无 SPU 且 <code>requires_spu=false</code> → <b>新品创新</b> ·
+          R3：无 SPU 且 <code>requires_spu=true</code> → <b>无效</b><span class="rt">不进生成桶</span></span></div>
+        <div style="margin-top:8px;font-size:12.5px;color:var(--muted);border-top:1px dashed var(--line);padding-top:7px">
+          <b>必须纠正的旧表述</b>：「用户使用体验 · 负面」只表示内容分支。它有 SPU 才是老品；无 SPU 且来自社媒/问卷等来源时仍是新品。依已定 R1/R3，「电商新品诉求」也不是合法路由：有 SPU 必为老品，无 SPU 则无效。
+        </div>
+        <div style="margin-top:8px;font-size:12.5px;color:var(--muted);border-top:1px dashed var(--line);padding-top:7px">
+          <b>仍需产品取舍的边界</b>：同义问题若一条证据有 SPU、另一条社媒证据无 SPU，逐证据分类会把它们分别放进 R1 与 R2；生命周期隔离随后禁止合并。当前跨来源老品合流只覆盖两条证据各自都命中 R1 的情况。要覆盖混合挂载场景，必须另定 provisional 分类或跨生命周期消解规则。
+        </div>
+        <div class="cost">历史社媒毛候选：需求 5,005 + 竞品 2,623 = 7,628 条消息。用户使用体验整桶 3,249 条 × 负面率 23.4% ≈ 毛新增 760，毛候选约 8,388（+10.0%）。多标签重叠、<code>low_conf</code>、非空门槛与消息/证据粒度差异使净增无法从仓库推定，精确规模<b>未验证</b>。</div>
       </div>
     </div>
     <div class="arrow">↓</div>
 
     <div class="stage">
-      <div class="sh"><span class="num">③</span> 生成 · <span class="mono">pipeline + stages</span> <span class="tag t-keep">保留核心</span></div>
+      <div class="sh"><span class="num">③</span> 生成 · <span class="mono">pipeline + stages</span> <span class="tag t-new">2c 代码已落地 · 未运行</span></div>
       <div class="sb">
         <div class="lane"><span class="lk">老品迭代通道</span><span class="lv">
           分桶 <span class="mono">(品类, 标签)</span> → Stage1 问题模式切分 → Stage2/3/4 生成 + 程序化校验</span></div>
@@ -175,18 +179,21 @@
           诉求门 → Stage1′ 主题切分 → 生成 + 校验</span></div>
         <div class="lane"><span class="lk">产出</span><span class="lv">
           <span class="box mono">voc_opportunity</span><span class="rt">= 共性问题（跨 SPU）与诉求</span></span></div>
-        <div class="cost">⚠️ <b>刻意不按 SPU 分桶</b>；但当前 <code>build_opportunity()</code> 仍按 line 写死 <code>opp_type</code> 和品类，② 落地时必须改字段契约</div>
+        <div class="lane"><span class="lk">新建 ID</span><span class="lv">
+          <code>OPP2-</code> + SHA-256 前 128 bit<span class="rt">老品：<code>opp_type + core_tag + problem_mode</code>；新品再含业务 <code>channel</code>；不含来源、周次或模型版本</span></span></div>
+        <div class="cost"><b>刻意不按具体 SPU 分桶</b>：SPU 在生成前只用于判定生命周期，具体编码不进分桶键，仍可发现跨产品问题。存量 <code>OPP-*</code> 不重键，消解命中时继承已有 canonical ID。</div>
       </div>
     </div>
     <div class="arrow">↓</div>
 
     <div class="stage">
-      <div class="sh"><span class="num">④</span> 消解 · <span class="mono">voc_analytics.resolve</span> <span class="tag t-keep">保留核心</span></div>
+      <div class="sh"><span class="num">④</span> 消解 · <span class="mono">voc_analytics.resolve</span> <span class="tag t-new">2c 代码已落地 · 未运行</span></div>
       <div class="sb">
         <div class="lane"><span class="lk">链路</span><span class="lv">
-          L1 字段等值候选桶 → L2 在 Python 中按向量余弦相似度排序（仅排序，不设阈值）→ L3 LLM 判定（唯一裁判）；跨来源的社媒→电商路径另用 pgvector <code>&lt;=&gt;</code> 召回</span></div>
+          L1 按生命周期定键：老品为 <code>(opp_type, core_tag)</code>，新品为 <code>(opp_type, channel, core_tag)</code>；来源不参与候选分区。L2 在桶内按向量余弦相似度排序，L3 LLM 裁决是否同一机会。</span></div>
         <div class="lane"><span class="lk">附带</span><span class="lv">
-          跨渠道汇聚 · 拆分检测 · 提案生成；<code>lifecycle.check_tombstone()</code> 当前仅定义、未接入生产流程</span></div>
+          跨来源补证只在同一生命周期内进行 · 拆分检测 · 提案生成；<code>lifecycle.check_tombstone()</code> 当前仅定义、未接入生产流程</span></div>
+        <div class="cost"><b>失败即停</b>：Arrearage、鉴权失败、硬配额/余额不足立即打开熔断；同一 run 以原子共享文件把首因传播给另一生命周期进程。并行层传播原异常并取消未开始任务。Stage1 以计划/完成/失败/取消批次及其条数形成账本；任一生成进程非零退出时，终止兄弟进程并禁止收尾。监督脚本在任何停止/清库前验证 Bash ≥5.1。</div>
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -207,7 +214,7 @@
         <div class="lane"><span class="lk">③ 共性度</span><span class="lv">
           <code>N_eff = 1 / Σ(pᵢ²)</code> → 打 <span class="mono">单品 / 多品 / 品线级</span> 标签
           <span class="rt">实测品线级问题头部占比均在 14–29%，扩散是真实的</span></span></div>
-        <pre style="margin:11px 0 0"><code>-- 与 sql/009_spu_layer.sql 对齐的关键定义
+        <pre style="margin:11px 0 0"><code>-- 与 sql/015_classification_contract.sql 对齐的问题条目契约
 -- spu 是数组（一条评论可挂多个产品），必须 unnest 成标量再分组，
 -- 否则 GROUP BY 会按整个数组值分组，产出 '{A,B}' 这种假 SPU 键。
 CREATE MATERIALIZED VIEW IF NOT EXISTS voc_spu_issue AS
@@ -215,11 +222,13 @@ WITH attached AS (
 SELECT DISTINCT NULLIF(btrim(s.spu), '') AS spu,
        oe.opp_id, oe.message_id, oe.seq, oe.attach_week, e.tax_path
   FROM voc_opp_evidence oe
+  JOIN voc_opportunity o ON o.opp_id = oe.opp_id
   JOIN voc_message m USING (message_id)
   JOIN voc_evidence e
     ON e.message_id = oe.message_id AND e.seq = oe.seq
   CROSS JOIN LATERAL unnest(m.spu) AS s(spu)
- WHERE m.src_line = '电商'
+ WHERE o.opp_type = '老品迭代'
+   AND o.classification_state = '确定'
    AND cardinality(m.spu) &gt; 0
    AND NULLIF(btrim(s.spu), '') IS NOT NULL
 )
@@ -232,7 +241,7 @@ SELECT spu, opp_id,
   FROM attached
  GROUP BY spu, opp_id
 HAVING count(*) &gt;= 2;</code></pre>
-        <div class="cost">已实现为纯 SQL 物化视图与 <code>voc_refresh_spu_layer()</code>；Dagster 中有 <code>spu_layer</code> 资产调用刷新，人工状态另存、不受刷新覆盖</div>
+        <div class="cost">009 建立了纯 SQL 物化视图，015 脚本将问题条目改为按「确定老品 + 实际 SPU」展开并保留 <code>HAVING count(*) &gt;= 2</code>。本轮未连库，015/016 实际环境状态未验证。</div>
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -245,7 +254,7 @@ HAVING count(*) &gt;= 2;</code></pre>
         <div class="lane"><span class="lk">新品创新卡</span><span class="lv">
           <span class="box">共享池</span><span class="rt">周战略会集体研讨</span></span></div>
         <div class="lane"><span class="lk">战略层</span><span class="lv">
-          目标：品线级问题、无挂靠的社媒共性问题 → 知会卡进批阅流<span class="rt">当前 <code>release_to_pm()</code> 只按安全 / 双源 / Top-N 解除 backlog</span></span></div>
+          目标：品线级老品问题 → 知会卡进批阅流<span class="rt">无 SPU 的非强制 SPU 来源依 R2 是新品，不是「无归属老品」</span></span></div>
       </div>
     </div>
 
@@ -254,28 +263,29 @@ HAVING count(*) &gt;= 2;</code></pre>
 
 <!-- =============== 2 -->
 <section>
-  <h2><span class="no">2</span>两条通道的不对称</h2>
-  <p class="lede">同一套管道，两条通道的处理深度完全不同——这不是设计缺陷，是数据实情决定的。探针实测支撑每一行。</p>
+  <h2><span class="no">2</span>来源能力与生命周期</h2>
+  <p class="lede">来源的内容结构仍有差异，但差异只影响入池与展示元数据；机会类型统一由 SPU 挂载和 <code>requires_spu</code> 属性决定。</p>
   <div class="tablewrap"><table>
     <tr><th></th><th>电商评论</th><th>社交媒体</th></tr>
     <tr><td>产品挂靠</td><td>SPU 91.6% · SKU 93.7%</td><td><b>多数无任何挂靠</b>；历史探针也发现少量可挂靠数据</td></tr>
     <tr><td>标签树覆盖</td><td>100%</td><td>71%</td></tr>
     <tr><td>负面占比</td><td>高（低星即负面）</td><td><b>仅 5.7%</b>（种草场，非抱怨场）</td></tr>
-    <tr><td>机会类型</td><td>恒为老品迭代</td><td>以新品创新为主，含少量老品迭代</td></tr>
-    <tr><td>能否落到 SPU 卡</td><td>✅ 当前展开</td><td>当前迁移 009 以 <code>m.src_line='电商'</code> 过滤全部社媒；即使消息带 SPU 也不会进入 SPU 卡</td></tr>
-    <tr><td>意图判定依据</td><td>不需要（规则固化）</td><td><code>content_type</code> + 情感</td></tr>
+    <tr><td>无 SPU 时</td><td><code>requires_spu=true</code> → R3 无效</td><td><code>requires_spu=false</code> → R2 新品</td></tr>
+    <tr><td>有 SPU 时</td><td>R1 老品</td><td>R1 老品</td></tr>
+    <tr><td>能否落到 SPU 卡</td><td colspan="2">机会必须是「老品迭代 + 确定」，且证据具有具体 SPU；不依赖 <code>src_line</code> 字面值</td></tr>
+    <tr><td>内容入池依据</td><td>产品证据、负面与非空片段</td><td><code>content_type</code>、情感、品牌与非空片段</td></tr>
   </table></div>
-  <div class="callout"><span class="i">📌</span><p><b>社媒老品迭代是个已知缺口</b>：多数社媒没有 SPU；少量带 SPU 的社媒也被当前展开层的渠道条件排除。因此它现在进不了 SPU 卡状态机。目标处置是把无挂靠部分归入战略层，并另行决策是否放开可挂靠社媒；不能把“多数无挂靠”写成“全部无法挂靠”。</p></div>
+  <div class="callout"><span class="i">📌</span><p><b>来源不是生命周期</b>：社媒有 SPU 子集是老品，无 SPU 子集是新品；问卷调研接入后使用同一属性规则。具体的 <code>voc_spu</code> / <code>n_eff</code> 派生查询仍有历史电商限定，017 不修改该限制，不得将它们写成全来源读数。</p></div>
 </section>
 
 <!-- =============== 3 -->
 <section>
-  <h2><span class="no">3</span>当前代码数据模型（迁移 001–014）</h2>
+  <h2><span class="no">3</span>仓库数据模型（迁移链 001–017）</h2>
   <div class="split2">
     <div class="mini"><div class="mh">事实层 <span class="tag t-chg">代码已落地</span></div>
       <pre style="margin:6px 0 0;font-size:11.5px"><code>voc_message
   message_id PK
-  src_line         电商/社媒
+  src_line         已登记来源；通过 voc_source_policy 外键约束
   spu_raw[] spu[] spu_unmatched[]
   sku[] model[]
   prod_line launch_period
@@ -289,14 +299,23 @@ voc_evidence
   tag sentiment snippet
   tax_path tax_l1(deprecated)
   tax_stage tax_domain
-  tax_sub tax_leaf</code></pre></div>
+  tax_sub tax_leaf
+
+voc_source_policy
+  src_line PK
+  requires_spu boolean</code></pre></div>
     <div class="mini"><div class="mh">机会层 <span class="tag t-keep">当前字段</span></div>
       <pre style="margin:6px 0 0;font-size:11.5px"><code>voc_opportunity   共性问题 / 诉求
   opp_id PK
   opp_type       老品迭代/新品创新
-  src_line       电商/社媒（发现方）
+  classification_state  确定/无效
+  classify_rule  R0/R1/R2/R3
+  src_line       legacy 单值代表；非完整来源事实
+  source_lines[] 完整供证来源
+  evi_by_source  通用按来源证据计数
   channel        业务子类型：需求缺口/竞品对标
-  evi_ec evi_social dual_source
+  evi_ec evi_social  一期兼容投影
+  dual_source    正证据来源数 >= 2
   problem_mode title desc_*
   mode_vec
   n_eff scope    共性度
@@ -306,6 +325,7 @@ voc_opp_evidence  证据挂载
 voc_proposal      提案
 voc_opp_lineage   血缘</code></pre></div>
   </div>
+  <p class="anno"><b>016/017 边界</b>：016 的 locked guard 冻结 PM 已接管行的 <code>opp_type / classification_state / classify_rule</code>，017 不替换该触发器，也不为存量机会重键。<code>source_lines</code> / <code>evi_by_source</code> 只表示完整供证统计。</p>
   <div class="mini" style="margin-top:12px"><div class="mh">派生层 <span class="tag t-new">已落地 · 009</span></div>
     <pre style="margin:6px 0 0;font-size:11.5px"><code>voc_spu           容器 · 无状态 · 物化视图
   spu 逻辑唯一键（唯一索引）
@@ -342,10 +362,11 @@ voc_spu_issue_log
     <tr><td>2</td><td><code>python scripts/run_ingest.py START_WEEK END_WEEK --backfill</code></td><td>仓库无法确认生产历史回填状态</td><td>否</td><td>SPU 卡</td></tr>
     <tr><td>3</td><td><code>sql/009_spu_layer.sql</code>：物化视图 + 人工层</td><td>代码已完成</td><td>否</td><td>SPU 卡</td></tr>
     <tr><td>4</td><td><code>voc_refresh_spu_layer()</code> 计算 <code>n_eff/scope</code></td><td>代码已完成</td><td>否</td><td>战略层</td></tr>
-    <tr><td>5</td><td>改 ② 分类与生成字段契约</td><td>计划，未实现</td><td>—</td><td>社媒机会</td></tr>
-    <tr><td>6</td><td>受控重跑社媒生成</td><td>计划，未执行</td><td><b>是</b></td><td>社媒机会</td></tr>
+    <tr><td>5</td><td>统一池、前置分类、生命周期提示词/L1、<code>OPP2</code> 与失败账本</td><td>2c 代码已实现；未运行</td><td>否</td><td>生成链路</td></tr>
+    <tr><td>6</td><td><code>sql/017_generation_lifecycle_routing.sql</code></td><td>脚本已交付；本轮未执行</td><td>否</td><td>来源策略与通用来源统计</td></tr>
+    <tr><td>7</td><td>受控迁移、生成与收尾验收</td><td>未执行</td><td><b>是</b></td><td>真实池量、分类分布与账本</td></tr>
   </table></div>
-  <div class="callout"><span class="i">✅</span><p><b>代码基线</b>：步骤 1、3、4 由迁移 <span class="mono">008</span> + <span class="mono">009</span>、阶段一抽取层改动和当前 Python 实现支撑；其后还有 010 应用读权、011/012 AFTER 审计修正、013 来源值迁移与 014 SPU 留痕字段。013/014 本阶段未执行。2026-08-15 文档记录曾展开出 161 个问题条目，但本轮按边界未连库，不能据仓库断言迁移与历史回填在生产的执行状态。步骤 5–6 仍未实现。</p></div>
+  <div class="callout"><span class="i">✅</span><p><b>代码基线</b>：仓库迁移链已到 017，阶段 2c 的 Python 与 017 脚本已交付。本轮 017 明确未执行；015/016 的实际环境状态本轮未连库核对，需按环境迁移记录确认。2026-08-15 文档记录的 161 个问题条目不是 2c 实测。</p></div>
   <h3>不做的事</h3>
   <ul>
     <li><b>本设计不要求只为 008/009 重跑电商生成</b>——产品字段和展开层不改变既有生成口径；下一阶段全量重跑另见 <code>rework_plan.html</code></li>
@@ -362,10 +383,10 @@ voc_spu_issue_log
     <tr><th>风险</th><th>现状</th><th>处置</th></tr>
     <tr><td><b>历史融合不可精确回退</b></td><td>2026-08-15 文档快照记录过 20 条融合；<code>match_by='merge'</code> 不能还原具体源归属，本轮未连库复核数量</td><td>全量重跑属于下一阶段受控操作，不在本次基线整备执行</td></tr>
     <tr><td><b>异地备份自动化无法由仓库确认</b></td><td>仓库有 <code>voc_backup.sh</code> 与 <code>voc_backup_pull.sh</code>，但没有 cron 配置；不能据此断言服务器目录或 crontab 现状</td><td>在下一次破坏性重跑前由运维核验并补齐，不在本轮部署</td></tr>
-    <tr><td><b>社媒老品迭代无归属</b></td><td>落库后实测：86% 挂不到 SPU，但<b>另外 2,884 条消息（涉 83 个 SPU）是带归属的</b>，目前被展开层的 <code>src_line='电商'</code> 一并挡在老品迭代之外</td><td>仍归战略层。这 83 个 SPU 是把社媒接进老品迭代的现成切入口——不需要先解决人工判断问题，放宽渠道条件即可，值得单独决策</td></tr>
+    <tr><td><b>来源策略与真实池量未验证</b></td><td>社媒有 SPU 子集按 R1 是老品，无 SPU 子集按 R2 是新品；不再存在「无归属的社媒老品」中间类。但 017 本轮未执行，统一池也未运行</td><td>受控执行时分别对账入池证据、R3 拒绝项、两个生命周期桶、Stage1 批次和最终持久化数；不用约 760 的毛估代替实测</td></tr>
     <tr><td><b>静默自动融合已关闭</b></td><td>需 <code>VOC_AUTO_MERGE=1</code> 显式开启</td><td>保持关闭直到新模型定稿，避免周度运行继续制造既成事实</td></tr>
   </table></div>
 </section>
 
-<footer>数据管道重构 v1 · 2026-08-15 · 代码字段对齐至迁移 014 · 013/014 未执行 · 历史量级本轮未连接生产库复核</footer>
+<footer>数据管道重构 v1 · 2026-08-17 · 仓库迁移链已到 017 · 本轮 017 未执行，015/016 环境状态未验证 · 未连库、未调 LLM、未重跑</footer>
 </main></div>

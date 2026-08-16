@@ -2,7 +2,7 @@
 
 从云听 CEM 抽取 VOC，经清洗、生成、消解与 SPU 展开后写入 PostgreSQL，供 `system/` 的 PM 机会看板读取。生产调度入口是 Dagster；`scripts/` 下的命令用于初始化、回填、探针、备份和故障处置。
 
-> 来源口径：`voc_message.src_line` 与 `voc_opportunity.src_line` 均使用 `电商/社媒`。`voc_opportunity.channel` 继续保存 `需求缺口/竞品对标`，不承担来源语义；社媒无产品占位符 `SOCIAL-NA` 保持不变。
+> 来源口径：`voc_message.src_line` 是 `voc_source_policy` 中已登记的证据来源；`voc_opportunity.src_line` 只是 legacy 单值代表，不能代表混合来源机会的完整事实。新建混合组取 `sorted(source_lines)[0]`，存量行 recount 不改写原值；权威来源事实读 `source_lines` / `evi_by_source`。`channel` 不承担来源语义。
 
 ## 运行要求与安装
 
@@ -48,8 +48,10 @@ VOC_PG_PASSWORD=<YOUR_VOC_WRITER_PASSWORD>
 云听 COMMENT / SOCIAL
   -> ingest.py + clean.py
   -> voc_message / voc_evidence
-  -> pipeline.py + stages/       生成机会点
-  -> resolve.py + lifecycle.py   消解、提案、放行
+  -> db.generation_pool()        统一内容证据池
+  -> classification.py          逐证据 R0–R3（来源 requires_spu 策略）
+  -> routing.py + stages/        生命周期分桶、提示词与机会生成
+  -> resolve.py + lifecycle.py   按生命周期消解、提案、放行
   -> explode.py                  刷新 SPU 容器、问题条目与共性度
   -> PostgreSQL                  system/ 只读机器层、写人工层
 ```
@@ -58,18 +60,19 @@ VOC_PG_PASSWORD=<YOUR_VOC_WRITER_PASSWORD>
 voc_analytics/        管线核心
   ingest.py           抽取：云听导出 -> xlsx -> voc_message / voc_evidence
   clean.py            清洗：字段映射、尾部修复、国别归一、SPU 规范化与原值留痕
-  classification.py   纯函数：按一个机会点的完整证据集执行 R0–R3 分类
+  classification.py   唯一纯函数：按 SPU 与来源 requires_spu 属性执行 R0–R3
+  routing.py          生成前逐证据分类，按生命周期的内容键分桶
   taxonomy.py         标签树快照与路径解析
-  pipeline.py         编排：分桶 -> 生成机会点 -> 落库
+  pipeline.py         编排：统一池 -> 生命周期路由 -> 生成 -> 消解/落库 -> 对账
   stages/stage1.py    问题模式切分（分批 + 最大团分解）
   stages/generate.py  机会点文本生成
   stages/validate.py  程序化校验
-  resolve.py          字段等值候选、向量排序、L3 裁决与跨渠道汇聚
+  resolve.py          生命周期候选键、向量排序、L3 裁决与同生命周期跨来源补证
   lifecycle.py        生命周期候选逻辑、复活、陈旧检测、放行
   execute.py          执行 PM 已通过的提案并写血缘
   explode.py          刷新 SPU 容器、问题条目与共性度（纯 SQL）
   definitions.py      Dagster 资产图与周度调度定义
-sql/                  按编号管理的 001-015 迁移（执行前须核对环境基线）
+sql/                  按编号管理的 001-017 迁移（执行前须核对环境基线）
 scripts/              部署、抽取、生成、备份与探针
 tests/                各里程碑验收
 baseline/             L3 判定标注测试集
@@ -92,8 +95,10 @@ baseline/             L3 判定标注测试集
 | `013` | `voc_opportunity.src_line` 统一为 `电商/社媒`，并以固定 645 行分布断言保护存量迁移 |
 | `014` | 为 SPU 规范化增加原值与未匹配值留痕字段；只扩结构，不回填存量 |
 | `015` | 按完整证据集重算分类与 `evi_total`，增加分类审计字段，并收紧 `voc_spu_issue` |
+| `016` | 生命周期隔离：对 PM 已接管的 locked 行冻结 `opp_type / classification_state / classify_rule` |
+| `017` | 生成期生命周期路由：`voc_source_policy.requires_spu`、可扩展来源外键、`source_lines` 与 `evi_by_source` |
 
-`scripts/m0_deploy_pg.sh` 是灾难恢复所需的建库与角色初始化脚本，**当前只执行 `001`–`004`**；仓库没有自动迁移器。`013`、`014`、`015` 已作为文件进入仓库，但文件存在不等于数据库已应用：`013/014` 在各环境的实际执行状态仅凭仓库无法确认，标记为**未验证**；本阶段的 `015` 明确只写脚本、**未执行**。符合 012 基线的存量库须先逐项核对 `013/014` 是否已应用，再决定缺失迁移的执行顺序。新库的当前 `001` 已直接建立新来源约束，应跳过带固定 645 行断言的 `013`；`015` 同样是带固定存量断言的升级迁移，不能直接用于空库初始化。任何实际应用均留到阶段 2b，在备份、基线核对和变更审批后受控执行。
+`scripts/m0_deploy_pg.sh` 是灾难恢复所需的建库与角色初始化脚本，仓库没有自动迁移器。**仓库迁移链已到 `017`，但文件存在不等于任一数据库已应用。**本轮明确未执行 `017`；`015/016` 的实际环境状态本轮未连库核对，必须按迁移记录和环境基线逐项确认。任何实际应用都需在备份、基线核对和变更审批后受控执行。
 
 ## 阶段 2a 分类契约
 
@@ -103,14 +108,26 @@ baseline/             L3 判定标注测试集
 |---|---|---|---|
 | R0 | 零条证据 | `NULL` | `无效` |
 | R1 | 任一证据所属消息满足 `cardinality(spu) > 0` | `老品迭代` | `确定` |
-| R2 | 无 SPU，且证据中有 `src_line='社媒'` | `新品创新` | `确定` |
-| R3 | 无 SPU，R2 未命中，且证据中有 `src_line='电商'` | `NULL` | `无效` |
+| R2 | 无 SPU，且任一证据来源 `requires_spu=false` | `新品创新` | `确定` |
+| R3 | 无 SPU，且全部证据来源均 `requires_spu=true` | `NULL` | `无效` |
 
-`classification_state` 与 `opp_type` 是正交维度；无效不是 `opp_type` 的第三个取值。`classify_rule` 保存命中的 `R0/R1/R2/R3`，用于审计与回放。无 SPU 的电商证据属于上游数据缺陷，`db.line_a_pool` 在生成前将其排除，不据此产出机会点。
+`classification_state` 与 `opp_type` 是正交维度；无效不是 `opp_type` 的第三个取值。`classify_rule` 保存命中的 `R0/R1/R2/R3`，用于审计与回放。统一池对所有 `requires_spu=true` 的来源执行同一 R3 准入约束；电商只是当前该策略的一个实例。
 
 生成代码先用当前内存分组的证据运行同一个纯分类函数，为当次生成提供分类；这不是最终权威结果。新建、挂载、跨渠道汇聚或 MERGE 改变 `voc_opp_evidence` 时，关系写入与完整证据集回算共用同一事务。代码从 `voc_opp_evidence JOIN voc_message` 读取权威全集，统一重算 `opp_type`、`classification_state`、`classify_rule`、证据计数和排序基础值；任一步失败则整体回滚，不会退回渠道判据或留下半更新。
 
-`015_classification_contract.sql` 在一个事务中增加 `classification_state` 与 `classify_rule`，按 `voc_opp_evidence` 实际行数重算全部 `evi_total`，再按同一 R0–R3 规则回填分类。迁移重建 `voc_spu_issue` 时只接纳 `opp_type='老品迭代'` 且 `classification_state='确定'` 的机会点；旧的 `m.src_line='电商'` 限制不再保留，因此挂 SPU 的社媒证据也能进入对应 SPU 卡，`HAVING count(*) >= 2` 阈值保持不变。事务提交前固定断言：老品迭代/确定 264、新品创新/确定 368、无效 13、总计 645、`classify_rule IS NULL` 为 0；任一不符即抛错并整体回滚。
+`015_classification_contract.sql` 以完整证据集回填分类和 `evi_total`，并在 `voc_spu_issue` 中保留 `HAVING count(*) >= 2`。264 / 368 / 13 / 645 是该脚本的历史自检断言，不是本轮复核的生产结果；`015/016` 实际环境状态未验证。
+
+## 阶段 2c 生成路由、ID 与失败契约
+
+`db.generation_pool()` 以真实 `(message_id, seq)` 为证据身份，按产品体验、「用户使用体验」负面、需求缺口和竞品对标等内容条件取数。每条证据先经 `classification.py` 分类，再进入互斥生命周期桶；Stage1 / Stage2 提示词与 L1 候选键都只按 `opp_type` 选择。「用户使用体验」只是内容入池条件：有 SPU 为 R1 老品，无 SPU 的社媒/问卷证据为 R2 新品。依已定规则，有 SPU 的电商证据必为老品，无 SPU 则 R3 无效，不存在合法的「电商新品诉求」路由。
+
+这组固定规则还有一个不能隐藏的边界：若同义问题的电商证据有 SPU、社媒证据无 SPU，逐证据前置分类会分别命中 R1 与 R2，生命周期隔离又禁止二者合并。因此当前“跨来源同一老品合流”只对各条证据本身均命中 R1（例如社媒证据也挂了 SPU）的场景成立。要覆盖前一种混合挂载场景，必须另行确定 provisional 分类或跨生命周期消解规则；本阶段不擅自改写 R1/R2。
+
+新建机会的 ID 为 `OPP2-` + SHA-256 前 128 bit。哈希材料是经 NFKC、大小写与空白归一的版本化 JSON，并与生命周期的 L1 唯一域一致：老品为 `opp_type + core_tag + problem_mode`，新品再包含业务 `channel`；不包含 `src_line` 来源、品类、周次、模型版本或 Stage1 临时名称。存量 `OPP-*` 不重键，因为多处人工状态、快照、审计、提案数组和血缘无法安全级联；消解命中时继承已有 canonical ID。
+
+Arrearage、鉴权失败与硬配额/余额不足立即打开熔断，不重试、不继续；同一 run 的两个生命周期进程通过原子共享熔断文件传播首因，另一进程在下一次请求前停止。并行层传播原始异常并取消未开始任务。Stage1 把计划/完成/失败/取消批次与对应条数写入 run log，账本必须满足 `planned = completed + failed + cancelled`。两个生命周期生成进程任一非零时终止另一个；只有两者均成功才执行跨来源补证、拆分、快照和放行收尾。`rerun_both.sh` 依赖 Bash ≥5.1，并在停止进程或清库前先做版本闸门。
+
+池规模的静态毛估为：旧社媒候选 `5,005 + 2,623 = 7,628` 条消息；「用户使用体验」3,249 条整桶 × 23.4% 负面率 ≈ 毛新增 760，即约 8,388（+10.0%）。多标签重叠、`low_conf`、非空门槛与消息/证据粒度差异使精确净增**未验证**；电商 4,232 是证据数，不能与上述社媒消息数直接相加。
 
 ## 启动与常用入口
 
@@ -142,16 +159,19 @@ python scripts/probe_fields.py
 # 最小生成探针；基于库内事实层调用百炼，并写入后清理哨兵周 9999-W01
 python scripts/smoke.py
 
-# 管线清洗 + R0–R3 分类单测（不连数据库）
-python -m pytest tests/test_clean_fields.py tests/test_classification.py
+# 管线清洗 + R0–R3 + 2c 路由/ID/熔断单测（不连数据库）
+python -m pytest tests/test_clean_fields.py tests/test_classification.py tests/test_lifecycle_routing.py tests/test_opportunity_identity.py tests/test_llm_fail_stop.py tests/test_stage1_accounting.py
 ```
 
-`scripts/run_generate.py` 与 `scripts/rerun_both.sh` 会调用 LLM 并写库，其中后者还会清理机会点机器层，只用于受控回填。`rerun_both.sh` 的整段清理通过 `psql --single-transaction` 与 `ON_ERROR_STOP` 放在同一事务中；若人工表外键阻止删除，前面的关系、快照、提案和血缘清理也会一并回滚，不得留下半清库。脚本使用 `set -euo pipefail`，对允许失败的进程探测、日志读取与子进程退出码均显式处理。用途、前置条件和参数以各脚本头部说明为准。
+`scripts/run_generate.py` 与 `scripts/rerun_both.sh` 会调用 LLM 并写库，其中后者还会清理机会点机器层，只用于受控回填。脚本使用 `set -euo pipefail`；两个生命周期生成进程任一非零时立即终止另一个，并禁止 `--finalize-only` 收尾。真正的完整性依据是 run log 中每层计划/完成/失败/取消账本闭合，不是只看 shell 退出码。用途、前置条件和参数以各脚本头部说明为准。
 
 ## 核心约束
 
 - 业务规则在数据库里：状态机、锁语义、「不考虑」必填理由与安全类保护由触发器强制。
 - 机器只写机器表：`voc_writer` 对人工表只读；人工决定不会被周度重算覆盖。
+- 老品迭代与新品创新互不转换；016 对 PM 已接管的 locked 行冻结三个分类字段，017 不改动该行为。
+- 新建 `OPP2-*` 与存量 ID 长期共存；没有专门迁移授权时禁止批量重键。
+- fatal 或对账不闭合时必须以失败结束，不得写成功日志或执行收尾。
 - Dagster 是唯一生产调度入口；脚本只用于初始化、开发调试、探针或受控回填。
 
 ## 当前状态与下一阶段
@@ -160,4 +180,4 @@ python -m pytest tests/test_clean_fields.py tests/test_classification.py
 
 阶段一已在代码与迁移脚本中统一来源口径，并把 SPU 规范化与原值留痕落到抽取层。抽取层**不按任何名单筛选 SPU**——云听依本公司产品体系打标，挂到 SPU 即本品；「社媒独有 SPU 是否成卡」是展示层口径，留到阶段三的 `voc_spu` 里定。
 
-阶段二拆分为 2a 与 2b：阶段 2a 只交付分类纯函数、单元测试、生成池与落库后回算代码、`015` 迁移脚本、重跑脚本事务修复和配套文档；不执行 SQL，不连接数据库，不调用 LLM，也不重跑管道。阶段 2b 才在受控环境中核对迁移基线与备份，应用缺失迁移、执行全量重跑并验收固定分布和证据链。当前 `015` 的数据库结果及重跑结果均为**未验证**。
+阶段二现拆分为 2a / 2b / 2c。2c 只交付统一池、生命周期路由、`OPP2` 身份、失败熔断/账本、`017_generation_lifecycle_routing.sql` 与配套文档/离线测试；本轮未执行 SQL、未连库、未调 LLM、未重跑管道。仓库迁移链已到 017；017 本轮明确未执行，015/016 的实际环境状态与所有生成结果均为**未验证**。

@@ -1,16 +1,17 @@
-"""L1 → L2 → L3 消解 + 跨线汇聚（PRD v8 §6）。
+"""L1 → L2 → L3 消解 + 跨来源补证（PRD v8 §6）。
 
 实测结论决定了这里的设计：
   · 向量排序极准（R@1 15/15）但阈值不可用（应挂载 min 0.656 < 应新建 max 0.706）
     => L2 只做桶内 Top-k 召回，判定权全部交给 L3
-  · 社媒的 category 恒为 NULL => L1 必须分线定义，且比较用 IS NOT DISTINCT FROM
-  · 没有跨线汇聚则 dual_source 恒为 false，探真里 5/15 的双源印证复现不出
+  · L1 的键形状由机会生命周期决定，来源不参与候选分区
+  · 补证严格限制在同一生命周期，来源数量可以自然扩展
 """
 from __future__ import annotations
 import math
 from typing import Sequence
 
 from . import config as C, db, llm, prompts
+from .classification import classify_evidence
 
 
 def topk(n_candidates: int) -> int:
@@ -19,25 +20,30 @@ def topk(n_candidates: int) -> int:
 
 
 # ---------------------------------------------------------------- L1
-def l1_candidates(core_tag: str, opp_type: str, channel: str | None,
-                  category: str | None, line: str) -> list[dict]:
-    """电商: (core_tag, opp_type)；社媒: (channel, core_tag, opp_type)。
-    一律用 IS NOT DISTINCT FROM，避免 NULL 语义陷阱。"""
-    if line == "电商":
+def l1_candidates(core_tag: str, opp_type: str,
+                  channel: str | None) -> list[dict]:
+    """按生命周期选择 L1 键；来源名称永远不参与分支。"""
+    if opp_type == "老品迭代":
         sql = """SELECT opp_id, problem_mode, title, rep_snippets, mode_vec::text AS vec,
                         safety_flag, evi_total
                    FROM voc_opportunity
                   WHERE core_tag IS NOT DISTINCT FROM %s
-                    AND opp_type IS NOT DISTINCT FROM %s"""
+                    AND opp_type IS NOT DISTINCT FROM %s
+                    AND classification_state = '确定'
+                    AND merged_into IS NULL"""
         params: list = [core_tag, opp_type]
-    else:
+    elif opp_type == "新品创新":
         sql = """SELECT opp_id, problem_mode, title, rep_snippets, mode_vec::text AS vec,
                         safety_flag, evi_total
                    FROM voc_opportunity
                   WHERE channel IS NOT DISTINCT FROM %s
                     AND core_tag IS NOT DISTINCT FROM %s
-                    AND opp_type IS NOT DISTINCT FROM %s"""
+                    AND opp_type IS NOT DISTINCT FROM %s
+                    AND classification_state = '确定'
+                    AND merged_into IS NULL"""
         params = [channel, core_tag, opp_type]
+    else:
+        raise ValueError(f"未知机会类型：{opp_type!r}")
     return db.q(sql, params)
 
 
@@ -71,25 +77,18 @@ def l3_verdict(new_mode: str, new_title: str, new_snips: Sequence[str],
         a_snips=" / ".join((cand.get("rep_snippets") or [])[:3]) or "-",
         b_mode=new_mode, b_title=new_title,
         b_snips=" / ".join(list(new_snips)[:3]) or "-")
-    try:
-        obj, meta = llm.chat_json(prompt, max_tokens=400, required=["verdict"])
-        ctx.bump(tokens=meta.get("tokens", 0))
-        return {"verdict": obj.get("verdict"), "confidence": float(obj.get("confidence") or 0),
-                "rationale": obj.get("rationale", ""), "opp_id": cand["opp_id"],
-                "safety": bool(cand.get("safety_flag"))}
-    except Exception as e:  # noqa: BLE001
-        return {"verdict": "different", "confidence": 0.0,
-                "rationale": f"L3 调用失败，保守判为不同: {str(e)[:100]}",
-                "opp_id": cand["opp_id"], "safety": bool(cand.get("safety_flag"))}
+    obj, meta = llm.chat_json(prompt, max_tokens=400, required=["verdict"])
+    ctx.bump(tokens=meta.get("tokens", 0))
+    return {"verdict": obj.get("verdict"), "confidence": float(obj.get("confidence") or 0),
+            "rationale": obj.get("rationale", ""), "opp_id": cand["opp_id"],
+            "safety": bool(cand.get("safety_flag"))}
 
 
 def resolve_one(new: dict, ctx) -> dict:
     """对一个新产出的机会点做消解。返回 {action, opp_id, proposals}"""
-    cands = l1_candidates(new["core_tag"], new["opp_type"], new.get("channel"),
-                          new.get("category"), new["src_line"])
+    cands = l1_candidates(new["core_tag"], new["opp_type"], new.get("channel"))
     if not cands:
-        ctx.metrics.setdefault("resolve", {}).setdefault("l1_empty", 0)
-        ctx.metrics["resolve"]["l1_empty"] += 1
+        ctx.metric_incr(("resolve",), l1_empty=1)
         return {"action": "create", "opp_id": None, "proposals": []}
 
     ranked = l2_rank(new["mode_vec"], cands)
@@ -119,76 +118,67 @@ def resolve_one(new: dict, ctx) -> dict:
             "proposals": proposals}
 
 
-# ---------------------------------------------------------------- 跨线汇聚
-def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
-                     src_line: str, week: str, ctx, limit: int = 40) -> list[dict]:
-    """从另一条线的证据池召回待挂载关系（§6.5）。
-
-    本函数只做召回与判定；调用方将关系写入与 recount 置于同一事务。
-    """
-    if src_line == "社媒":
-        # 社媒机会点 → 借道【电商机会点】取其证据。
-        #
-        # 早期这里直接检索电商证据、并要求 e.tag = 本条的 core_tag，实测
-        # 350 条社媒机会点命中 0 条：社媒的 core_tag 是 Stage1 的自由文本
-        # 模式名（「三色温平价冷靴灯」「TT8同颜值高矮轻量三脚架」），而电商的
-        # tag 是分类树叶子（「RGB」「三脚」「APP控制」），两个取值域根本不相交，
-        # 等值比较恒假。冷启动 dual_source 只有 1 条就是这么来的。
-        #
-        # 改为对电商【机会点】做向量召回：两条线的 problem_mode 都已入库为
-        # mode_vec 且有 pgvector 索引，同一个问题在两条线的表述才是可比的；
-        # 命中后把那条电商机会点的证据挂过来，dual_source 由触发器自然派生。
-        rows = db.q("""
-            SELECT oe.message_id, oe.seq,
-                   COALESCE(e.snippet, left(m.content,400)) AS snippet
-              FROM voc_opportunity a
-              JOIN voc_opp_evidence oe ON oe.opp_id = a.opp_id
-              JOIN voc_message m ON m.message_id = oe.message_id
-              LEFT JOIN voc_evidence e
-                     ON e.message_id = oe.message_id AND e.seq = oe.seq
-             WHERE a.src_line = '电商' AND a.mode_vec IS NOT NULL
-               AND m.src_line = '电商'
-               AND a.opp_id IN (SELECT opp_id FROM voc_opportunity
-                                 WHERE src_line='电商' AND mode_vec IS NOT NULL
-                                 ORDER BY mode_vec <=> %s::vector LIMIT 5)
-               AND NOT EXISTS (SELECT 1 FROM voc_opp_evidence x
-                                WHERE x.opp_id=%s AND x.message_id=oe.message_id
-                                  AND x.seq=oe.seq)
-               AND COALESCE(e.snippet, m.content) IS NOT NULL
-             LIMIT %s""", [_vec_literal(mode_vec), opp_id, limit])
-        texts = [r["snippet"] for r in rows]
-    else:
-        # 电商机会点 → 检索社媒的诉求/对标池
-        rows = db.q("""
-            SELECT m.message_id, 0 AS seq, left(m.content, 400) AS snippet
-              FROM voc_message m
-             WHERE m.src_line='社媒' AND m.content_type && %s
-               AND NOT EXISTS (SELECT 1 FROM voc_opp_evidence oe
-                                WHERE oe.opp_id=%s AND oe.message_id=m.message_id)
-             ORDER BY m.interactions DESC NULLS LAST LIMIT %s""",
-                    [list(C.DEWATER_GAP | C.DEWATER_COMP), opp_id, limit])
-        texts = [r["snippet"] for r in rows]
-
-    if not texts:
+# ---------------------------------------------------------------- 跨来源补证
+def cross_source_merge(opp_id: str, mode_vec: Sequence[float], opp_type: str,
+                       source_lines: Sequence[str], week: str, ctx,
+                       limit: int = 40) -> list[dict]:
+    """从同生命周期、其他来源的机会点召回证据；不做来源二分。"""
+    sources = sorted(set(source_lines))
+    target = db.q("""SELECT problem_mode, title, rep_snippets
+                       FROM voc_opportunity WHERE opp_id=%s""", [opp_id])
+    if not target:
         return []
-    vecs = llm.embed(texts)
-    scored = sorted(((llm.cosine(mode_vec, v), i) for i, v in enumerate(vecs)), reverse=True)
+    candidates = db.q("""
+      SELECT o.opp_id, o.problem_mode, o.title, o.rep_snippets,
+             o.safety_flag, o.evi_total, o.mode_vec::text AS vec
+        FROM voc_opportunity o
+       WHERE o.opp_id <> %s
+         AND o.opp_type = %s
+         AND o.classification_state = '确定'
+         AND o.merged_into IS NULL
+         AND o.mode_vec IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+             FROM voc_opp_evidence oe
+             JOIN voc_message m USING (message_id)
+            WHERE oe.opp_id = o.opp_id
+              AND NOT (m.src_line = ANY(%s)))
+       ORDER BY o.mode_vec <=> %s::vector
+       LIMIT 5
+    """, [opp_id, opp_type, sources, _vec_literal(mode_vec)])
+
     attached: list[dict] = []
-    for score, i in scored[:5]:            # 只让最像的 5 条进 L3，控制成本
-        r = rows[i]
-        # 复用 L3：判断该证据是否支撑同一问题
-        v = l3_verdict(texts[i][:200], "", [texts[i]],
-                       {"opp_id": opp_id,
-                        "problem_mode": db.q1("SELECT problem_mode FROM voc_opportunity WHERE opp_id=%s",
-                                              [opp_id]) or "",
-                        "title": db.q1("SELECT title FROM voc_opportunity WHERE opp_id=%s",
-                                       [opp_id]) or "",
-                        "rep_snippets": []}, ctx)
-        if v["verdict"] == "same" and v["confidence"] >= 0.6:
-            attached.append(
-                {"opp_id": opp_id, "message_id": r["message_id"], "seq": r["seq"],
-                 "attach_week": week, "match_by": "cross_line",
-                 "confidence": round(min(v["confidence"], 0.999), 3)})
+    for cand in candidates:
+        verdict = l3_verdict(
+            target[0].get("problem_mode") or "", target[0].get("title") or "",
+            target[0].get("rep_snippets") or [], cand, ctx)
+        if verdict["verdict"] != "same" or verdict["confidence"] < 0.6:
+            continue
+        remaining = max(limit - len(attached), 0)
+        if not remaining:
+            break
+        rows = db.q("""
+          SELECT oe.message_id, oe.seq, m.spu,
+                 p.requires_spu AS source_requires_spu
+            FROM voc_opp_evidence oe
+            JOIN voc_message m USING (message_id)
+            JOIN voc_source_policy p USING (src_line)
+           WHERE oe.opp_id=%s
+             AND NOT (m.src_line = ANY(%s))
+             AND NOT EXISTS (
+               SELECT 1 FROM voc_opp_evidence x
+                WHERE x.opp_id=%s AND x.message_id=oe.message_id AND x.seq=oe.seq)
+           ORDER BY oe.message_id, oe.seq
+        """, [cand["opp_id"], sources, opp_id])
+        eligible = [
+            row for row in rows
+            if classify_evidence((row,)).opp_type == opp_type
+        ][:remaining]
+        attached.extend(
+            {"opp_id": opp_id, "message_id": row["message_id"], "seq": row["seq"],
+             "attach_week": week, "match_by": "cross_line",
+             "confidence": round(min(verdict["confidence"], 0.999), 3)}
+            for row in eligible)
     return attached
 
 
