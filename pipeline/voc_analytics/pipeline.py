@@ -453,7 +453,18 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
     sugg, ctx_hash = generate.write_suggestion(
         obj.get("title", ""), obj.get("desc_phenomenon", ""),
         obj.get("desc_attribution", ""), history, ctx)
-    review = generate.llm_review(obj, sugg, items, members, opp_type, ctx)
+    # LLM 复核是「独立视角兜底」，注释见下方——它不决定 needs_review，
+    # 只落库供抽查。既然是参考信息，它自己解析失败就更不该阻断整条产出：
+    # 2026-08-17 的 2b 第三轮正是被复核返回的非法 JSON（why 字段混了单引号）
+    # 杀掉的，此前老品迭代已烧掉 3,405 次调用 / 507 万 tokens。
+    try:
+        review = generate.llm_review(obj, sugg, items, members, opp_type, ctx)
+    except llm.FatalLLMError:
+        raise                                   # 配额/鉴权仍须立刻停
+    except Exception as error:                  # noqa: BLE001
+        ctx.bump(failed=1)
+        review = {"ok": True, "issues": [],
+                  "soft_issues": [f"复核不可用：{type(error).__name__}: {error}"]}
     # needs_review 【只由程序化校验决定】。LLM 复核降级为提示信息落库供抽查。
     #
     # 依据是实测：复核明确被告知「聚合/否定/归纳陈述不算问题」后仍照列；

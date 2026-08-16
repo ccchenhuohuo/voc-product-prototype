@@ -445,9 +445,14 @@ def parallel_map(fn: Callable[[Any], Any], items: Iterable[Any],
             results[indexes[future]] = future.result()
     except BaseException as error:
         try:
-            # 普通校验/transport 耗尽也代表本次生成不可完整。先发布取消，
-            # 再等待已启动 worker，让它们在下一安全点停止而非继续整桶。
-            cancel(f"并行任务失败：{type(error).__name__}: {error}")
+            # 【只有致命错误才打开全局熔断】。配额耗尽、鉴权失败继续跑确实是
+            # 白费，必须让同一 run 的所有桶立刻停。但单个条目的校验失败或
+            # JSON 瑕疵只代表那一条失败，把它升格成全局取消，等于让任意一次
+            # LLM 输出抖动就能杀死整轮几小时的重跑——2026-08-17 的 2b 连续
+            # 两轮就是这样死的（先 Stage1 截断，后 Stage4 复核 JSON 非法）。
+            # 非致命错误仍会中止【本次 parallel_map】并抛给调用方裁决。
+            if isinstance(error, FatalLLMError):
+                cancel(f"并行任务失败：{type(error).__name__}: {error}")
         except Exception as cancel_error:
             if hasattr(error, "add_note"):
                 error.add_note(f"发布并行取消也失败：{cancel_error}")

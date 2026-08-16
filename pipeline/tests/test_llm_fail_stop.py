@@ -372,3 +372,33 @@ class ParallelFailStopTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+    def test_parallel_map_only_trips_global_circuit_on_fatal(self) -> None:
+        """非致命错误不得污染全局熔断，否则一次输出抖动就杀死整轮几小时的重跑。
+
+        2026-08-17 的 2b 连续两轮死于此：先是 Stage1 响应被 max_tokens 截断，
+        后是 Stage4 复核返回的 JSON 里 why 字段混了单引号。两者都只是单个条目
+        的输出瑕疵，却经 parallel_map 升格成全局取消，把另一条生命周期一起带走。
+        致命错误（配额/鉴权）仍必须立刻停——继续跑确实是白费。
+        """
+        llm.reset_for_tests()
+
+        def one_bad(value):
+            if value == 2:
+                raise llm.LLMError("JSON 解析失败: 模拟")
+            return value
+
+        with self.assertRaises(llm.LLMError):
+            llm.parallel_map(one_bad, [1, 2, 3], workers=2)
+        self.assertIsNone(llm._circuit_reason(), "非致命错误不应打开全局熔断")
+
+        llm.reset_for_tests()
+
+        def one_fatal(value):
+            if value == 2:
+                raise llm.FatalLLMError("Arrearage")
+            return value
+
+        with self.assertRaises(llm.FatalLLMError):
+            llm.parallel_map(one_fatal, [1, 2, 3], workers=2)
+        self.assertIsNotNone(llm._circuit_reason(), "致命错误必须打开全局熔断")
