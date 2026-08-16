@@ -8,8 +8,8 @@
 # 人工决策则按设计中止。执行前应确认备份并排除其他生成任务。
 #
 # 两段式不是为了好看，是正确性要求：跨线汇聚要读【对侧已落库的机会点】，
-# 两条线并行时先收工的那条看到的对侧是残缺的（实测线A 13:00 完、线B 13:41 完，
-# 线A 的汇聚等于对着半个库跑）。所以并行只到生成为止，汇聚/拆分/快照/放行
+# 两条线并行时先收工的那条看到的对侧是残缺的（实测电商 13:00 完、社媒 13:41 完，
+# 电商的汇聚等于对着半个库跑）。所以并行只到生成为止，汇聚/拆分/快照/放行
 # 等两条线都结束后统一做一遍。
 set -uo pipefail
 cd ~/voc-analytics
@@ -48,11 +48,11 @@ PID_A=$!
 nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --line B \
       --skip-cross > /tmp/gen_b.log 2>&1 &
 PID_B=$!
-echo "   线A pid=$PID_A  线B pid=$PID_B"
+echo "   电商 pid=$PID_A  社媒 pid=$PID_B"
 
 wait $PID_A; RC_A=$?
 wait $PID_B; RC_B=$?
-echo "   线A 退出码 $RC_A / 线B 退出码 $RC_B"
+echo "   电商退出码 $RC_A / 社媒退出码 $RC_B"
 
 echo "== 阶段二：统一收尾（跨线汇聚 + 拆分检测 + 快照 + 放行）=="
 # 收尾单进程，可以用满整个并发额度

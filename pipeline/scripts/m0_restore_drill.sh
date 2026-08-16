@@ -38,7 +38,7 @@ done
 echo "== 4. 触发器功能验证（恢复库上重跑锁保护）=="
 docker exec -i "$CONTAINER" psql -U voc_admin -d "$DRILL_DB" -q -v ON_ERROR_STOP=1 <<'SQL' 2>&1 | tail -3
 INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title)
-VALUES ('DRILL-1','老品迭代','线A','耐用性','原标题');
+VALUES ('DRILL-1','老品迭代','电商','耐用性','原标题');
 INSERT INTO voc_opportunity_manual(opp_id,status,updated_by) VALUES ('DRILL-1','项目中','drill');
 UPDATE voc_opportunity SET title='应被拦截' WHERE opp_id='DRILL-1';
 DO $$ BEGIN

@@ -87,7 +87,7 @@
   <div class="ico">⚙️</div>
   <h1>数据管道重构</h1>
   <p class="sub">按新的机会模型（两层结构 · SPU 容器 + 问题条目）重新设计从云听到卡片的处理链路。核心结论：<b>生成层保持产品无关，SPU 维度在新增的展开层派生</b>——一次生成同时喂养战略层与执行层。</p>
-  <div class="meta">设计 v1 · 2026-08-15 · 代码对齐至迁移 012 · 配套〈VOC 机会模型规格〉· 文中库内数量为 2026-08-15 历史快照，本轮未连接生产库复核</div>
+  <div class="meta">设计 v1 · 2026-08-15 · 代码对齐至迁移 014 · 配套〈VOC 机会模型规格〉· 文中库内数量为 2026-08-15 历史快照，本轮未连接生产库复核</div>
 </div></header>
 
 <div class="wrap"><main>
@@ -96,11 +96,11 @@
 <section>
   <h2><span class="no">0</span>一句话说清改了什么</h2>
   <p class="lede">这是目标链路与当前落地状态的合并说明：① 抽取字段与 ⑤ SPU 展开已经实现；② 分类解耦与 ⑥ 自动负责人路由尚未实现；③④保留核心算法，但分类改造仍需调整编排和字段契约。</p>
-  <div class="callout"><span class="i">ℹ️</span><p><b>术语与状态说明</b>：当前代码仍保留「线A / 线B」，其中<b>线A等价于电商评论，线B等价于社交媒体</b>。事实表 <code>voc_message.src_line</code> 存「电商/社媒」，机会表同名字段存「线A/线B」；本轮只加等价说明，不替换代码或文档口径。下文会明确区分“已落地”与“计划”。</p></div>
+  <div class="callout"><span class="i">ℹ️</span><p><b>术语与状态说明</b>：事实表与机会表的 <code>src_line</code> 均使用「电商/社媒」，表示发现来源；<code>voc_opportunity.channel</code> 仍只表示「需求缺口/竞品对标」，不是来源字段。迁移 013/014 本阶段只交付脚本、未执行，生产应用状态仍待迁移记录或数据库核验。下文会明确区分“已落地”与“计划”。</p></div>
   <div class="tablewrap"><table>
     <tr><th>阶段</th><th>处置</th><th>为什么</th><th>要不要重跑 LLM</th></tr>
-    <tr><td>① 抽取</td><td><span class="tag t-chg">已落地</span></td><td><code>clean.py</code> 与迁移 008 已补产品字段、多值数组和标签四级字段</td><td>代码/迁移不需 LLM；历史回填状态需运维确认</td></tr>
-    <tr><td>② 分流</td><td><span class="tag t-chg">计划</span></td><td>当前仍由线A/线B把渠道与机会类型绑定；社媒生成只遍历 <code>DEWATER_GAP</code> / <code>DEWATER_COMP</code>，不含「用户使用体验」</td><td><b>落地后社媒需要</b> · 电商不需要</td></tr>
+    <tr><td>① 抽取</td><td><span class="tag t-chg">代码已落地</span></td><td><code>clean.py</code> 与迁移 008 已补产品字段、多值数组和标签四级字段；阶段一补 SPU 规范化及迁移 014 留痕字段，014 未执行</td><td>代码/迁移不需 LLM；历史回填状态需运维确认</td></tr>
+    <tr><td>② 分流</td><td><span class="tag t-chg">计划</span></td><td>来源值虽已统一为电商/社媒，生成逻辑仍把来源与机会类型绑定；社媒生成只遍历 <code>DEWATER_GAP</code> / <code>DEWATER_COMP</code>，不含「用户使用体验」</td><td><b>落地后社媒需要</b> · 电商不需要</td></tr>
     <tr><td>③ 生成</td><td><span class="tag t-keep">保留核心</span></td><td>分桶、切分、生成与校验可复用；当前仍按 line 写死 <code>opp_type</code>，输入契约需改</td><td>—</td></tr>
     <tr><td>④ 消解</td><td><span class="tag t-keep">保留核心</span></td><td>字段等值候选 + 向量排序 + L3 判定可复用；按 line 分支仍需适配</td><td>—</td></tr>
     <tr><td>⑤ 展开</td><td><span class="tag t-new">已落地</span></td><td>迁移 009 已实现 SPU 容器、问题条目、人工层与共性度</td><td><b>否 · 纯 SQL</b></td></tr>
@@ -116,23 +116,24 @@
   <div class="flow">
 
     <div class="stage">
-      <div class="sh"><span class="num">①</span> 抽取 · <span class="mono">voc_analytics.ingest</span> <span class="tag t-chg">已落地 · 008</span></div>
+      <div class="sh"><span class="num">①</span> 抽取 · <span class="mono">voc_analytics.ingest</span> <span class="tag t-chg">代码已落地 · 014 未执行</span></div>
       <div class="sb">
         <div class="lane"><span class="lk">数据源</span><span class="lv">
           <span class="box">云听 COMMENT · 电商评论</span>
           <span class="box">云听 SOCIAL · 社交媒体</span>
           <span class="box b-drop">SERVICE 客服会话</span><span class="rt">价值不足，明确排除</span></span></div>
         <div class="lane"><span class="lk">要补的字段</span><span class="lv">
-          <span class="box b-new mono">spu[]</span><span class="box b-new mono">sku[]</span>
+          <span class="box b-new mono">spu_raw[]</span><span class="box b-new mono">spu[]</span><span class="box b-new mono">spu_unmatched[]</span><span class="box b-new mono">sku[]</span>
           <span class="box b-new mono">model[]</span><span class="box b-new mono">launch_period</span>
           <span class="box b-new mono">prod_line</span><span class="box b-new mono">is_own_brand</span></span></div>
         <div class="lane"><span class="lk">要修的</span><span class="lv">
           <span class="box b-chg">多值当标量 → 数组</span><span class="rt">定级现有 71 种脏取值</span>
+          <span class="box b-chg">SPU 编码规范化 + 电商白名单</span><span class="rt">原始 token 与未匹配 token 分字段留痕</span>
           <span class="box b-chg mono">tax_l1</span><span class="rt">历史树名字段保留兼容并标记 deprecated</span>
           <span class="box b-new">拆 tax 层级</span><span class="rt">A 层写 tax_stage，另有 domain / sub / leaf</span></span></div>
         <div class="lane"><span class="lk">落库</span><span class="lv">
           <span class="box mono">voc_message</span> <span class="box mono">voc_evidence</span></span></div>
-        <div class="cost">当前：字段映射与迁移 008 已落代码 · 零 LLM · <code>message_id</code> 幂等更新；历史全量是否已回填无法由仓库确认</div>
+        <div class="cost">当前：字段映射与迁移 008 已落代码；阶段一新增抽取层 SPU 规范化以及迁移 014 的留痕字段 · 零 LLM · <code>message_id</code> 幂等更新；014 未执行，历史全量是否已回填无法由仓库确认</div>
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -141,8 +142,8 @@
       <div class="sh"><span class="num">②</span> 分流 · 目标态 <span class="tag t-chg">计划 · 未落地</span></div>
       <div class="sb">
         <p style="margin:0 0 9px;color:var(--muted);font-size:12.5px">
-          计划废除「线A / 线B」——它把<b>渠道</b>与<b>机会类型</b>焊成一体。目标是两个正交字段：
-          <code>channel</code>（目标语义：电商评论 / 社交媒体）× <code>opp_type</code>（老品迭代 / 新品创新）。注意当前 <code>voc_opportunity.channel</code> 还是线B子通道（需求缺口 / 竞品对标），这项字段迁移尚未落地。</p>
+          来源命名已经统一，但<b>来源</b>与<b>机会类型</b>在生成逻辑中仍被绑定。目标是让两个正交字段各守其责：
+          <code>src_line</code>（电商 / 社媒）× <code>opp_type</code>（老品迭代 / 新品创新）。<code>voc_opportunity.channel</code> 仍为业务子类型（需求缺口 / 竞品对标），不迁移成来源字段。</p>
         <div class="lane"><span class="lk">电商评论</span><span class="lv">
           <b>100% → 老品迭代</b><span class="rt">按业务经验固化为规则，不再让模型判断</span></span></div>
         <div class="lane"><span class="lk" style="padding-top:6px">社交媒体</span><span class="lv">
@@ -160,7 +161,7 @@
             ⑤ 其余（含非负面的用户使用体验约 2,490 条、无 content_type 的 76 条）→ <b>需求缺口候选</b>，走诉求门再筛。
             <br>各桶计数为<b>整桶量</b>，非过滤后子集——② 的 3,249 条中仅 23.4% 为负面。
           </div></span></div>
-        <div class="cost">当前代码尚未实现：<code>definitions.py</code> 只遍历 <code>DEWATER_GAP</code> 与 <code>DEWATER_COMP</code>，未把「用户使用体验」送入生成；线B仍只生成新品创新</div>
+        <div class="cost">当前代码尚未实现：<code>definitions.py</code> 只遍历 <code>DEWATER_GAP</code> 与 <code>DEWATER_COMP</code>，未把「用户使用体验」送入生成；社媒仍只生成新品创新</div>
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -183,7 +184,7 @@
       <div class="sh"><span class="num">④</span> 消解 · <span class="mono">voc_analytics.resolve</span> <span class="tag t-keep">保留核心</span></div>
       <div class="sb">
         <div class="lane"><span class="lk">链路</span><span class="lv">
-          L1 字段等值候选桶 → L2 在 Python 中按向量余弦相似度排序（仅排序，不设阈值）→ L3 LLM 判定（唯一裁判）；跨线的线B→线A路径另用 pgvector <code>&lt;=&gt;</code> 召回</span></div>
+          L1 字段等值候选桶 → L2 在 Python 中按向量余弦相似度排序（仅排序，不设阈值）→ L3 LLM 判定（唯一裁判）；跨来源的社媒→电商路径另用 pgvector <code>&lt;=&gt;</code> 召回</span></div>
         <div class="lane"><span class="lk">附带</span><span class="lv">
           跨渠道汇聚 · 拆分检测 · 提案生成；<code>lifecycle.check_tombstone()</code> 当前仅定义、未接入生产流程</span></div>
       </div>
@@ -269,13 +270,14 @@ HAVING count(*) &gt;= 2;</code></pre>
 
 <!-- =============== 3 -->
 <section>
-  <h2><span class="no">3</span>当前数据模型（迁移 001–012）</h2>
+  <h2><span class="no">3</span>当前代码数据模型（迁移 001–014）</h2>
   <div class="split2">
-    <div class="mini"><div class="mh">事实层 <span class="tag t-chg">已落地</span></div>
+    <div class="mini"><div class="mh">事实层 <span class="tag t-chg">代码已落地</span></div>
       <pre style="margin:6px 0 0;font-size:11.5px"><code>voc_message
   message_id PK
   src_line         电商/社媒
-  spu[] sku[] model[]
+  spu_raw[] spu[] spu_unmatched[]
+  sku[] model[]
   prod_line launch_period
   is_own_brand     本竞品_ 含「本品」
   product_grade    多值取最高级 PS&gt;S&gt;A&gt;B&gt;C&gt;D&gt;其他
@@ -292,8 +294,8 @@ voc_evidence
       <pre style="margin:6px 0 0;font-size:11.5px"><code>voc_opportunity   共性问题 / 诉求
   opp_id PK
   opp_type       老品迭代/新品创新
-  src_line       线A/线B（发现方）
-  channel        线B子通道：需求缺口/竞品对标
+  src_line       电商/社媒（发现方）
+  channel        业务子类型：需求缺口/竞品对标
   evi_ec evi_social dual_source
   problem_mode title desc_*
   mode_vec
@@ -336,14 +338,14 @@ voc_spu_issue_log
   <h2><span class="no">4</span>执行顺序与代价</h2>
   <div class="tablewrap"><table>
     <tr><th>步</th><th>动作 / 入口</th><th>状态</th><th>LLM</th><th>阻塞谁</th></tr>
-    <tr><td>1</td><td><code>voc_analytics/clean.py</code> + <code>sql/008_product_fields.sql</code></td><td>代码已完成</td><td>—</td><td>全部</td></tr>
+    <tr><td>1</td><td><code>voc_analytics/clean.py</code> + <code>sql/008_product_fields.sql</code> + <code>sql/014_spu_clean_fields.sql</code></td><td>代码与脚本已完成；014 未执行</td><td>—</td><td>全部</td></tr>
     <tr><td>2</td><td><code>python scripts/run_ingest.py START_WEEK END_WEEK --backfill</code></td><td>仓库无法确认生产历史回填状态</td><td>否</td><td>SPU 卡</td></tr>
     <tr><td>3</td><td><code>sql/009_spu_layer.sql</code>：物化视图 + 人工层</td><td>代码已完成</td><td>否</td><td>SPU 卡</td></tr>
     <tr><td>4</td><td><code>voc_refresh_spu_layer()</code> 计算 <code>n_eff/scope</code></td><td>代码已完成</td><td>否</td><td>战略层</td></tr>
     <tr><td>5</td><td>改 ② 分类与生成字段契约</td><td>计划，未实现</td><td>—</td><td>社媒机会</td></tr>
     <tr><td>6</td><td>受控重跑社媒生成</td><td>计划，未执行</td><td><b>是</b></td><td>社媒机会</td></tr>
   </table></div>
-  <div class="callout"><span class="i">✅</span><p><b>代码基线</b>：步骤 1、3、4 由迁移 <span class="mono">008</span> + <span class="mono">009</span> 和当前 Python 实现支撑；其后还有 010 应用读权、011/012 AFTER 审计修正。2026-08-15 文档记录曾展开出 161 个问题条目，但本轮按边界未连库，不能据仓库断言迁移与历史回填在生产的执行状态。步骤 5–6 仍未实现。</p></div>
+  <div class="callout"><span class="i">✅</span><p><b>代码基线</b>：步骤 1、3、4 由迁移 <span class="mono">008</span> + <span class="mono">009</span>、阶段一抽取层改动和当前 Python 实现支撑；其后还有 010 应用读权、011/012 AFTER 审计修正、013 来源值迁移与 014 SPU 留痕字段。013/014 本阶段未执行。2026-08-15 文档记录曾展开出 161 个问题条目，但本轮按边界未连库，不能据仓库断言迁移与历史回填在生产的执行状态。步骤 5–6 仍未实现。</p></div>
   <h3>不做的事</h3>
   <ul>
     <li><b>本设计不要求只为 008/009 重跑电商生成</b>——产品字段和展开层不改变既有生成口径；下一阶段全量重跑另见 <code>rework_plan.html</code></li>
@@ -365,5 +367,5 @@ voc_spu_issue_log
   </table></div>
 </section>
 
-<footer>数据管道重构 v1 · 2026-08-15 · 代码字段对齐至迁移 012 · 历史量级本轮未连接生产库复核</footer>
+<footer>数据管道重构 v1 · 2026-08-15 · 代码字段对齐至迁移 014 · 013/014 未执行 · 历史量级本轮未连接生产库复核</footer>
 </main></div>

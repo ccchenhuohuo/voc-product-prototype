@@ -85,12 +85,12 @@ CREATE TABLE IF NOT EXISTS voc_unclassified_evidence (
 CREATE TABLE IF NOT EXISTS voc_opportunity (
   opp_id            text PRIMARY KEY,
   opp_type          text CHECK (opp_type IN ('老品迭代','新品创新')),
-  src_line          text CHECK (src_line IN ('线A','线B')),   -- 发现方，非供证方
-  channel           text,                     -- 线B: 需求缺口 / 竞品对标
+  src_line          text CHECK (src_line IN ('电商','社媒')), -- 发现方，非供证方
+  channel           text,                     -- 社媒子类型: 需求缺口 / 竞品对标
   prod_line         text,                     -- 灯光 / 支撑 / 未定
-  category          text,                     -- 线B 恒为 'SOCIAL-NA'
+  category          text,                     -- 社媒发现恒为 'SOCIAL-NA'
   category_set      text[],                   -- 实际涉及品类集合（允许跨桶）
-  core_tag          text,                     -- 线A=分桶tag(写死)；线B=诉求主题簇
+  core_tag          text,                     -- 电商=分桶tag(写死)；社媒=诉求主题簇
   problem_mode      text,
   title             text,
   desc_phenomenon   text,

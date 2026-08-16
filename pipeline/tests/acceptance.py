@@ -43,7 +43,7 @@ check("尾部重复缺陷已修复（按语种分支）", tail > 0,
 
 lc = db.low_conf_intersection()
 check("low_conf 交叉校验生效", lc["low_conf_total"] > 0,
-      f"剔除 {lc['low_conf_total']} 条；线A可生成池 {lc['usable_pool']} 条")
+      f"剔除 {lc['low_conf_total']} 条；电商可生成池 {lc['usable_pool']} 条")
 
 soc_cat = q1("SELECT count(*) FROM voc_message WHERE src_line='社媒' AND category IS NOT NULL")
 check("社媒无商品维度（验证 L1 必须分线）", soc_cat == 0,
@@ -123,7 +123,7 @@ check("三角色权限矩阵已建", roles == 3, f"{roles}/3")
 
 # ============================================================ 覆盖率（观测）
 m = db.q("SELECT * FROM voc_weekly_metrics")[0]
-check("线A 覆盖率已可计算（观测指标非门槛）", m["line_a_coverage_pct"] is not None,
+check("电商覆盖率已可计算（观测指标非门槛）", m["line_a_coverage_pct"] is not None,
       f"{m['line_a_coverage_pct']}%  已挂载 {m['line_a_attached']}/{m['line_a_pool']}")
 
 # ============================================================ 输出

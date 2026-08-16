@@ -4,10 +4,10 @@
 为什么需要它——冷启动跑了两轮才发现的问题，本来都该在这里被挡住：
   · 放行策略从没执行（逻辑只在 Dagster 资产里，脚本路径绕过）
   · Dagster 生成资产 build 完不落库
-  · 跨线汇聚 350/350 空转（线B core_tag 与线A tag 取值域不相交）
+  · 跨线汇聚 350/350 空转（社媒 core_tag 与电商 tag 取值域不相交）
   · problem_mode 退化成分类名，593 条只有 63 个不同向量
   · opp_id 碰撞导致「evi_total=91 而描述只讲了 1 条」
-上一个探针漏掉它们，是因为：在脏库上跑、被 timeout 砍在跨线汇聚之前、只跑了线A。
+上一个探针漏掉它们，是因为：在脏库上跑、被 timeout 砍在跨线汇聚之前、只跑了电商。
 所以本脚本的三条硬要求是：干净切片、跑到最后一步、两条线都覆盖。
 
 用法：
@@ -186,27 +186,27 @@ def run_script_path(ctx) -> None:
     if not small:
         small = ranked[-1:]
     (cat, tag), items = small[0]
-    print(f"[线A] {cat}/{tag}  n={len(items)}")
+    print(f"[电商] {cat}/{tag}  n={len(items)}")
     info = {"category": cat, "tag": tag, "tax_path": items[0].get("tax_path", ""),
             "prod_line": "灯光" if "灯光" in (cat or "") else "支撑"}
-    split = stage1.split_bucket(items, "线A", info, ctx)
+    split = stage1.split_bucket(items, "电商", info, ctx)
     groups = stage1.merge_similar_modes(split["groups"], ctx)
     built = [o for o in llm.parallel_map(
-        lambda g: pipeline.build_opportunity(items, g, "线A", info, ctx, []), groups)
+        lambda g: pipeline.build_opportunity(items, g, "电商", info, ctx, []), groups)
         if isinstance(o, dict)]
     pipeline.persist_opportunities([(o, items) for o in built], SMOKE_WEEK, ctx, verbose=True)
 
     rows = db.line_b_pool(list(C.DEWATER_COMP), multi_brand_only=True)[:8]
-    print(f"[线B] 竞品对标 n={len(rows)}")
+    print(f"[社媒] 竞品对标 n={len(rows)}")
     if rows:
         binfo = {"channel": "竞品对标", "category": "SOCIAL-NA", "prod_line": "未定"}
-        bsplit = stage1.split_bucket(rows, "线B", binfo, ctx)
+        bsplit = stage1.split_bucket(rows, "社媒", binfo, ctx)
         bgroups = stage1.merge_similar_modes(bsplit["groups"], ctx)
         bgroups += [{"mode_name": (rows[u].get("content") or "")[:40], "members": [u]}
                     for u in bsplit["unclassified"]]
         bbuilt = [o for o in llm.parallel_map(
             lambda g: pipeline.build_opportunity(
-                rows, g, "线B", {**binfo, "tag": g["mode_name"][:60]}, ctx, []), bgroups)
+                rows, g, "社媒", {**binfo, "tag": g["mode_name"][:60]}, ctx, []), bgroups)
             if isinstance(o, dict)]
         pipeline.persist_opportunities([(o, rows) for o in bbuilt], SMOKE_WEEK, ctx,
                                        verbose=True)

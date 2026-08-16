@@ -39,6 +39,8 @@ class CleanProductFieldsTest(unittest.TestCase):
 
         self.assertEqual(message["product_grade"], "A级")
         self.assertEqual(message["spu"], ["G00A16", "G00A17"])
+        self.assertEqual(message["spu_raw"], ["G00A16", "G00A17"])
+        self.assertEqual(message["spu_unmatched"], [])
         self.assertEqual(message["sku"], ["A053", "A054"])
         self.assertEqual(message["model"], ["MA30", "MA30 Pro"])
         self.assertEqual(message["category"], "S支架类")
@@ -74,6 +76,51 @@ class CleanProductFieldsTest(unittest.TestCase):
         self.assertEqual(message["sku"], [])
         self.assertEqual(message["model"], [])
         self.assertIs(message["is_own_brand"], False)
+
+    def test_spu_normalization_removes_separators_and_is_stable(self) -> None:
+        self.assertEqual(clean.normalize_spu_code("MT-79"), "MT79")
+        self.assertEqual(clean.normalize_spu_code("MT79"), "MT79")
+        self.assertEqual(clean.normalize_spu_code("mt 79"), "MT79")
+        self.assertEqual(clean.normalize_spu_code("MT\u201179"), "MT79")
+        self.assertIsNone(clean.normalize_spu_code(" \u2011 "))
+
+        fields = clean.clean_spu_codes(
+            "[MT-79, MT79, mt 79, NP-FZ100, EN-EL15]", {"MT79"},
+        )
+        self.assertEqual(fields["spu"], ["MT79"])
+        self.assertEqual(
+            fields["spu_raw"],
+            ["MT-79", "MT79", "mt 79", "NP-FZ100", "EN-EL15"],
+        )
+        self.assertEqual(fields["spu_unmatched"], ["NP-FZ100", "EN-EL15"])
+
+    def test_spu_none_and_empty_whitelists_have_distinct_meanings(self) -> None:
+        unrestricted = clean.clean_spu_codes("[NP-FZ100, EN-EL15]", None)
+        self.assertEqual(unrestricted["spu"], ["NPFZ100", "ENEL15"])
+        self.assertEqual(unrestricted["spu_unmatched"], [])
+
+        malformed = clean.clean_spu_codes("[-]", None)
+        self.assertEqual(malformed["spu"], [])
+        self.assertEqual(malformed["spu_raw"], ["-"])
+        self.assertEqual(malformed["spu_unmatched"], ["-"])
+
+        rejected = clean.clean_spu_codes("[NP-FZ100, EN-EL15]", set())
+        self.assertEqual(rejected["spu"], [])
+        self.assertEqual(rejected["spu_raw"], ["NP-FZ100", "EN-EL15"])
+        self.assertEqual(rejected["spu_unmatched"], ["NP-FZ100", "EN-EL15"])
+
+    def test_social_message_filters_spu_and_keeps_trace_fields(self) -> None:
+        message = clean.to_message(
+            {"消息ID": "social-spu-1", "SPU_": "[MT-79, NP-FZ100, EN-EL15]"},
+            "社媒",
+            "batch-social",
+            set(),
+            allowed_spus={"mt 79"},
+        )
+
+        self.assertEqual(message["spu"], ["MT79"])
+        self.assertEqual(message["spu_raw"], ["MT-79", "NP-FZ100", "EN-EL15"])
+        self.assertEqual(message["spu_unmatched"], ["NP-FZ100", "EN-EL15"])
 
     def test_unlabelled_brand_stays_unknown(self) -> None:
         """社媒约九成没有本竞品归属，缺失必须是 NULL 而不是 false，

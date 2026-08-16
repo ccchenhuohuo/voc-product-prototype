@@ -112,7 +112,7 @@ def execute_proposals(context: AssetExecutionContext) -> MaterializeResult:
 # ================================================================ 生成
 @asset(partitions_def=WEEKLY, deps=[voc_facts, execute_proposals], retry_policy=RETRY,
        group_name="generate", op_tags={"voc/llm": "true"},
-       description="线A：分桶 → Stage1 分批投票 → Stage2/3/4 → 消解")
+       description="电商：分桶 → Stage1 分批投票 → Stage2/3/4 → 消解")
 def opportunities_line_a(context: AssetExecutionContext) -> MaterializeResult:
     week = _week(context)
     rc = C.RunCtx(run_id=f"genA_{week}_{int(time.time())}", week=week)
@@ -131,7 +131,7 @@ def opportunities_line_a(context: AssetExecutionContext) -> MaterializeResult:
     for (cat, tag), items in ranked:
         info = {"category": cat, "tag": tag, "tax_path": items[0].get("tax_path", ""),
                 "prod_line": "灯光" if "灯光" in (cat or "") else "支撑"}
-        split = stage1.split_bucket(items, "线A", info, rc)   # vote 由 config.VOTE_ENABLED 决定
+        split = stage1.split_bucket(items, "电商", info, rc)   # vote 由 config.VOTE_ENABLED 决定
         gs = stage1.merge_similar_modes(split["groups"], rc)
         groups_total += len(gs)
         db.save_unclassified([(items[i]["message_id"], items[i]["seq"])
@@ -141,7 +141,7 @@ def opportunities_line_a(context: AssetExecutionContext) -> MaterializeResult:
         # 必须落库。早期这里只 append 进列表就完了，Dagster 路径跑完
         # 一条机会点都没写进数据库（落库逻辑当时只在 scripts/run_generate.py 里）。
         built = [o for o in llm.parallel_map(
-            lambda g: pipeline.build_opportunity(items, g, "线A", info, rc, hist), gs)
+            lambda g: pipeline.build_opportunity(items, g, "电商", info, rc, hist), gs)
             if isinstance(o, dict)]
         created += pipeline.persist_opportunities([(o, items) for o in built], week, rc)
     u = llm.usage()
@@ -153,14 +153,14 @@ def opportunities_line_a(context: AssetExecutionContext) -> MaterializeResult:
 
 @asset(partitions_def=WEEKLY, deps=[voc_facts, execute_proposals], retry_policy=RETRY,
        group_name="generate", op_tags={"voc/llm": "true"},
-       description="线B：诉求门 → Stage1' → Stage2'/3/4（需求缺口 + 竞品对标）")
+       description="社媒：诉求门 → Stage1' → Stage2'/3/4（需求缺口 + 竞品对标）")
 def opportunities_line_b(context: AssetExecutionContext) -> MaterializeResult:
     week = _week(context)
     rc = C.RunCtx(run_id=f"genB_{week}_{int(time.time())}", week=week)
     llm.reset_usage()
-    # 早期这个资产只统计候选数就返回了，从不真正产出机会点——线B 的完整管线
+    # 早期这个资产只统计候选数就返回了，从不真正产出机会点——社媒的完整管线
     # 只存在于 scripts/run_generate.py 里。Dagster 是唯一的调度入口（§8），
-    # 资产里缺一段就等于周度调度根本不跑线B。这里与脚本对齐。
+    # 资产里缺一段就等于周度调度根本不跑社媒。这里与脚本对齐。
     ws, we = ingest.window_bounds(week)   # 与抽取同窗口，见 voc_facts
     out: dict = {}
     created: list[str] = []
@@ -174,17 +174,17 @@ def opportunities_line_b(context: AssetExecutionContext) -> MaterializeResult:
         if not rows:
             continue
         info = {"channel": channel, "category": "SOCIAL-NA", "prod_line": "未定"}
-        split = stage1.split_bucket(rows, "线B", info, rc)
+        split = stage1.split_bucket(rows, "社媒", info, rc)
         groups = stage1.merge_similar_modes(split["groups"], rc)
-        # 线B 的未归类逐条独立成组（R11：弱证据也是机会，不可错过）
+        # 社媒的未归类逐条独立成组（R11：弱证据也是机会，不可错过）
         groups += [{"mode_name": (rows[u].get("content") or "")[:40], "members": [u]}
                    for u in split["unclassified"]]
         hist = [r["problem_mode"] for r in db.q(
-            "SELECT problem_mode FROM voc_opportunity WHERE src_line='线B' "
+            "SELECT problem_mode FROM voc_opportunity WHERE src_line='社媒' "
             "AND problem_mode IS NOT NULL ORDER BY opp_id LIMIT 20")]
         built = llm.parallel_map(
             lambda g: pipeline.build_opportunity(
-                rows, g, "线B", {**info, "tag": g["mode_name"][:60]}, rc, hist), groups)
+                rows, g, "社媒", {**info, "tag": g["mode_name"][:60]}, rc, hist), groups)
         pairs = [(o, rows) for o in built if isinstance(o, dict)]
         created += pipeline.persist_opportunities(pairs, week, rc)
         out[f"{channel}_产出"] = len(pairs)

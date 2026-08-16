@@ -50,7 +50,7 @@ print("=== M4 生命周期状态机验收 ===\n")
 # ---------- 准备：一个墓碑条目 ----------
 db.execute("""INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title,
                 problem_mode,evi_total,first_week,last_week)
-              VALUES('LC-TOMB','老品迭代','线A','耐用性','测试墓碑：修复断裂',
+              VALUES('LC-TOMB','老品迭代','电商','耐用性','测试墓碑：修复断裂',
                      '铰链在两个月内断裂',5,'2026-W30','2026-W30')""")
 db.execute("""INSERT INTO voc_opp_snapshot(opp_id,week,evi_total)
               VALUES('LC-TOMB','2026-W30',5)""")
@@ -94,7 +94,7 @@ chk("证据再涨到新基准 3 倍时可再次提案", n4 == 1, f"提案数={n4
 
 # ---------- 7. 陈旧检测 ----------
 db.execute("""INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title,problem_mode)
-              VALUES('LC-STALE','老品迭代','线A','磁吸','测试僵尸：强化磁力','磁力不足')""")
+              VALUES('LC-STALE','老品迭代','电商','磁吸','测试僵尸：强化磁力','磁力不足')""")
 db.execute_as_human("""INSERT INTO voc_opportunity_manual(opp_id,status,owner,updated_by)
               VALUES('LC-STALE','项目中','pm-x','tester')""")
 db.execute_as_human("""UPDATE voc_opportunity_manual SET updated_at = now() - interval '10 weeks'
@@ -106,7 +106,7 @@ chk("voc_board 的 status_stale 同步生效",
 
 # ---------- 8. 合并方向：僵尸条目不得反向吃掉新条目 ----------
 db.execute("""INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title,problem_mode)
-              VALUES('LC-NEW','老品迭代','线A','磁吸','新条目：强化磁力','磁力不足')""")
+              VALUES('LC-NEW','老品迭代','电商','磁吸','新条目：强化磁力','磁力不足')""")
 target, source, manual = lifecycle.merge_direction("LC-STALE", "LC-NEW")
 chk("合并方向指向高优先级方（项目中 > 考虑中）", target == "LC-STALE",
     f"target={target}")

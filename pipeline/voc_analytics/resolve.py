@@ -3,7 +3,7 @@
 实测结论决定了这里的设计：
   · 向量排序极准（R@1 15/15）但阈值不可用（应挂载 min 0.656 < 应新建 max 0.706）
     => L2 只做桶内 Top-k 召回，判定权全部交给 L3
-  · 线B 的 category 恒为 NULL => L1 必须分线定义，且比较用 IS NOT DISTINCT FROM
+  · 社媒的 category 恒为 NULL => L1 必须分线定义，且比较用 IS NOT DISTINCT FROM
   · 没有跨线汇聚则 dual_source 恒为 false，探真里 5/15 的双源印证复现不出
 """
 from __future__ import annotations
@@ -21,9 +21,9 @@ def topk(n_candidates: int) -> int:
 # ---------------------------------------------------------------- L1
 def l1_candidates(core_tag: str, opp_type: str, channel: str | None,
                   category: str | None, line: str) -> list[dict]:
-    """线A: (core_tag, opp_type)；线B: (channel, core_tag, opp_type)。
+    """电商: (core_tag, opp_type)；社媒: (channel, core_tag, opp_type)。
     一律用 IS NOT DISTINCT FROM，避免 NULL 语义陷阱。"""
-    if line == "线A":
+    if line == "电商":
         sql = """SELECT opp_id, problem_mode, title, rep_snippets, mode_vec::text AS vec,
                         safety_flag, evi_total
                    FROM voc_opportunity
@@ -123,18 +123,18 @@ def resolve_one(new: dict, ctx) -> dict:
 def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
                      src_line: str, week: str, ctx, limit: int = 40) -> int:
     """从另一条线的证据池召回并挂载。这是 dual_source 成立的唯一途径（§6.5）。"""
-    if src_line == "线B":
-        # 线B 机会点 → 借道【线A 机会点】取其证据。
+    if src_line == "社媒":
+        # 社媒机会点 → 借道【电商机会点】取其证据。
         #
-        # 早期这里直接检索线A 证据、并要求 e.tag = 本条的 core_tag，实测
-        # 350 条线B 机会点命中 0 条：线B 的 core_tag 是 Stage1 的自由文本
-        # 模式名（「三色温平价冷靴灯」「TT8同颜值高矮轻量三脚架」），而线A 的
+        # 早期这里直接检索电商证据、并要求 e.tag = 本条的 core_tag，实测
+        # 350 条社媒机会点命中 0 条：社媒的 core_tag 是 Stage1 的自由文本
+        # 模式名（「三色温平价冷靴灯」「TT8同颜值高矮轻量三脚架」），而电商的
         # tag 是分类树叶子（「RGB」「三脚」「APP控制」），两个取值域根本不相交，
         # 等值比较恒假。冷启动 dual_source 只有 1 条就是这么来的。
         #
-        # 改为对线A【机会点】做向量召回：两条线的 problem_mode 都已入库为
+        # 改为对电商【机会点】做向量召回：两条线的 problem_mode 都已入库为
         # mode_vec 且有 pgvector 索引，同一个问题在两条线的表述才是可比的；
-        # 命中后把那条线A 机会点的证据挂过来，dual_source 由触发器自然派生。
+        # 命中后把那条电商机会点的证据挂过来，dual_source 由触发器自然派生。
         rows = db.q("""
             SELECT oe.message_id, oe.seq,
                    COALESCE(e.snippet, left(m.content,400)) AS snippet
@@ -143,10 +143,10 @@ def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
               JOIN voc_message m ON m.message_id = oe.message_id
               LEFT JOIN voc_evidence e
                      ON e.message_id = oe.message_id AND e.seq = oe.seq
-             WHERE a.src_line = '线A' AND a.mode_vec IS NOT NULL
+             WHERE a.src_line = '电商' AND a.mode_vec IS NOT NULL
                AND m.src_line = '电商'
                AND a.opp_id IN (SELECT opp_id FROM voc_opportunity
-                                 WHERE src_line='线A' AND mode_vec IS NOT NULL
+                                 WHERE src_line='电商' AND mode_vec IS NOT NULL
                                  ORDER BY mode_vec <=> %s::vector LIMIT 5)
                AND NOT EXISTS (SELECT 1 FROM voc_opp_evidence x
                                 WHERE x.opp_id=%s AND x.message_id=oe.message_id
@@ -155,7 +155,7 @@ def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
              LIMIT %s""", [_vec_literal(mode_vec), opp_id, limit])
         texts = [r["snippet"] for r in rows]
     else:
-        # 线A 机会点 → 检索线B 的诉求/对标池
+        # 电商机会点 → 检索社媒的诉求/对标池
         rows = db.q("""
             SELECT m.message_id, 0 AS seq, left(m.content, 400) AS snippet
               FROM voc_message m

@@ -7,10 +7,14 @@
 """
 from __future__ import annotations
 import re
+from collections.abc import Iterable
 from typing import Any
 
 CJK = re.compile(r"[぀-ヿ㐀-䶿一-鿿豈-﫿]")
 _WORD = re.compile(r"[A-Za-zÀ-ÿ]+")
+_SPU_SEPARATORS = re.compile(
+    r"[\s\-\u00ad\u2010-\u2015\u2212\ufe63\uff0d]+"
+)
 
 
 def _is_cjk_text(s: str) -> bool:
@@ -57,6 +61,55 @@ def parse_array(v: Any) -> list[str]:
     if not s or s == "[]":
         return []
     return [x.strip() for x in s.strip("[]").split(",") if x.strip()]
+
+
+def normalize_spu_code(code: Any) -> str | None:
+    """统一 SPU 的空白、连字符与大小写，不覆盖可回溯的源 token。"""
+    if code is None:
+        return None
+    normalized = _SPU_SEPARATORS.sub("", str(code)).upper()
+    return normalized or None
+
+
+def normalize_spu_set(codes: Iterable[Any]) -> set[str]:
+    """把候选白名单应用与消息 SPU 相同的规范化规则。"""
+    normalized: set[str] = set()
+    for code in codes:
+        value = normalize_spu_code(code)
+        if value is not None:
+            normalized.add(value)
+    return normalized
+
+
+def clean_spu_codes(v: Any, allowed_spus: set[str] | None = None) -> dict[str, list[str]]:
+    """规范化 SPU，并把规范化失败或未命中白名单的原始 token 单独留痕。
+
+    ``allowed_spus=None`` 表示不筛选；空集合表示没有编码获准。规范化结果
+    按首次出现顺序去重，原始与未匹配字段保留 ``parse_array`` 后的 token。
+    """
+    raw_values = parse_array(v)
+    allowed = None if allowed_spus is None else normalize_spu_set(allowed_spus)
+    matched: list[str] = []
+    unmatched: list[str] = []
+    seen: set[str] = set()
+
+    for raw in raw_values:
+        normalized = normalize_spu_code(raw)
+        if normalized is None:
+            unmatched.append(raw)
+            continue
+        if allowed is not None and normalized not in allowed:
+            unmatched.append(raw)
+            continue
+        if normalized not in seen:
+            seen.add(normalized)
+            matched.append(normalized)
+
+    return {
+        "spu": matched,
+        "spu_raw": raw_values,
+        "spu_unmatched": unmatched,
+    }
 
 
 _COUNTRY_NORM = {
@@ -166,7 +219,8 @@ def explode(row: dict, tax, src_line: str) -> tuple[list[dict], int]:
     return out, misaligned
 
 
-def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str]) -> dict:
+def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str],
+               allowed_spus: set[str] | None = None) -> dict:
     """把一行导出映射成 voc_message。"""
     star = row.get("评论星级")
     try:
@@ -179,6 +233,7 @@ def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str]) -
         inter_i = int(float(inter)) if inter not in (None, "") else None
     except (TypeError, ValueError):
         inter_i = None
+    spu_fields = clean_spu_codes(row.get("SPU_"), allowed_spus)
     return {
         "message_id": row.get("消息ID"),
         "src_line": src_line,
@@ -192,7 +247,7 @@ def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str]) -
         "product_name": first_value(row.get("品名_")),
         "product_id": scalar(row.get("商品ID_")),
         "product_grade": highest_grade(row.get("产品定级_")),
-        "spu": parse_array(row.get("SPU_")),
+        **spu_fields,
         "sku": parse_array(row.get("SKU_")),
         "model": parse_array(row.get("型号_")),
         "prod_line": first_value(row.get("模型_")),

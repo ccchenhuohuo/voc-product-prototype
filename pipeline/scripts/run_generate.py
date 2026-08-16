@@ -42,7 +42,7 @@ def main() -> int:
     ap.add_argument("--no-vote", action="store_true")
     ap.add_argument("--all", action="store_true")
     # 跨线汇聚要求【两条线都已落库】。两条线并行跑时先完成的那条做汇聚，
-    # 看到的对侧是残缺的——实测线A 13:00 收工时线B 还在跑（13:41 才完），
+    # 看到的对侧是残缺的——实测电商 13:00 收工时社媒还在跑（13:41 才完），
     # 这是 dual_source 只有 1 的第二个原因。故拆成两段：
     #   并行阶段  --skip-cross  两条线各自生成
     #   收尾阶段  --cross-only  两条线都完成后统一做汇聚/拆分/快照/放行
@@ -59,13 +59,13 @@ def main() -> int:
     t0 = time.time()
     created: list[str] = []
 
-    # ---------------- 线 A ----------------
+    # ---------------- 电商 ----------------
     if a.line in ("A", "both"):
         buckets = pipeline.bucket_line_a()
         ranked = sorted(buckets.items(), key=lambda kv: -len(kv[1]))
         if a.limit_buckets:
             ranked = ranked[:a.limit_buckets]
-        print(f"[线A] 桶数 {len(ranked)}  证据合计 {sum(len(v) for _, v in ranked)}")
+        print(f"[电商] 桶数 {len(ranked)}  证据合计 {sum(len(v) for _, v in ranked)}")
         history: list[str] = [r["problem_mode"] for r in
                               db.q("SELECT problem_mode FROM voc_opportunity "
                                    "WHERE problem_mode IS NOT NULL ORDER BY opp_id LIMIT 20")]
@@ -76,7 +76,7 @@ def main() -> int:
             info = {"category": cat, "tag": tag,
                     "tax_path": items[0].get("tax_path", ""),
                     "prod_line": "灯光" if "灯光" in (cat or "") else "支撑"}
-            split = stage1.split_bucket(items, "线A", info, ctx, vote=not a.no_vote)
+            split = stage1.split_bucket(items, "电商", info, ctx, vote=not a.no_vote)
             groups = stage1.merge_similar_modes(split["groups"], ctx)
             db.save_unclassified([(items[i]["message_id"], items[i]["seq"])
                                   for i in split["unclassified"]], a.week, "unclassified")
@@ -85,7 +85,7 @@ def main() -> int:
             print(f"  {cat}/{tag}  n={len(items)}  组={len(groups)}  "
                   f"未归类={len(split['unclassified'])}", flush=True)
             built = llm.parallel_map(
-                lambda g: pipeline.build_opportunity(items, g, "线A", info, ctx, history),
+                lambda g: pipeline.build_opportunity(items, g, "电商", info, ctx, history),
                 groups)
             return [(o, items) for o in built if isinstance(o, dict)]
 
@@ -98,33 +98,33 @@ def main() -> int:
                 continue
             created += _persist(batch, a.week, ctx)
 
-    # ---------------- 线 B ----------------
+    # ---------------- 社媒 ----------------
     if a.line in ("B", "both"):
         for channel, types in (("需求缺口", list(C.DEWATER_GAP)),
                                ("竞品对标", list(C.DEWATER_COMP))):
             rows = db.line_b_pool(types, multi_brand_only=(channel == "竞品对标"))
             if a.limit:
                 rows = rows[:a.limit]
-            print(f"[线B/{channel}] 候选 {len(rows)}")
+            print(f"[社媒/{channel}] 候选 {len(rows)}")
             if channel == "需求缺口":
                 rows, st = pipeline.intent_gate(rows, ctx)
                 print(f"  诉求门: 规则通过 {st['rule_pass']} -> 缺口 {st['passed']}  {st['intent']}")
             if not rows:
                 continue
             info = {"channel": channel, "category": "SOCIAL-NA", "prod_line": "未定"}
-            split = stage1.split_bucket(rows, "线B", info, ctx, vote=not a.no_vote)
+            split = stage1.split_bucket(rows, "社媒", info, ctx, vote=not a.no_vote)
             groups = stage1.merge_similar_modes(split["groups"], ctx)
             print(f"  组={len(groups)}  未归类={len(split['unclassified'])}")
-            # 线B 的 unclassified 逐条独立成组（R11：任何机会不可错过）
+            # 社媒的 unclassified 逐条独立成组（R11：任何机会不可错过）
             for u in split["unclassified"]:
                 groups.append({"mode_name": (rows[u].get("content") or "")[:40], "members": [u]})
             history = [r["problem_mode"] for r in
                        db.q("SELECT problem_mode FROM voc_opportunity "
-                            "WHERE src_line='线B' AND problem_mode IS NOT NULL "
+                            "WHERE src_line='社媒' AND problem_mode IS NOT NULL "
                             "ORDER BY opp_id LIMIT 20")]
             built = llm.parallel_map(
                 lambda g: pipeline.build_opportunity(
-                    rows, g, "线B", {**info, "tag": g["mode_name"][:60]}, ctx, history),
+                    rows, g, "社媒", {**info, "tag": g["mode_name"][:60]}, ctx, history),
                 groups)
             created += _persist([(o, rows) for o in built if isinstance(o, dict)],
                                 a.week, ctx)

@@ -2,8 +2,8 @@
 -- 视图：PM 取数入口（PRD v8 §3.4 / §7.5）
 -- ============================================================
 
--- 机器字段 ⋈ 人工字段。注意：合并的是人机两侧，不是线A与线B
--- （线A/线B 的汇聚在管线层完成，见 §6.5）
+-- 机器字段 ⋈ 人工字段。注意：合并的是人机两侧，不是电商与社媒
+-- （电商/社媒 的汇聚在管线层完成，见 §6.5）
 CREATE OR REPLACE VIEW voc_board AS
 SELECT
   o.opp_id,
@@ -56,7 +56,7 @@ ORDER BY b.last_week DESC, b.evi_total DESC;
 -- 周度指标（§9.2）
 CREATE OR REPLACE VIEW voc_weekly_metrics AS
 WITH pool AS (
-  -- 必须过滤 src_line='电商'：线A 的定义就是电商评论。
+  -- 必须过滤 src_line='电商'：电商的定义就是电商评论。
   -- 漏了这个条件会把社媒证据算进分母，覆盖率虚低近一倍。
   SELECT count(*) AS line_a_pool
   FROM voc_evidence e JOIN voc_message m USING (message_id)

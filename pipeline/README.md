@@ -2,7 +2,7 @@
 
 从云听 CEM 抽取 VOC，经清洗、生成、消解与 SPU 展开后写入 PostgreSQL，供 `system/` 的 PM 机会看板读取。生产调度入口是 Dagster；`scripts/` 下的命令用于初始化、回填、探针、备份和故障处置。
 
-> 术语说明：当前代码仍保留临时口径「线A / 线B」。在现行实现中，**线A 等价于电商评论，线B 等价于社交媒体**；`voc_message.src_line` 存 `电商/社媒`，`voc_opportunity.src_line` 存 `线A/线B`。本轮不替换这些值，后续按 [管道改造计划](docs/rework_plan.html) 统一处理。
+> 来源口径：`voc_message.src_line` 与 `voc_opportunity.src_line` 均使用 `电商/社媒`。`voc_opportunity.channel` 继续保存 `需求缺口/竞品对标`，不承担来源语义；社媒无产品占位符 `SOCIAL-NA` 保持不变。
 
 ## 运行要求与安装
 
@@ -57,7 +57,7 @@ VOC_PG_PASSWORD=<YOUR_VOC_WRITER_PASSWORD>
 ```text
 voc_analytics/        管线核心
   ingest.py           抽取：云听导出 -> xlsx -> voc_message / voc_evidence
-  clean.py            清洗：字段映射、尾部修复、国别归一
+  clean.py            清洗：字段映射、尾部修复、国别归一、SPU 规范化与白名单留痕
   taxonomy.py         标签树快照与路径解析
   pipeline.py         编排：分桶 -> 生成机会点 -> 落库
   stages/stage1.py    问题模式切分（分批 + 最大团分解）
@@ -68,7 +68,7 @@ voc_analytics/        管线核心
   execute.py          执行 PM 已通过的提案并写血缘
   explode.py          刷新 SPU 容器、问题条目与共性度（纯 SQL）
   definitions.py      Dagster 资产图与周度调度定义
-sql/                  按编号顺序执行的 001-012 迁移
+sql/                  按编号顺序执行的 001-014 迁移
 scripts/              部署、抽取、生成、备份与探针
 tests/                各里程碑验收
 baseline/             L3 判定标注测试集
@@ -78,7 +78,7 @@ baseline/             L3 判定标注测试集
 
 ## 数据库迁移基线
 
-现行迁移必须按编号顺序理解和应用：
+现行迁移必须按编号顺序理解；实际应用需区分存量升级与新库：
 
 | 编号 | 内容 |
 |---|---|
@@ -88,8 +88,10 @@ baseline/             L3 判定标注测试集
 | `009` | `voc_spu`、`voc_spu_issue`、人工层、审计表与共性度 |
 | `010` | 看板应用读取机器表的补充授权 |
 | `011`–`012` | SPU 条目与机会点状态日志改为 AFTER 审计触发器 |
+| `013` | `voc_opportunity.src_line` 统一为 `电商/社媒`，并校验已核实的存量分布 |
+| `014` | 为 SPU 规范化增加原值与未匹配值留痕字段 |
 
-`scripts/m0_deploy_pg.sh` 是灾难恢复所需的建库与角色初始化脚本，**当前只执行 `001`–`004`**；仓库没有自动迁移器，已有库还需按顺序应用 `005`–`012`。不要跳号，也不要在未经备份和变更审批时对生产库执行。
+`scripts/m0_deploy_pg.sh` 是灾难恢复所需的建库与角色初始化脚本，**当前只执行 `001`–`004`**；仓库没有自动迁移器。符合已核实 012 基线的存量库用 `013` 迁移来源值，再应用 `014`；新库的当前 `001` 已直接建立新来源约束，应跳过带固定 645 行断言的 `013`，但仍需在相应数据前置条件满足后建立其余结构并应用 `014`。本阶段只交付 `013/014` 脚本，未执行迁移；不要在未经备份、基线核对和变更审批时对生产库执行。
 
 ## 启动与常用入口
 
@@ -137,4 +139,4 @@ python tests/test_clean_fields.py
 
 `008`/`009` 已在代码中完成产品字段、SPU 展开层和 `n_eff/scope`；`010`–`012` 已补齐应用读权及两个人工状态层的 AFTER 审计触发器。历史事实层是否已完成全量回填仅凭仓库无法确认，需由运维记录或数据库核验。
 
-下一阶段的分类解耦、SPU 规范化、第三方型号过滤和全量重跑方案以 [docs/rework_plan.html](docs/rework_plan.html) 为准。本轮仍保留「线A / 线B」临时口径。
+阶段一已在代码与迁移脚本中统一来源口径，并把 SPU 规范化、原值留痕和第三方型号白名单剔除落到抽取层；本阶段没有执行迁移、重跑抽取或连接生产库。分类解耦与全量重跑仍以 [docs/rework_plan.html](docs/rework_plan.html) 的后续阶段为准。

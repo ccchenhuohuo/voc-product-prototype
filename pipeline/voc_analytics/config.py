@@ -40,8 +40,8 @@ PG = dict(
 
 # ---- 业务口径（PRD v8 §1.2 / §4）----
 BRAND_OWN = "VIJIM"                    # 系统内本品代号
-COMMENT_FILTER = {"本竞品": ["本品"]}    # 线A
-SOCIAL_FILTER = {"品牌": [BRAND_OWN]}   # 线B（本竞品字段在社媒恒为空，见 §1.2）
+COMMENT_FILTER = {"本竞品": ["本品"]}    # 电商
+SOCIAL_FILTER = {"品牌": [BRAND_OWN]}   # 社媒（本竞品字段在社媒恒为空，见 §1.2）
 
 # 社媒去水标签分流（§4.4）
 DEWATER_GAP = {"用户咨询", "其他"}          # 需求缺口通道（"其他"首月抽检后再定）
@@ -57,7 +57,7 @@ BATCH_SIZE = 50
 # 保留实现与开关，M5 标定后可重新评估。
 VOTE_ENABLED = False
 MAX_GROUP_SIZE = 40        # 防最大团粘连
-MIN_EVIDENCE = {"线A": 2, "线B": 1}    # §5.2
+MIN_EVIDENCE = {"电商": 2, "社媒": 1}    # §5.2
 
 # 诉求门（§5.6）
 INTENT_PASS = 0.6

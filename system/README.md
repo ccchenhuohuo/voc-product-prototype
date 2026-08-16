@@ -1,8 +1,8 @@
 # VOC 机会看板系统
 
-`system/` 是面向产品经理的服务端渲染机会看板，读取 `pipeline/` 生成的 VOC PostgreSQL 数据，并把人工状态写回独立的 manual 表。应用采用 FastAPI + Jinja2 + 仓库内置的 HTMX-compatible 精简运行时；运行期不调用 LLM，也不依赖 npm 或外网。数据库结构与权限须已按 `pipeline/sql/001_schema.sql` 至 `012_audit_after_trigger_opp.sql` 的顺序迁移完成，应用本身不执行迁移。注意，`011` 末尾的自检要求 `voc_spu_issue` 已有条目，`012` 的自检要求已有未合并的新品创新机会；完全空库不能不经数据准备就机械执行这两段自检。
+`system/` 是面向产品经理的服务端渲染机会看板，读取 `pipeline/` 生成的 VOC PostgreSQL 数据，并把人工状态写回独立的 manual 表。应用采用 FastAPI + Jinja2 + 仓库内置的 HTMX-compatible 精简运行时；运行期不调用 LLM，也不依赖 npm 或外网。数据库结构与权限须达到 `pipeline/sql/` 当前最终等效结构，应用本身不执行迁移。注意，`011` 末尾的自检要求 `voc_spu_issue` 已有条目，`012` 的自检要求已有未合并的新品创新机会；`013` 只适用于符合已核实 645 条分布的既有 012 存量库，当前 `001` 已建立新来源约束的空库不执行它。完全空库不能不经数据准备就机械执行整组脚本。
 
-管道代码和早期文档中的「线A / 线B」是发现路径名称：**线A等价于电商，线B等价于社媒**。`voc_opportunity.src_line` 仍保存「线A / 线B」，而原始消息来源 `voc_message.src_line` 保存「电商 / 社媒」；本轮保留这组历史口径。
+`voc_message.src_line` 与 `voc_opportunity.src_line` 均保存「电商 / 社媒」，表示消息或机会的发现来源。`voc_opportunity.channel` 仍保存「需求缺口 / 竞品对标」，不是消息来源。
 
 ## 安装与启动
 

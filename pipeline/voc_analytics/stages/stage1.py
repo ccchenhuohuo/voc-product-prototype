@@ -122,7 +122,7 @@ def split_batch(items: list[dict], idx: list[int], line: str, ctx_info: dict,
     """对一个批次调 Stage 1，返回 {mode_name: [原始下标]} 与 unclassified。"""
     common = dict(n=len(idx), min_evidence=C.MIN_EVIDENCE[line],
                   batch_i=batch_i, batch_n=batch_n)
-    if line == "线A":
+    if line == "电商":
         prompt = prompts.STAGE1_A.format(
             items=_fmt_a(items, idx), category=ctx_info.get("category", "?"),
             tag=ctx_info.get("tag", "?"), tax_path=ctx_info.get("tax_path", ""), **common)

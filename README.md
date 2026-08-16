@@ -9,7 +9,7 @@
 | [`pipeline/`](pipeline/) | 从云听 CEM 抽取、清洗、生成并消解机会点，刷新 SPU 展开层；以 Dagster 资产图编排 | `voc_analytics.definitions` |
 | [`system/`](system/) | 以 FastAPI + Jinja2 + HTMX 展示老品迭代、新品创新与战略视图，并记录 PM 决策 | `app.main:app` |
 
-代码和旧文档中的历史名称「线A / 线B」分别等价于「电商 / 社媒」。事实层 `voc_message.src_line` 使用「电商 / 社媒」，机会层 `voc_opportunity.src_line` 与相关代码路径仍保留「线A / 线B」。
+事实层 `voc_message.src_line` 与机会层 `voc_opportunity.src_line` 统一使用「电商 / 社媒」，表示证据或机会的发现来源。`voc_opportunity.channel` 仍只表示「需求缺口 / 竞品对标」，不是消息来源；社媒无产品占位符 `SOCIAL-NA` 保持不变。
 
 ## 数据如何流动
 
@@ -33,9 +33,9 @@ system / FastAPI
         └─ voc_spu_issue_manual / voc_opportunity_manual
 ```
 
-数据库触发器负责状态约束、审计和锁保护。看板代码只写上述两张人工表；`voc_human` 角色还可裁决 `voc_proposal` 的有限字段，但不能修改机会点、事实层等机器产出。管道不会覆盖人工表或已锁定条目的语义字段，但证据、计数、排序和最近周等统计字段仍会随新数据更新。完整权限与约束以顺序应用后的 `001`–`012` 迁移为准。
+数据库触发器负责状态约束、审计和锁保护。看板代码只写上述两张人工表；`voc_human` 角色还可裁决 `voc_proposal` 的有限字段，但不能修改机会点、事实层等机器产出。管道不会覆盖人工表或已锁定条目的语义字段，但证据、计数、排序和最近周等统计字段仍会随新数据更新。完整权限与约束以顺序应用后的 `001`–`014` 迁移为准。
 
-看板要求连接一个已经达到 [`pipeline/sql/`](pipeline/sql/) 中 `001`–`012` 最终结构的业务库；业务表没有数据时页面可以为空，要看到实际内容则还需已有管道产物。仓库目前没有可验证的空库完整初始化路径：`m0_deploy_pg.sh` 只执行 `001`–`004`，而 `011`、`012` 尾部的自检依赖已有机会点或 SPU 条目的业务键，空库批量执行会在自检处失败。不要把现有 SQL 文件当成可无条件一把执行的迁移 runner；应由 DBA/运维按 [`运维交接.md`](pipeline/docs/运维交接.md) 在对应数据就绪后应用并核验。数据库结构就绪后，管道进程和看板进程可以独立运行。
+看板要求连接一个达到 [`pipeline/sql/`](pipeline/sql/) 当前最终等效结构的业务库；业务表没有数据时页面可以为空，要看到实际内容则还需已有管道产物。仓库目前没有可验证的空库完整初始化路径：`m0_deploy_pg.sh` 只执行 `001`–`004`，`011`、`012` 尾部的自检依赖已有机会点或 SPU 条目的业务键；`013` 又是专供既有 012 存量库使用的数据迁移，断言已核实的 645 条分布，当前 `001` 已直接建立新来源约束的空库不应执行它。不要把现有 SQL 文件当成可无条件一把执行的迁移 runner；应由 DBA/运维按 [`运维交接.md`](pipeline/docs/运维交接.md) 选择新库或存量升级路径并核验。数据库结构就绪后，管道进程和看板进程可以独立运行。
 
 ## 准备开发环境
 
@@ -181,7 +181,7 @@ python3 -m compileall pipeline system
 
 ```bash
 (cd system && python3 -m pytest tests/)
-(cd pipeline && python3 tests/test_clean_fields.py)
+(cd pipeline && python3 -m pytest tests/test_clean_fields.py)
 ```
 
 这些是离线测试，覆盖 mock 数据库、纯函数、模板与前端契约，不连接数据库；部分前端契约测试会在本机有 Node.js 时调用它。不要把其他验收脚本或 `system/scripts/check_sql.py` 混入离线测试命令。

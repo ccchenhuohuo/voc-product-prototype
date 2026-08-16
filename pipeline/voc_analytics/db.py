@@ -98,8 +98,18 @@ def save_unclassified(pairs: Iterable[tuple[str, int]], week: str, reason: str) 
 
 
 # ---------------------------------------------------------------- 领域查询
+def ecommerce_spus_by_message() -> dict[str, list[str]]:
+    """读取事实层全历史电商 SPU；规范化与本窗口覆盖由抽取层完成。"""
+    rows = q("""
+      SELECT message_id, COALESCE(spu, ARRAY[]::text[]) AS spu
+        FROM voc_message
+       WHERE src_line = '电商'
+    """)
+    return {row["message_id"]: list(row["spu"] or []) for row in rows}
+
+
 def line_a_pool(week_start: str | None = None, week_end: str | None = None) -> list[dict]:
-    """线A 生成池：产品体验分支 + 负面 + 非误标 + 有片段（§4.3）"""
+    """电商生成池：产品体验分支 + 负面 + 非误标 + 有片段（§4.3）"""
     sql = """
       SELECT e.message_id, e.seq, e.tag, e.snippet, e.tax_path,
              m.category, m.star, m.country, m.product_name, m.platform, m.lang
@@ -137,9 +147,9 @@ def line_b_pool(channel_types: Sequence[str], week_start: str | None = None,
 
 
 def low_conf_intersection() -> dict:
-    """PRD §4.2 要求 M1 算出的交集：low_conf 与【线A】可生成池的关系。
+    """PRD §4.2 要求 M1 算出的交集：low_conf 与【电商】可生成池的关系。
 
-    必须过滤 src_line='电商' —— 线A 的定义就是电商评论。早期漏了这个条件，
+    必须过滤 src_line='电商' —— 电商的定义就是电商评论。早期漏了这个条件，
     把社媒证据也算进池子，会把覆盖率分母虚高近一倍。
     """
     return q("""

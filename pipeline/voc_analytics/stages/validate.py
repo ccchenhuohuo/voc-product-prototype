@@ -189,7 +189,7 @@ _ELLIPSIS = re.compile(r"…+|\.{3,}|、|，|\|")
 
 def _evidence_corpus(items: list[dict], idx_map: list[int]) -> str:
     """该组证据的全部可引文本。三个字段都要并进来：
-    线A 的原声在 snippet，线B 的在 content，译文在 content_zh——
+    电商的原声在 snippet，社媒的在 content，译文在 content_zh——
     漏掉 content_zh 会把「引用了译文」误判成幻觉。"""
     parts = []
     for i in idx_map:
@@ -204,7 +204,7 @@ def check_quotes(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
 
     这是 check_citations 盖不住的缺口：后者只校验 citations 数组里的
     quote_span，而模型在【散文里】另起的引号原声完全不过闸。实测冷启动
-    线B 有 13.2% 的引文无法溯源（线A 3.1%），大多是模型把外语原声译成
+    社媒有 13.2% 的引文无法溯源（电商 3.1%），大多是模型把外语原声译成
     中文后仍打引号，或直接转述成自己的话——对 PM 而言这就是伪造的用户原声。
     """
     text = obj.get("desc_phenomenon") or ""

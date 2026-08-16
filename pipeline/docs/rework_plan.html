@@ -98,8 +98,8 @@
       <td>社媒匹配 <span class="n">27 → 31</span>（<code>MT-79</code> ↔ <code>MT79</code>）</td><td><span class="tag t-code">重跑抽取</span></td></tr>
     <tr><td class="n">6</td><td><b>排除第三方型号</b></td>
       <td>剔除 <code>NP-FZ100</code> <code>EN-EL15</code> 等相机电池型号</td><td><span class="tag t-code">重跑抽取</span></td></tr>
-    <tr><td class="n">7</td><td><b>线A/线B 口径替换</b></td>
-      <td>代码与文档全量替换为 电商 / 社媒</td><td><span class="tag t-code">纯改代码</span></td></tr>
+    <tr><td class="n">7</td><td><b>来源线口径统一</b></td>
+      <td>代码、文档与机会层来源值统一为 电商 / 社媒；<code>channel</code> 保持需求缺口 / 竞品对标</td><td><span class="tag t-code">代码 + 迁移脚本</span></td></tr>
   </table></div>
 
   <div class="callout"><span class="i">💡</span><p><b>只有 #1 和 #2 需要重跑 LLM</b>，但它们必须一起跑——都改的是生成池与生成逻辑，分两次跑等于白跑一次。其余五项加起来几分钟。</p></div>
@@ -125,11 +125,11 @@
 
   <div class="phase">
     <div class="ph"><span class="num">阶段一</span><span class="nm">口径替换 + 抽取层修正</span>
-      <span class="cost">改代码 + 重跑抽取 · 约 20 分钟</span></div>
+      <span class="cost">改代码 + 迁移脚本 · 本轮不执行</span></div>
     <div class="pb">
-      <p>做 <b>#7 线A/线B 替换</b>、<b>#5 SPU 规范化</b>、<b>#6 排除第三方型号</b>。全部是确定性改动，不碰 LLM。</p>
-      <p>SPU 规范化要落在<b>抽取层</b>（<code>clean.py</code>），不是在查询里临时 <code>regexp_replace</code>——否则每处查询都要重复一遍，迟早漏一处。第三方型号用白名单反向剔除：只保留能在电商 SPU 集合里找到的编码，其余进单独字段留痕，不静默丢弃。</p>
-      <div class="gate"><b>闸门 A</b>：① 全仓 <code>grep -c "线A\|线B"</code> 为 0（代码与文档）；② <code>voc_message.spu</code> 规范化后，社媒可匹配 SPU 种类 ≥31；③ 第三方型号被剔除且可在留痕字段查到；④ <b>电商消息数、证据总数、挂靠数三个基线不变</b>（26,407 / 63,972 / 1,638）——抽取重跑不得改变既有事实层。</div>
+      <p>做 <b>#7 来源线口径统一</b>、<b>#5 SPU 规范化</b>、<b>#6 排除第三方型号</b>。全部是确定性改动，不碰 LLM；迁移与数据重跑由验收方另行受控执行。</p>
+      <p>SPU 规范化落在<b>抽取层</b>（<code>clean.py</code>），不是在查询里临时 <code>regexp_replace</code>。<code>spu</code> 保存消除连字符、空格与大小写差异后的编码，<code>spu_raw</code> 保留上游原值；第三方型号用电商 SPU 集合做白名单反向剔除，未匹配编码进入 <code>spu_unmatched</code>，不静默丢弃。</p>
+      <div class="gate"><b>闸门 A</b>：① 全仓历史临时线名的文本残留为 0；受控迁移 <code>013_src_line_rename.sql</code> 以 Unicode 转义识别历史存量，并断言迁移后的旧口径残留为 0；② 纯函数单测证明 <code>MT-79</code> 与 <code>MT79</code> 归一；③ 第三方型号从 <code>spu</code> 剔除且可在 <code>spu_unmatched</code> 查到；④ pipeline 与 system 两套离线 pytest 均以退出码 0 结束。本阶段不执行 SQL、不连生产库、不重跑管道，因此消息数、证据数、挂靠数及迁移后存量分布留待验收方执行时核验。</div>
     </div>
   </div>
 

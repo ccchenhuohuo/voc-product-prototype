@@ -12,7 +12,7 @@ def _fmt_items(items: list[dict], idx: Sequence[int], line: str) -> str:
     out = []
     for n, i in enumerate(idx, 1):
         it = items[i]
-        if line == "线A":
+        if line == "电商":
             star = f'{it["star"]:.0f}星' if it.get("star") is not None else "无星级"
             out.append(f'[{n}] {star} | {it.get("country") or "?"} | '
                        f'{it.get("product_name") or "?"} | {it.get("snippet")}')
@@ -35,8 +35,8 @@ def _uniq(seq: Sequence[Any]) -> list:
 def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
                     line: str, ctx_info: dict, ctx) -> dict | None:
     idx = list(members)
-    opp_type = "老品迭代" if line == "线A" else "新品创新"
-    if line == "线A":
+    opp_type = "老品迭代" if line == "电商" else "新品创新"
+    if line == "电商":
         unit = "失效模式"
         ctx_line = (f'品类 {ctx_info.get("category","?")} | 标签 {ctx_info.get("tag","?")} | '
                     f'失效模式 {mode_name} | 1-2星占比 {ctx_info.get("low_star_rate","?")}')

@@ -19,8 +19,8 @@ END $$ LANGUAGE plpgsql;
 -- 准备两条机会点
 INSERT INTO voc_opportunity(opp_id, opp_type, src_line, core_tag, title,
                             problem_mode, desc_phenomenon, evi_total, evi_ec, evi_social)
-VALUES ('T-UNLOCKED','老品迭代','线A','耐用性','原标题U','原模式U','原现象U', 5, 5, 0),
-       ('T-LOCKED',  '老品迭代','线A','耐用性','原标题L','原模式L','原现象L', 5, 5, 0);
+VALUES ('T-UNLOCKED','老品迭代','电商','耐用性','原标题U','原模式U','原现象U', 5, 5, 0),
+       ('T-LOCKED',  '老品迭代','电商','耐用性','原标题L','原模式L','原现象L', 5, 5, 0);
 
 -- ---------- 1. weak_evidence / dual_source 自动派生 ----------
 SELECT assert((SELECT NOT weak_evidence FROM voc_opportunity WHERE opp_id='T-UNLOCKED'),

@@ -45,7 +45,7 @@ def _rep_snips(items: list[dict], members: Sequence[int], k: int = 5) -> list[st
     return out
 
 
-# ---------------------------------------------------------------- 线A
+# ---------------------------------------------------------------- 电商
 def bucket_line_a(week_start: str | None = None, week_end: str | None = None) -> dict:
     rows = db.line_a_pool(week_start, week_end)
     buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -54,7 +54,7 @@ def bucket_line_a(week_start: str | None = None, week_end: str | None = None) ->
     return dict(buckets)
 
 
-# ---------------------------------------------------------------- 线B 诉求门
+# ---------------------------------------------------------------- 社媒诉求门
 def intent_gate(rows: list[dict], ctx) -> tuple[list[dict], dict]:
     """规则门之后的 LLM 二分类。低置信也放行（R11：宁可多看不可漏）。"""
     RULE = re.compile(
@@ -142,11 +142,11 @@ def build_opportunity(items: list[dict], group: dict, line: str, ctx_info: dict,
                                 f'{ctx_info.get("tag") or ctx_info.get("channel","")}|'
                                 f'{group["mode_name"]}|'
                                 f'{obj.get("problem_mode") or obj.get("title") or ""}'),
-        "opp_type": "老品迭代" if line == "线A" else "新品创新",
+        "opp_type": "老品迭代" if line == "电商" else "新品创新",
         "src_line": line,
         "channel": ctx_info.get("channel"),
         "prod_line": ctx_info.get("prod_line"),
-        "category": ctx_info.get("category") if line == "线A" else "SOCIAL-NA",
+        "category": ctx_info.get("category") if line == "电商" else "SOCIAL-NA",
         "category_set": cats or None,
         # 兜底占位符不得落库：problem_mode 是向量化字段，写成「未命名模式」会让
         # 该条在 L2 召回里和什么都像，重演吸附器问题。

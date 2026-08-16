@@ -58,5 +58,5 @@ print(f"  现象段长度           min={ln[0]} p50={ln[n//2]} max={ln[-1]}")
 
 print("\n【覆盖率】")
 m = db.q("SELECT * FROM voc_weekly_metrics")[0]
-print(f"  线A 覆盖率           {m['line_a_coverage_pct']}%  （{m['line_a_attached']}/{m['line_a_pool']}）")
+print(f"  电商覆盖率           {m['line_a_coverage_pct']}%  （{m['line_a_attached']}/{m['line_a_pool']}）")
 print(f"  未归类留存           {m['unclassified_total']} 条")

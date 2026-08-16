@@ -15,7 +15,7 @@
 
 前置条件：
   Python 3.11+ 及项目依赖已安装；数据库连接和百炼/LLM 凭据已配置；事实层中
-  至少存在一个含 30--60 条证据的线A桶，并允许访问模型服务。本脚本只读数据库。
+  至少存在一个含 30--60 条证据的电商桶，并允许访问模型服务。本脚本只读数据库。
 """
 from __future__ import annotations
 import sys
@@ -41,11 +41,11 @@ ACT = re.compile("|".join(prompts.ACTIONS))
 runs = []
 for k in (1, 2):
     ctx = C.RunCtx(run_id=f"stab{k}", week="2026-W33")
-    split = stage1.split_bucket(items, "线A", info, ctx, vote=False)
+    split = stage1.split_bucket(items, "电商", info, ctx, vote=False)
     groups = stage1.merge_similar_modes(split["groups"], ctx)
     built = []
     for g in groups[:5]:                       # 每轮取前 5 组做 Stage2，控制成本
-        opp = pipeline.build_opportunity(items, g, "线A", info, ctx, [])
+        opp = pipeline.build_opportunity(items, g, "电商", info, ctx, [])
         if opp:
             built.append({"members": frozenset(g["members"]),
                           "mode": opp["problem_mode"], "title": opp["title"]})

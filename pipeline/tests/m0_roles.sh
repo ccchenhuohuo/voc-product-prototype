@@ -25,7 +25,7 @@ docker exec -i voc-postgres psql -U voc_admin -d voc -q \
   -c "DELETE FROM voc_opportunity WHERE opp_id='R-TEST';" >/dev/null 2>&1
 
 check "voc_writer 可写机会点表" ok "$(run voc_writer "$VOC_WRITER_PASSWORD" \
-  "INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title) VALUES ('R-TEST','老品迭代','线A','t','t');")"
+  "INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title) VALUES ('R-TEST','老品迭代','电商','t','t');")"
 check "voc_writer 不可写人工表" deny "$(run voc_writer "$VOC_WRITER_PASSWORD" \
   "INSERT INTO voc_opportunity_manual(opp_id,status,updated_by) VALUES ('R-TEST','项目中','w');")"
 check "voc_writer 可读人工表" ok "$(run voc_writer "$VOC_WRITER_PASSWORD" \

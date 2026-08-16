@@ -52,7 +52,7 @@ for oid, title, fw in (("EX-TARGET", "目标条目：强化磁吸", "2026-W20"),
                        ("EX-SOURCE", "源条目：磁力不足", "2026-W28")):
     db.execute("""INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title,
                     problem_mode,first_week,last_week,backlog)
-                  VALUES(%s,'老品迭代','线A','磁吸',%s,'磁吸模块吸附力不足',%s,%s,false)""",
+                  VALUES(%s,'老品迭代','电商','磁吸',%s,'磁吸模块吸附力不足',%s,%s,false)""",
                [oid, title, fw, fw])
 
 # 目标 1 条、源 2 条，其中 1 条两侧重合（验证 ON CONFLICT 不炸且不重复计数）
@@ -108,11 +108,11 @@ chk("重跑后血缘仍只有 1 条",
 # ---------- 5. 安全类不得机器合并 ----------
 db.execute("""INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title,
                 problem_mode,safety_flag,first_week,last_week)
-              VALUES('EX-SAFE','老品迭代','线A','耐用性','安全条目：支撑腿断裂',
+              VALUES('EX-SAFE','老品迭代','电商','耐用性','安全条目：支撑腿断裂',
                      '支撑腿在正常承重下断裂',true,'2026-W20','2026-W20')""")
 db.execute("""INSERT INTO voc_opportunity(opp_id,opp_type,src_line,core_tag,title,
                 problem_mode,first_week,last_week)
-              VALUES('EX-SAFE2','老品迭代','线A','耐用性','另一条：腿部开裂',
+              VALUES('EX-SAFE2','老品迭代','电商','耐用性','另一条：腿部开裂',
                      '腿部在受力后开裂','2026-W21','2026-W21')""")
 sid = db.q1("""INSERT INTO voc_proposal(op_type,opp_ids,rationale,week,status,decided_by)
                VALUES('MERGE',ARRAY['EX-SAFE','EX-SAFE2'],'疑似同一问题',%s,

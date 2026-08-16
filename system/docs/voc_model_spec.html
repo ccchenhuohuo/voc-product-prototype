@@ -88,7 +88,7 @@
   <div class="ico">🧭</div>
   <h1>VOC 机会模型规格</h1>
   <p class="sub">两层结构、两类卡片、一条生命周期。SPU 是长期挂载的容器，问题是有生死的条目；共性问题不进状态机，只作战略观察。本文是开发依据，所有数字取自库内实测。</p>
-  <div class="meta">规格 v1 · 2026-08-15 数据快照 · 代码基线为数据库迁移 001–012</div>
+  <div class="meta">规格 v1 · 2026-08-15 数据快照 · 代码基线为数据库迁移 001–014；013/014 本阶段未执行</div>
 </div></header>
 
 <div class="wrap"><main>
@@ -96,7 +96,7 @@
 <!-- ======================= 1 -->
 <section>
   <h2><span class="no">1</span>两层结构</h2>
-  <div class="callout"><span class="i">ℹ️</span><p><b>历史口径说明</b>：管道代码中的「线A / 线B」是发现路径名称，<b>线A等价于电商，线B等价于社媒</b>。<code>voc_opportunity.src_line</code> 保留「线A / 线B」，原始消息的 <code>voc_message.src_line</code> 使用「电商 / 社媒」；线别表示发现方，不限制后续交叉供证。</p></div>
+  <div class="callout"><span class="i">ℹ️</span><p><b>来源口径说明</b>：<code>voc_message.src_line</code> 与 <code>voc_opportunity.src_line</code> 均使用「电商 / 社媒」，表示消息或机会的发现来源，不限制后续交叉供证。<code>voc_opportunity.channel</code> 仍表示「需求缺口 / 竞品对标」，不是消息来源。</p></div>
   <p class="lede">核心判断：<b>状态机是项目生命周期</b>——「在跟进 → 项目中 → 已完成」隐含有人立项、有版本交付。用这把尺子量，跨 30 个型号的共性问题不可能有一个项目能"完成"它，强行入机只会变成看板上的僵尸。</p>
   <div class="tablewrap"><table>
     <tr><th>层</th><th>单位</th><th>进状态机</th><th>回答</th><th>实测量级</th></tr>
@@ -387,19 +387,20 @@
 <!-- ======================= 7 -->
 <section>
   <h2><span class="no">8</span>抽取与 SPU 层：已落地基线</h2>
-  <p class="lede">本节原列出的三项阻塞已经落地：产品与标签字段由迁移 <code>008_product_fields.sql</code> 补齐，SPU 容器、问题条目与共性度由 <code>009_spu_layer.sql</code> 建立；抽取映射以当前 <code>pipeline/voc_analytics/clean.py</code> 为准。</p>
+  <p class="lede">本节原列出的三项阻塞已经落地：产品与标签字段由迁移 <code>008_product_fields.sql</code> 补齐，SPU 容器、问题条目与共性度由 <code>009_spu_layer.sql</code> 建立；阶段一又在抽取层加入 SPU 规范化、白名单匹配和原值/未匹配值留痕，对应字段由 <code>014_spu_clean_fields.sql</code> 提供。抽取映射以当前 <code>pipeline/voc_analytics/clean.py</code> 为准，014 本阶段未执行。</p>
   <div class="tablewrap"><table>
     <tr><th>#</th><th>原问题</th><th>当前实现</th></tr>
     <tr><td>1</td><td><b>产品定级是多值导出</b></td>
         <td><code>clean.highest_grade()</code> 按 PS › S › A › B › C › D › 其他取最高级写入既有 <code>voc_message.product_grade</code>；<code>voc_spu.grade</code> 聚合时再次按同一顺序取值</td></tr>
     <tr><td>2</td><td><b>SPU / SKU / 型号未入库</b></td>
-        <td><code>voc_message.spu</code>、<code>sku</code>、<code>model</code> 已是数组字段；<code>voc_spu</code> 以拆开的 SPU 为主键并聚合品名与 SKU。当前物化视图不暴露 <code>model</code></td></tr>
+        <td><code>voc_message.spu</code>、<code>sku</code>、<code>model</code> 已是数组字段；阶段一规定 <code>spu_raw</code> 保留拆分后的原始 token，<code>spu</code> 只保存规范化且命中电商白名单的编码，<code>spu_unmatched</code> 留存未命中的原始 token。<code>voc_spu</code> 以拆开的规范化 SPU 为主键并聚合品名与 SKU；当前物化视图不暴露 <code>model</code></td></tr>
     <tr><td>3</td><td><b><code>tax_l1</code> 是树名而非业务层级</b></td>
         <td><code>voc_evidence.tax_stage / tax_domain / tax_sub / tax_leaf</code> 已按 <code>tax_path</code> 固定位置提取；<code>tax_l1</code> 明确标为 deprecated，应用筛选与面包屑读取新字段</td></tr>
   </table></div>
-  <h3>迁移 008 增加的字段</h3>
+  <h3>迁移 008 与 014 增加的字段</h3>
   <pre><code>voc_message
-  spu text[] · sku text[] · model text[]
+  spu_raw text[] · spu text[] · spu_unmatched text[]
+  sku text[] · model text[]
   launch_period text · prod_line text · is_own_brand boolean
 
 voc_evidence
@@ -428,8 +429,8 @@ voc_spu_issue_manual        -- 普通表；重算永不覆盖
 
 voc_opportunity             -- 共性问题 / 新品创新共用的机器表
   opp_type                  -- 老品迭代 / 新品创新
-  src_line                  -- 线A / 线B（等价于电商 / 社媒的发现路径）
-  channel                   -- 线B子类型：需求缺口 / 竞品对标；不是消息来源
+  src_line                  -- 电商 / 社媒（发现来源）
+  channel                   -- 业务子类型：需求缺口 / 竞品对标；不是消息来源
   n_eff · scope             -- 迁移 009 新增；无 SPU 挂靠时同时为 NULL
   merged_into · released_at -- 分别由迁移 006 / 007 新增
 
@@ -451,7 +452,7 @@ voc_spu_issue_log / voc_status_log
     <tr><th>原问题</th><th>结论</th></tr>
     <tr><td>容器身份用 <code>SPU_</code> 还是 <code>品名_</code></td><td>主键用 <b>SPU_</b>（91.6% 覆盖），展示用品名_；<code>型号_</code> 仅 23.2% 覆盖，不可当主键</td></tr>
     <tr><td>一 SPU 多品名是否拆卡</td><td><b>合并一张</b>，多品名与 SKU 以数组列在卡内——PM 立项按 SPU</td></tr>
-    <tr><td>社媒老品迭代（挂不到 SPU）怎么处置</td><td>目标方向是<b>归入战略层</b>作为无产品挂靠的共性问题，但当前尚未落地：线B固定生成「新品创新」，当前遍历的 <code>DEWATER_GAP / DEWATER_COMP</code> 通道集合也不包含「用户使用体验」；是否捡回及如何挂靠留待后续实现</td></tr>
+    <tr><td>社媒老品迭代（挂不到 SPU）怎么处置</td><td>目标方向是<b>归入战略层</b>作为无产品挂靠的共性问题，但当前尚未落地：社媒仍固定生成「新品创新」，当前遍历的 <code>DEWATER_GAP / DEWATER_COMP</code> 通道集合也不包含「用户使用体验」；是否捡回及如何挂靠留待后续实现</td></tr>
   </table></div>
 
   <h3>仍未决</h3>
@@ -459,5 +460,5 @@ voc_spu_issue_log / voc_status_log
   <div class="q"><span class="qid">Q2</span><code>rank_score</code> 是否纳入<b>扩散因子</b>？当前公式为「证据数 × (1 + 低星率) × 双源系数（双源为 1.5，否则 1）+ 安全项（安全类 +1000）」，没有纳入 <code>n_eff</code>。相同证据与低星结构下，跨 30 型号与集中在 1 个产品的排序分相同；加入扩散因子会改变 PM 看到的顺序。</div>
 </section>
 
-<footer>VOC 机会模型规格 v1 · 2026-08-15 数据快照 · SPU/SKU 与标签层级已由迁移 008、抽取映射及迁移 009 派生层落地</footer>
+<footer>VOC 机会模型规格 v1 · 2026-08-15 数据快照 · SPU/SKU 与标签层级已由迁移 008、抽取映射及迁移 009 派生层落地；阶段一字段对齐至迁移 014，013/014 未执行</footer>
 </main></div>
