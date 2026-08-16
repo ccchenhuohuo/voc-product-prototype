@@ -15,9 +15,12 @@ BEGIN
   END IF;
 END $$;
 
--- 先与周度 REFRESH 序列化，再取机会/证据表锁，避免刷新函数
--- 已持有物化视图锁时与迁移形成反向等待。受控窗口仍应停止调度。
-LOCK TABLE public.voc_spu_issue IN ACCESS EXCLUSIVE MODE;
+-- 与周度 REFRESH 的串行化靠下方 DROP MATERIALIZED VIEW 自带的 ACCESS EXCLUSIVE 锁：
+-- REFRESH 与 DROP 争的是同一把物化视图锁，先到先得，不会并发。
+-- 这里不能写 LOCK TABLE voc_spu_issue —— PostgreSQL 明确拒绝对物化视图加显式表锁
+-- （cannot lock relation ... not supported for materialized views），2026-08-17 实测。
+-- 真正的保护仍是受控窗口：执行前停止 Dagster 调度。
+LOCK TABLE public.voc_opportunity, public.voc_opp_evidence IN SHARE ROW EXCLUSIVE MODE;
 
 ALTER TABLE voc_opportunity
   ADD COLUMN IF NOT EXISTS classification_state text NOT NULL DEFAULT '确定'
