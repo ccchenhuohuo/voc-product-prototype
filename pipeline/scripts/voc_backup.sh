@@ -14,7 +14,10 @@ set -euo pipefail
 CONTAINER=voc-postgres
 LOCAL=/opt/backups/voc
 STAMP=$(date +%Y%m%d_%H%M%S)
-HUMAN_TABLES="voc_opportunity_manual voc_status_log voc_proposal"
+# 人工数据不可再生，必须进独立备份包。009 的两张 SPU 人工层与 007 的
+# voc_pm_pref 曾长期遗漏，2026-08-16 补入。新增人工表时同步加到这里。
+HUMAN_TABLES="voc_opportunity_manual voc_status_log voc_proposal \
+              voc_spu_issue_manual voc_spu_issue_log voc_pm_pref"
 
 sudo mkdir -p "$LOCAL"; sudo chown "$(id -u):$(id -g)" "$LOCAL"
 
