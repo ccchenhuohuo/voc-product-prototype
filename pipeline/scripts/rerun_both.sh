@@ -1,3 +1,24 @@
+# bash 的 wait 没有 -t 选项（用法只有 [-fn] [-p var] [id ...]），
+# 2026-08-17 实测报 "wait: -t: invalid option" 并使整段监督失效。
+# 这里用轮询实现有上限的等待：进程退出则 wait 收退出码，超时则留空
+# finished_pid 让调用方走 KILL 分支。
+wait_with_timeout() {
+  local pid="$1" limit="$2" pid_var="$3" rc_var="$4"
+  local waited=0 rc=0
+  while kill -0 "$pid" 2>/dev/null && (( waited < limit )); do
+    sleep 1
+    (( waited++ )) || true
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    printf -v "$pid_var" '%s' ""      # 超时未退出
+    printf -v "$rc_var"  '%s' "124"
+  else
+    if wait "$pid"; then rc=0; else rc=$?; fi
+    printf -v "$pid_var" '%s' "$pid"
+    printf -v "$rc_var"  '%s' "$rc"
+  fi
+}
+
 #!/usr/bin/env bash
 # 清库 + 两个生命周期并行重跑 + 统一收尾。
 # 用法：bash ~/voc-analytics/scripts/rerun_both.sh
@@ -12,7 +33,7 @@
 # 等老品迭代与新品创新两个生命周期都成功后再统一做一遍。
 set -euo pipefail
 
-# wait -n -p/-t 是监督正确性的硬依赖。必须在停止进程、清库等任何
+# 有超时的子进程监督是正确性硬依赖（见 wait_with_timeout）。必须在停止进程、清库等任何
 # 破坏性动作之前失败，不能等后台任务已启动后才发现系统 Bash 过旧。
 if (( BASH_VERSINFO[0] < 5 ||
       (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then
@@ -64,11 +85,7 @@ terminate_and_drain() {
   # Python 收到 TERM 后会发布协作取消、停止重试，并尽量等当前在飞 I/O
   # 返回后写失败 run log。70 秒覆盖正常的 60 秒 HTTP 上限；若底层 I/O
   # 仍不响应而被 KILL，该 lifecycle 日志可能缺失，整个共享 run 必须判不完整。
-  if wait -n -p finished_pid -t 70 "$pid"; then
-    rc=0
-  else
-    rc=$?
-  fi
+  wait_with_timeout "$pid" 70 finished_pid rc
   if [[ -z "$finished_pid" ]]; then
     echo "!! pid=$pid 在 70 秒内未回应 TERM，发送 KILL。"
     kill -KILL "$pid" 2>/dev/null || true
@@ -89,11 +106,7 @@ wait_publisher_and_drain() {
 
   # 该进程是共享 fatal 的首因发布者，不向它发送 TERM，以免打断
   # shutdown(wait=True) 后的稳定账本；给同样的 70 秒自然退出窗口。
-  if wait -n -p finished_pid -t 70 "$pid"; then
-    rc=0
-  else
-    rc=$?
-  fi
+  wait_with_timeout "$pid" 70 finished_pid rc
   if [[ -z "$finished_pid" ]]; then
     echo "!! fatal 发布者 pid=$pid 在 70 秒内未退出，发送 KILL。"
     kill -KILL "$pid" 2>/dev/null || true
