@@ -173,12 +173,16 @@ def generation_pool(week_start: str | None = None,
        -- 两者不可互代，否则「用户使用体验」仍然会被漏掉。
        CROSS JOIN LATERAL (
          SELECT
+           -- 不再按 low_conf 过滤（改造项 #2「去掉星级过滤」）。
+           -- low_conf 是「负面标签 + 4~5 星」的交叉校验，本意是挡误标，
+           -- 但实测它挡掉 2,066 条产品体验证据（7,743 -> 9,809，+27%），
+           -- 而高星用户同样会写真实缺陷（「很好用，就是卡扣有点松」）。
+           -- 需求方定性：覆盖度优先，不设星级过滤。
+           -- low_conf 标记本身仍保留在证据上，下游要降权或抽检随时可用。
            (e.is_product
-            AND NOT e.low_conf
             AND e.sentiment = '负面'
             AND NULLIF(btrim(e.snippet), '') IS NOT NULL) AS product_experience,
            (COALESCE(m.content_type, ARRAY[]::text[]) && r.experience_tags
-            AND NOT e.low_conf
             AND e.sentiment = '负面'
             AND NULLIF(btrim(e.snippet), '') IS NOT NULL) AS user_experience,
            (COALESCE(m.content_type, ARRAY[]::text[]) && r.comparison_tags
