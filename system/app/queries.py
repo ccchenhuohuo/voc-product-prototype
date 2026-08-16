@@ -10,12 +10,14 @@ SELECT
      JOIN voc_opportunity o ON o.opp_id = i.opp_id
     WHERE o.merged_into IS NULL) AS iter,
   (SELECT count(*)::int
-     FROM voc_opportunity o
+    FROM voc_opportunity o
     WHERE o.opp_type = '新品创新'
+      AND o.classification_state = '确定'
       AND o.merged_into IS NULL) AS inno,
   (SELECT count(*)::int
-     FROM voc_opportunity o
+    FROM voc_opportunity o
     WHERE o.scope = '品线级'
+      AND o.classification_state = '确定'
       AND o.merged_into IS NULL) AS strategy,
   (SELECT count(*)::int FROM voc_spu s) AS search,
   (SELECT count(*)::int
@@ -284,6 +286,7 @@ SELECT o.opp_id, o.title, o.channel, o.prod_line, o.core_tag,
   LEFT JOIN evidence_agg a ON a.opp_id = o.opp_id
   LEFT JOIN brand_agg b ON b.opp_id = o.opp_id
  WHERE o.opp_type = '新品创新'
+   AND o.classification_state = '确定'
    AND o.merged_into IS NULL
  ORDER BY o.rank_score DESC NULLS LAST,
           COALESCE(a.interactions, 0) DESC,
@@ -508,7 +511,10 @@ WITH keys AS (
   UNION
   SELECT m.spu, m.opp_id
     FROM voc_spu_issue_manual m
+    JOIN voc_opportunity o ON o.opp_id = m.opp_id
    WHERE m.spu = %s
+     AND o.classification_state = '确定'
+     AND o.opp_type = '老品迭代'
 ), evidence_agg AS (
   SELECT k.spu, k.opp_id,
          count(*)::int AS actual_evi_count,
@@ -613,7 +619,9 @@ SELECT k.spu, k.opp_id,
   LEFT JOIN voc_spu s ON s.spu = k.spu
   LEFT JOIN evidence_agg a
     ON a.spu = k.spu AND a.opp_id = k.opp_id
- WHERE i.opp_id IS NOT NULL OR m.opp_id IS NOT NULL
+ WHERE (i.opp_id IS NOT NULL OR m.opp_id IS NOT NULL)
+   AND o.classification_state = '确定'
+   AND o.opp_type = '老品迭代'
 """
 
 
@@ -676,6 +684,7 @@ SELECT o.opp_id, o.opp_type, o.channel, o.prod_line, o.core_tag, o.title,
   LEFT JOIN brand_agg b ON b.opp_id = o.opp_id
  WHERE o.opp_id = %s
    AND o.opp_type = '新品创新'
+   AND o.classification_state = '确定'
    AND o.merged_into IS NULL
 """
 
@@ -712,6 +721,7 @@ SELECT o.opp_id, o.title, o.prod_line, o.core_tag, o.n_eff, o.scope,
   FROM voc_opportunity o
   LEFT JOIN spread s ON s.opp_id = o.opp_id
  WHERE o.merged_into IS NULL
+   AND o.classification_state = '确定'
    AND o.scope IN ('品线级', '多品', '单品')
  ORDER BY o.n_eff DESC NULLS LAST, o.evi_total DESC, o.opp_id
 """
@@ -775,9 +785,12 @@ SELECT m.spu, m.opp_id, m.baseline_evi_count,
   FROM voc_spu_issue_manual m
   LEFT JOIN voc_spu_issue i
     ON i.spu = m.spu AND i.opp_id = m.opp_id
+  JOIN voc_opportunity o ON o.opp_id = m.opp_id
   JOIN voc_opp_evidence oe ON oe.opp_id = m.opp_id
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE m.status = '已完成'
+   AND o.classification_state = '确定'
+   AND o.opp_type = '老品迭代'
    AND m.release_date IS NOT NULL
    AND m.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
    AND msg.publish_time::date > m.release_date

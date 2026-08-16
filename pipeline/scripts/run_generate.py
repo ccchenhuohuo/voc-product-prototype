@@ -24,11 +24,6 @@ from voc_analytics import config as C, db, lifecycle, llm, pipeline, resolve  # 
 from voc_analytics.stages import stage1  # noqa: E402
 
 
-# 落库逻辑已移入 voc_analytics.pipeline，与 Dagster 资产共用——
-# 这里保留同名薄封装，只是把 verbose 打开（脚本要在终端看进度）。
-recount = pipeline.recount
-
-
 def _persist(pairs: list, week: str, ctx) -> list[str]:
     return pipeline.persist_opportunities(pairs, week, ctx, verbose=True)
 
@@ -144,11 +139,11 @@ def main() -> int:
 
     # ---------------- 跨线汇聚 ----------------
     print("\n[跨线汇聚]")
-    def _cross(oid: str) -> tuple[str, int]:
+    def _cross(oid: str) -> tuple[str, list[dict]]:
         row = db.q("SELECT mode_vec::text v, core_tag, src_line FROM voc_opportunity "
                    "WHERE opp_id=%s", [oid])
         if not row or not row[0]["v"]:
-            return oid, 0
+            return oid, []
         vec = [float(x) for x in row[0]["v"].strip("[]").split(",")]
         return oid, resolve.cross_line_merge(oid, vec, row[0]["core_tag"],
                                              row[0]["src_line"], a.week, ctx)
@@ -156,9 +151,10 @@ def main() -> int:
     for res in llm.parallel_map(_cross, sorted(set(created))):
         if not isinstance(res, tuple):
             continue
-        oid, k = res
-        if k:
-            recount(oid); n_cross += k
+        oid, attached = res
+        if attached:
+            k = pipeline.attach_evidence(oid, attached)
+            n_cross += k
             print(f"  {oid}  +{k} 条对侧证据", flush=True)
     print(f"  跨线挂载合计 {n_cross} 条")
 

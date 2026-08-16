@@ -115,6 +115,23 @@ def test_manual_only_issue_is_kept_as_history_with_live_evidence_fallback():
     )
 
 
+def test_manual_spu_history_cannot_reintroduce_innovations():
+    spu_manual_branch = compact(Q.SPU_ISSUES).split("union", 1)[1].split(
+        "), evidence_agg as", 1
+    )[0]
+    assert "o.classification_state = '确定'" in spu_manual_branch
+    assert "o.opp_type = '老品迭代'" in spu_manual_branch
+
+    detail_filter = compact(Q.ISSUE_DETAIL).split(" where ", 1)[-1]
+    assert "o.classification_state = '确定'" in detail_filter
+    assert "o.opp_type = '老品迭代'" in detail_filter
+
+    completed_revival = compact(Q.REVIVE_COMPLETED)
+    assert "join voc_opportunity o on o.opp_id = m.opp_id" in completed_revival
+    assert "o.classification_state = '确定'" in completed_revival
+    assert "o.opp_type = '老品迭代'" in completed_revival
+
+
 def test_spu_medians_are_computed_from_all_spus():
     text = compact(Q.SPU_DETAIL)
     assert text.count("percentile_cont(0.5)") == 2
@@ -136,6 +153,18 @@ def test_innovation_rollups_use_all_evidence_without_brand_multiplication():
 
 def test_strategy_counts_distinct_spus():
     assert "count(distinct i.spu)" in compact(Q.STRATEGY_OPPORTUNITIES)
+
+
+def test_opportunity_boards_exclude_invalid_classifications():
+    for sql in (
+        Q.SHELL_COUNTS,
+        Q.BOARD_INNOVATIONS,
+        Q.SPU_ISSUES,
+        Q.ISSUE_DETAIL,
+        Q.INNOVATION_DETAIL,
+        Q.STRATEGY_OPPORTUNITIES,
+    ):
+        assert "classification_state = '确定'" in compact(sql)
 
 
 def test_new_read_queries_use_explicit_join_conditions():

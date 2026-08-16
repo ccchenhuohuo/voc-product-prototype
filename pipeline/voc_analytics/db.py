@@ -66,11 +66,19 @@ def _upsert(c, table: str, rows: list[dict], keys: Sequence[str],
 
 def upsert(table: str, rows: list[dict], keys: Sequence[str],
            update_cols: Sequence[str] | None = None, chunk: int = 1000) -> int:
-    n = 0
     with conn() as c:
-        for i in range(0, len(rows), chunk):
-            n += _upsert(c, table, rows[i:i + chunk], keys, update_cols) or 0
+        n = upsert_in_transaction(c, table, rows, keys, update_cols, chunk)
         c.commit()
+    return n
+
+
+def upsert_in_transaction(c, table: str, rows: list[dict], keys: Sequence[str],
+                          update_cols: Sequence[str] | None = None,
+                          chunk: int = 1000) -> int:
+    """在调用方已开启的事务内 upsert，不自行提交。"""
+    n = 0
+    for i in range(0, len(rows), chunk):
+        n += _upsert(c, table, rows[i:i + chunk], keys, update_cols) or 0
     return n
 
 
@@ -102,11 +110,15 @@ def line_a_pool(week_start: str | None = None, week_end: str | None = None) -> l
     """电商生成池：产品体验分支 + 负面 + 非误标 + 有片段（§4.3）"""
     sql = """
       SELECT e.message_id, e.seq, e.tag, e.snippet, e.tax_path,
-             m.category, m.star, m.country, m.product_name, m.platform, m.lang
+             m.category, m.star, m.country, m.product_name, m.platform, m.lang,
+             m.src_line, m.spu
         FROM voc_evidence e JOIN voc_message m USING (message_id)
        WHERE e.is_product AND NOT e.low_conf
          AND e.sentiment = '负面' AND e.snippet IS NOT NULL
          AND m.src_line = '电商'
+         -- 电商消息理论上必须挂 SPU；未挂载是上游数据缺陷，
+         -- 不应进入生成池产出新的机会点（分类契约 R3）。
+         AND cardinality(m.spu) > 0
     """
     params: list = []
     if week_start:
@@ -121,7 +133,7 @@ def line_b_pool(channel_types: Sequence[str], week_start: str | None = None,
                 week_end: str | None = None, multi_brand_only: bool = False) -> list[dict]:
     sql = """
       SELECT m.message_id, m.content, m.content_zh, m.platform, m.interactions,
-             m.brands, m.content_type, m.url, m.lang
+             m.brands, m.content_type, m.url, m.lang, m.src_line, m.spu
         FROM voc_message m
        WHERE m.src_line = '社媒' AND m.content_type && %s
     """
@@ -140,14 +152,16 @@ def low_conf_intersection() -> dict:
     """PRD §4.2 要求 M1 算出的交集：low_conf 与【电商】可生成池的关系。
 
     必须过滤 src_line='电商' —— 电商的定义就是电商评论。早期漏了这个条件，
-    把社媒证据也算进池子，会把覆盖率分母虚高近一倍。
+    把社媒证据也算进池子，会把覆盖率分母虚高近一倍。可生成池还必须与
+    ``line_a_pool`` 的 R3 入池契约一致：未挂 SPU 的电商消息是数据缺陷。
     """
     return q("""
       WITH pool AS (
         SELECT e.low_conf
           FROM voc_evidence e JOIN voc_message m USING(message_id)
          WHERE e.is_product AND e.sentiment='负面' AND e.snippet IS NOT NULL
-           AND m.src_line='电商')
+           AND m.src_line='电商'
+           AND cardinality(m.spu) > 0)
       SELECT
         (SELECT count(*) FROM voc_evidence WHERE low_conf)  AS low_conf_total,
         (SELECT count(*) FROM pool WHERE low_conf)          AS low_conf_in_pool,

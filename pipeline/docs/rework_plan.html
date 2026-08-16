@@ -74,7 +74,7 @@
 <header class="doc">
   <div class="ico">🔧</div>
   <h1>管道改造计划</h1>
-  <p class="sub">七项改动，三个阶段。核心是把「分类由渠道决定」这个结构性错误改掉，同时把被过度过滤掉的数据放回来。</p>
+  <p class="sub">七项改动，三个主阶段（阶段二拆为 2a / 2b）。核心是把「分类由渠道决定」改为「分类由机会点的 SPU 证据挂载决定」，并把代码交付与受控执行明确分开。</p>
   <p class="meta">2026-08-16 · 全部量级为库内实测 · 配套〈数据管道重构〉与〈VOC 数据架构〉</p>
 </header>
 
@@ -86,8 +86,8 @@
 
   <div class="tablewrap"><table>
     <tr><th>#</th><th>改动</th><th>现状 → 目标</th><th>性质</th></tr>
-    <tr><td class="n">1</td><td><b>分类改由内容判定</b></td>
-      <td><code>opp_type</code> 由渠道写死 → 由证据内容三分类</td><td><span class="tag t-llm">重跑生成</span></td></tr>
+    <tr><td class="n">1</td><td><b>分类改由 SPU 挂载判定</b></td>
+      <td><code>opp_type</code> 由渠道写死 → 按机会点证据集合执行 R0–R3；有效性另记在 <code>classification_state</code></td><td><span class="tag t-code">代码 + 015；2b 执行</span></td></tr>
     <tr><td class="n">2</td><td><b>去掉星级过滤</b></td>
       <td>生成池 <span class="n">4,232</span> → <span class="n">6,500</span>（放回 2,268 条）</td><td><span class="tag t-llm">重跑生成</span></td></tr>
     <tr><td class="n">3</td><td><b>社媒接入老品迭代</b></td>
@@ -102,7 +102,7 @@
       <td>代码、文档与机会层来源值统一为 电商 / 社媒；<code>channel</code> 保持需求缺口 / 竞品对标</td><td><span class="tag t-code">代码 + 迁移脚本</span></td></tr>
   </table></div>
 
-  <div class="callout"><span class="i">💡</span><p><b>只有 #1 和 #2 需要重跑 LLM</b>，但它们必须一起跑——都改的是生成池与生成逻辑，分两次跑等于白跑一次。其余五项加起来几分钟。</p></div>
+  <div class="callout"><span class="i">💡</span><p><b>#1 不再交给 LLM 判型。</b>现存机会点由迁移 <code>015_classification_contract.sql</code> 确定性回填，后续生成由纯函数根据完整证据集合分类；#2 才会扩大 LLM 生成池。代码与迁移在 2a 交付但不执行，受控迁移与重跑统一留到 2b。</p></div>
 </section>
 
 <section>
@@ -113,7 +113,7 @@
     <li><b>#5 必须在 #3 之前</b>——社媒接入老品迭代靠 SPU 匹配，编码没规范化就对不上号（<code>MT-79</code> 和 <code>MT79</code> 会被当成两个产品）。</li>
     <li><b>#6 从「剔除」改成「不筛」</b>——原方案要用电商 SPU 集合做白名单反向剔除第三方型号。实测推翻了这个前提：社媒 2,561 条带 SPU 的消息，<code>brands</code> 100% 含本品；<code>NP-FZ100</code> 是本品 Tagbatt 兼容电池沿用索尼电池规格命名，不是竞品。按原方案执行会为拦 6 条而误删约 1,380 条本品消息。<b>「社媒独有 SPU 要不要成卡」是展示层口径，移到阶段三的 <code>voc_spu</code> 里定，抽取层不销毁数据。</b></li>
     <li><b>#7 必须在最前或最后</b>——它碰所有文件。夹在中间做，会和 #1 的改动在同一批文件上冲突。<b>决定放最前</b>：后续所有改动都在新口径上写，避免刚改完又要再改一遍。</li>
-    <li><b>#1 #2 必须同批重跑</b>——池子扩大 54% 和分类规则改变都只在生成时生效，跑两次是纯浪费 3 小时。</li>
+    <li><b>#1 #2 的代码必须在重跑前同时就位</b>——#1 可先用迁移重算现存 645 个机会点，且本身不需要 LLM；但 2b 若执行全量生成，必须让扩大后的池子直接使用新的证据集合分类函数，不能再落回渠道判据。</li>
     <li><b>#4 不动</b>——条目阈值维持 <code>≥2</code>。它是展示层口径，改它会和新数据的覆盖率变化混在一起，验收时分不清增量来自哪边；先把数据本身做对，阈值留到有真实效果可看时再单独议。</li>
   </ul>
 
@@ -121,7 +121,7 @@
 </section>
 
 <section>
-  <h2><span class="no">3</span>三个阶段</h2>
+  <h2><span class="no">3</span>三个主阶段</h2>
   <p class="lede">每个阶段结束都有一道验收闸门，<b>不过闸门不进下一阶段</b>。验收口径全部在动手之前定死，不允许跑完再补。</p>
 
   <div class="phase">
@@ -136,22 +136,44 @@
   </div>
 
   <div class="phase">
-    <div class="ph"><span class="num">阶段二</span><span class="nm">分类改造 + 全量重跑生成</span>
-      <span class="cost">改代码 + 重跑 LLM · 约 3.5 小时</span></div>
+    <div class="ph"><span class="num">阶段 2a</span><span class="nm">SPU 分类契约落地</span>
+      <span class="cost">代码 + 迁移脚本 · 本轮不执行</span></div>
     <div class="pb">
-      <p>做 <b>#1 分类改由内容判定</b>、<b>#2 去掉星级过滤</b>，然后<b>清空机会点层全量重跑</b>。</p>
-      <p><b>分类规则</b>：LLM 依据证据内容三选一——证据主要在讲<b>我们某个在售产品</b>的问题 → 老品迭代；讲<b>竞品</b>的问题或<b>没有对应在售产品的需求</b> → 新品创新；判不准 → 新品创新 + 打「待人工判定」。渠道不再参与判定。</p>
-      <p><b>星级过滤</b>：<code>low_conf</code> 标记<b>保留但不再用于过滤</b>。证据照进生成池，界面上给弱提示，判断权交给 PM。用满意度否定具体抱怨，逻辑本身站不住。</p>
-      <div class="gate"><b>闸门 B</b>：① 生成池实际规模 ≥6,500（证明星级过滤已解除）；② 新的 <code>opp_type</code> 分布中，<b>老品迭代不再等于电商机会点数</b>（证明分类已脱离渠道）；③ 抽样 30 条新品创新人工核对，<b>误分类率 &lt;10%</b>；④ <code>voc_opp_lineage</code> 归零（融合债已清）；⑤ 引文溯源率与重跑前持平或更好（不低于 96%）。</div>
+      <p>做 <b>#1 分类改由 SPU 挂载判定</b>，并补齐生成池、SPU 展开层与清理脚本的安全约束。分类函数只读取<b>该机会点的完整证据集合</b>，按先命中先生效执行：</p>
+      <div class="tablewrap"><table>
+        <tr><th>规则</th><th>条件</th><th>结果</th></tr>
+        <tr><td class="n">R0</td><td>零条证据</td><td><code>classification_state='无效'</code></td></tr>
+        <tr><td class="n">R1</td><td>任一证据所属消息 <code>cardinality(spu) &gt; 0</code></td><td><code>老品迭代 / 确定</code></td></tr>
+        <tr><td class="n">R2</td><td>无 SPU，且证据集合包含社媒来源</td><td><code>新品创新 / 确定</code></td></tr>
+        <tr><td class="n">R3</td><td>无 SPU，且证据全部来自电商</td><td><code>classification_state='无效'</code></td></tr>
+      </table></div>
+      <p><b>实现假设（待 2b 受控验证）</b>：R0 / R3 的 <code>opp_type</code> 置为 <code>NULL</code>，不向 <code>opp_type</code> 塞入第三种值；无 SPU 的电商与社媒混合证据，只要包含社媒即由 R2 命中。这两点是当前实现对机会级规则的明确化，不冒充已经执行验证的库内事实。</p>
+      <p><code>015_classification_contract.sql</code> 增加 <code>classification_state</code> 与 <code>classify_rule</code>，按 R0–R3 回填全部存量，并用 <code>voc_opp_evidence</code> 实际行数对账全部 <code>evi_total</code>。R0 / R3 只打「无效」标记，<b>不删除机会点或证据</b>；看板按状态排除，诊断链仍完整。</p>
+      <p>同一迁移重建 <code>voc_spu_issue</code>：用 <code>opp_type='老品迭代'</code> 且 <code>classification_state='确定'</code> 约束机会点，替换旧的纯 <code>m.src_line='电商'</code> 收录口径，使已挂 SPU 的社媒证据可进入对应老品卡；<code>HAVING count(*) &gt;= 2</code> 原样保留。</p>
+      <p><code>line_a_pool</code> 排除消息 SPU 为空的电商证据，因为这属于上游数据缺陷，不应继续生成机会点。分类写成不连库的纯函数，并覆盖 R0–R3、跨多 SPU、混合渠道无 SPU 和零证据边界。</p>
+      <p><code>rerun_both.sh</code> 的清理段改为单一事务，并启用 <code>set -euo pipefail</code>：任一外键或语句失败即整段回滚，不再留下「关系表已清、机会点仍在」的半清库。本阶段只改脚本，不运行清理、SQL、数据库连接或生成管道。</p>
+      <div class="gate"><b>闸门 B-2a（代码闸门）</b>：① 纯函数与边界单测通过；② 静态检查确认新机会不再使用渠道三元表达式判型；③ 迁移自检写死 <code>264 / 368 / 13 / 645</code>，且 <code>classify_rule IS NULL</code> 为 0；④ <code>voc_spu_issue</code> 同时具备类型与状态约束，阈值仍为 <code>≥2</code>；⑤ 清理语句处于同一事务。<b>本闸门不执行 015，也不把断言数字写成迁移结果。</b></div>
+      <div class="callout"><span class="i">⚠️</span><p><b><code>015</code> 目前只是代码交付，未执行。</b><span class="n">264</span> 条老品迭代、<span class="n">368</span> 条新品创新、<span class="n">13</span> 条无效、总计 <span class="n">645</span> 是迁移事务内的预期断言，不是本轮已经验证的库内分布。</p></div>
     </div>
   </div>
 
   <div class="phase">
-    <div class="ph"><span class="num">阶段三</span><span class="nm">展开层口径调整</span>
+    <div class="ph"><span class="num">阶段 2b</span><span class="nm">受控迁移 + 生成重跑</span>
+      <span class="cost">另行授权执行 · 预计约 3.5 小时</span></div>
+    <div class="pb">
+      <p>由验收方在备份与回退条件具备后，另行执行 <code>015</code>、独立复算分类与证据计数，再决定是否做 <b>#2 去掉星级过滤</b>及全量生成重跑。2a 不自动进入 2b，也不以代码检查替代真实数据库验收。</p>
+      <p><b>星级过滤</b>：<code>low_conf</code> 标记保留但不再用于过滤；若批准重跑，证据进入扩大的生成池，而生成出的每个机会点仍由完整证据集合执行 R0–R3。电商无 SPU 证据在池入口即被挡住，不会以 R3 为代价批量制造无效机会。</p>
+      <p>若受控重跑调用清理脚本，必须先验证单事务回滚行为；R0 / R3 的「无效」标记不是清理指令，不能据此删除机会点或证据。</p>
+      <div class="gate"><b>闸门 B-2b（数据闸门）</b>：① <code>015</code> 成功时分布严格为老品迭代/确定 <code>264</code>、新品创新/确定 <code>368</code>、无效 <code>13</code>、总计 <code>645</code>，规则空值为 0；② 全部 <code>evi_total</code> 与关系表实际行数一致；③ 独立复算确认 R0–R3 命中顺序和看板无效过滤；④ 重跑若获批准，生成池规模、引文溯源率与分类分布另行记录，不沿用 2a 的静态断言冒充实测；⑤ 任一清理失败均保持原数据完整。</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="ph"><span class="num">阶段三</span><span class="nm">展开层后续口径调整</span>
       <span class="cost">纯 SQL · 分钟级</span></div>
     <div class="pb">
-      <p>只做 <b>#3 社媒接入老品迭代</b>。改的是 <code>voc_spu</code> 与 <code>voc_spu_issue</code> 两个物化视图的口径；<b>条目阈值保持 <code>≥2</code> 不动</b>。</p>
-      <p>两个视图现在都硬编码 <code>WHERE src_line='电商'</code>，要改成按 SPU 归属而非按渠道收录。<b>社媒证据只有能匹配到在售 SPU 的才进</b>，匹配不上的仍归战略层，不凭空造产品卡。</p>
+      <p>继续做 <b>#3 社媒接入老品迭代</b>的剩余展示层工作。<code>voc_spu_issue</code> 的分类安全约束已前移到 2a，阶段三不再重复改判型契约；<b>条目阈值保持 <code>≥2</code> 不动</b>。</p>
+      <p><code>voc_spu</code> 等后续展示口径按 SPU 归属而非渠道展开。<b>社媒证据只有能匹配到在售 SPU 的才进</b>，匹配不上的仍归战略层，不凭空造产品卡。</p>
       <div class="gate"><b>闸门 C</b>：① SPU 卡覆盖 ≥162 个；② 每张卡的证据数 = 电商证据 + 社媒可匹配证据，抽 3 个 SPU 独立复算比对；③ 阈值仍为 <code>≥2</code>，且被挡掉的单证据条目在事实层与战略层可全数查到（覆盖度没有因阈值而丢失）；④ <b>人工表零污染</b>——<code>voc_spu_issue_manual</code> 与审计日志在整个改造期间保持为 0。</div>
     </div>
   </div>
@@ -159,7 +181,7 @@
 
 <section>
   <h2><span class="no">4</span>验收方法</h2>
-  <p class="lede">不采信任何自报结果。每道闸门的口径都用独立于实现的方式复算。</p>
+  <p class="lede">不采信任何自报结果。每道闸门的口径都用独立于实现的方式复算；涉及 SQL、真库与管道的动作全部属于 2b 或后续阶段，本轮 2a 不执行。</p>
 
   <div class="tablewrap"><table>
     <tr><th>验收动作</th><th>怎么做</th></tr>
@@ -170,14 +192,14 @@
     <tr><td><b>零残留检查</b></td><td>每阶段结束确认人工表、审计表、哨兵周产出全部为 0</td></tr>
   </table></div>
 
-  <div class="callout"><span class="i">⚠️</span><p><b>阶段二开始前必须先备份。</b>全量重跑会清空机会点层，这是本次唯一不可逆的操作。现在的备份是手动打的、落在容器内 <code>/tmp</code>，<b>异地备份至今没配</b>——这是我的运维债，阶段二动手前先补上。</p></div>
+  <div class="callout"><span class="i">⚠️</span><p><b>进入阶段 2b 前必须先备份。</b>阶段 2a 只交付代码与迁移文件，不执行 SQL、不连库、不清理数据、不重跑管道。全量重跑涉及机会点层重建，必须由验收方另行受控授权；R0 / R3 的无效行始终按标记保留，不因分类迁移物理删除。</p></div>
 </section>
 
 <section>
   <h2><span class="no">5</span>预期结果</h2>
 
   <div class="tablewrap"><table>
-    <tr><th>指标</th><th>现在</th><th>改造后</th></tr>
+    <tr><th>指标</th><th>迁移前基线</th><th>改造后目标</th></tr>
     <tr><td>生成池（电商负面证据）</td><td class="n">4,232</td><td class="n">6,500</td></tr>
     <tr><td>老品迭代 SPU 卡</td><td class="n">51</td><td class="n">≥162</td></tr>
     <tr><td>问题条目</td><td class="n">161</td><td class="n">千级</td></tr>
@@ -186,9 +208,10 @@
     <tr><td>不可回退的融合债</td><td class="n">20 条</td><td class="n">0</td></tr>
   </table></div>
 
-  <p class="anno"><b>一个必须说清的代价</b>：条目从 161 涨到千级，PM 一次看到的东西多了近十倍。这个量级下，Wilson 排序、四列可排、标签树筛选这三个已经做好的机制会从「锦上添花」变成「必需品」——沉底机制是否可靠，要在阶段三验收时专门确认，不能只看覆盖数上去了就算完。</p>
+  <p class="anno"><b>数字口径</b>：这里的 <span class="n">51</span> 张老品迭代 SPU 卡与 <span class="n">161</span> 个问题条目都是迁移前基线，不代表 015 后现状。<span class="n">264 / 368 / 13 / 645</span> 同样不是已执行结果，而是 <code>015</code> 待受控迁移时必须满足的事务内断言。</p>
+  <p class="anno"><b>一个必须说清的代价</b>：条目目标从迁移前 161 涨到千级，PM 一次看到的东西可能多近十倍。这个量级下，Wilson 排序、四列可排、标签树筛选这三个已经做好的机制会从「锦上添花」变成「必需品」——沉底机制是否可靠，要在阶段三验收时专门确认，不能只看覆盖数上去了就算完。</p>
 </section>
 
 </main>
-<footer>管道改造计划 · 2026-08-16 · 待确认后执行</footer>
+<footer>管道改造计划 · 2026-08-16 · 阶段 2a 仅交付代码与迁移脚本，SQL 与重跑待受控执行</footer>
 </div>

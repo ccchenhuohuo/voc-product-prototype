@@ -31,10 +31,21 @@ docker exec "$CONTAINER" pg_dump -U voc_admin -d voc -Fc \
   | gzip > "$LOCAL/voc_human_${STAMP}.dump.gz"
 
 echo "== 校验 =="
+# gzip -t 只证明「压缩流完整」，不证明「里面有数据」。2026-08-14 那次备份在库还空着时
+# 产生，9.2 KB、零条 TABLE DATA，gzip -t 照样通过，LATEST 还让它看起来是新鲜的——
+# 等于连续两天没有可用备份而无人察觉。因此必须验归档目录里确实有 TABLE DATA 条目。
 for f in "$LOCAL/voc_full_${STAMP}.dump.gz" "$LOCAL/voc_human_${STAMP}.dump.gz"; do
-  gzip -t "$f" && echo "   OK $(basename "$f") $(du -h "$f" | cut -f1)"
+  gzip -t "$f" || { echo "   !! 压缩流损坏: $f" >&2; exit 4; }
+  gzip -dc "$f" > /tmp/voc_verify_$$.dump
+  docker cp /tmp/voc_verify_$$.dump "$CONTAINER":/tmp/voc_verify_$$.dump
+  n=$(docker exec "$CONTAINER" pg_restore -l /tmp/voc_verify_$$.dump | grep -c 'TABLE DATA' || true)
+  docker exec "$CONTAINER" rm -f /tmp/voc_verify_$$.dump; rm -f /tmp/voc_verify_$$.dump
+  [ "$n" -gt 0 ] || { echo "   !! $(basename "$f") 不含任何表数据，判为失败" >&2; exit 5; }
+  echo "   OK $(basename "$f") $(du -h "$f" | cut -f1)  TABLE DATA ${n} 条"
 done
 
+# 只有全部校验通过才更新标记——拉取端与运维都靠它判断新鲜度，
+# 标记指向一份空备份比没有标记更危险。
 echo "== 记录最新备份标记（供 pull 端校验新鲜度）=="
 echo "$STAMP" > "$LOCAL/LATEST"
 

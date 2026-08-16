@@ -12,7 +12,7 @@ PM 点通过 → status='accepted' → 下次周度运行由本模块消费执�
 """
 from __future__ import annotations
 
-from . import db
+from . import db, pipeline
 
 
 def _done(proposal_id: int, c=None) -> bool:
@@ -46,6 +46,10 @@ def _merge(p: dict, c) -> dict | None:
     if not sources:
         return None
 
+    # 必须在改写外键关系前一次按稳定顺序锁住所有参与者；
+    # 否则与并发 attach/MERGE 各自回算时会丢失对方的未提交关系。
+    pipeline.lock_opportunities(c, [target, *sources])
+
     # 证据改挂到目标；主键冲突说明两侧本就共享该条证据，跳过即可
     c.execute("""
         INSERT INTO voc_opp_evidence (opp_id, message_id, seq, attach_week, match_by, confidence)
@@ -58,6 +62,11 @@ def _merge(p: dict, c) -> dict | None:
     c.execute("""UPDATE voc_opportunity
                     SET backlog = true, merged_into = %s, updated_at = now()
                   WHERE opp_id = ANY(%s)""", [target, sources])
+    # MERGE 同时改变目标与源条目的完整证据集：目标可能 R2→R1，
+    # 源条目清空后必须成为 R0。在当前事务内回算才能看见未提交的改挂。
+    pipeline.recount(target, c)
+    for source in sources:
+        pipeline.recount(source, c)
     return {"parent_ids": ids, "child_ids": [target], "target": target,
             "sources": sources}
 

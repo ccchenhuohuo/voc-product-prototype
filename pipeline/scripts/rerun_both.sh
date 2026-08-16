@@ -11,7 +11,7 @@
 # 两条线并行时先收工的那条看到的对侧是残缺的（实测电商 13:00 完、社媒 13:41 完，
 # 电商的汇聚等于对着半个库跑）。所以并行只到生成为止，汇聚/拆分/快照/放行
 # 等两条线都结束后统一做一遍。
-set -uo pipefail
+set -euo pipefail
 cd ~/voc-analytics
 
 # 全局闸门 _GATE 是【进程内】的信号量，两个进程各持一份。实测拐点是合计 64，
@@ -19,24 +19,46 @@ cd ~/voc-analytics
 PER_PROC_CONCURRENCY="${PER_PROC_CONCURRENCY:-32}"
 
 echo "== 停止旧进程 =="
-pkill -f run_generate.py 2>/dev/null
-for i in $(seq 1 15); do
+RC_STOP=0
+pkill -f run_generate.py 2>/dev/null || RC_STOP=$?
+if (( RC_STOP > 1 )); then
+  echo "!! 停止旧进程失败，pkill 退出码 $RC_STOP。"
+  exit "$RC_STOP"
+fi
+for ((i = 1; i <= 15; i++)); do
   pgrep -f run_generate.py >/dev/null || break
   sleep 1
 done
-pkill -9 -f run_generate.py 2>/dev/null
+RC_KILL=0
+pkill -9 -f run_generate.py 2>/dev/null || RC_KILL=$?
+if (( RC_KILL > 1 )); then
+  echo "!! 强制停止旧进程失败，pkill 退出码 $RC_KILL。"
+  exit "$RC_KILL"
+fi
 sleep 1
-echo "   剩余进程: $(pgrep -f run_generate.py | wc -l)"
+REMAINING="$( (pgrep -f run_generate.py || true) | wc -l | tr -d ' ')"
+echo "   剩余进程: $REMAINING"
+if (( REMAINING != 0 )); then
+  echo "!! 仍有 run_generate.py 进程未退出，不继续清库。"
+  exit 1
+fi
 
 echo "== 清空机会点层（保留事实层）=="
 # 人工决策表不在清理范围内：它没有 ON DELETE CASCADE 是有意的保护。
-# 库里若已有人工决策，下面这句会因外键失败——那是应有的行为，不要绕过。
+# 库里若已有人工决策，DELETE 会因外键失败。整段清理必须同时
+# 回滚，不能先提交 TRUNCATE 留下半清库。
 docker exec voc-postgres psql -U voc_admin -d voc -q \
+  -v ON_ERROR_STOP=1 \
+  --single-transaction \
   -c "TRUNCATE voc_opp_evidence, voc_opp_snapshot, voc_proposal, voc_opp_lineage CASCADE;" \
   -c "DELETE FROM voc_opportunity;" \
   -c "DELETE FROM voc_unclassified_evidence;" || {
-    echo "!! 清库失败（可能存在人工决策行）。中止。"; exit 1; }
-echo "   机会点: $(docker exec voc-postgres psql -U voc_admin -d voc -tAc 'SELECT count(*) FROM voc_opportunity')"
+    echo "!! 清库失败（可能存在人工决策行）；本次清理已整体回滚。"
+    exit 1
+  }
+OPP_COUNT="$(docker exec voc-postgres psql -U voc_admin -d voc -tAc \
+  'SELECT count(*) FROM voc_opportunity')"
+echo "   机会点: $OPP_COUNT"
 
 set -a; . ./.env; set +a
 export VOC_LLM_CONCURRENCY="$PER_PROC_CONCURRENCY"
@@ -50,14 +72,22 @@ nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --line B \
 PID_B=$!
 echo "   电商 pid=$PID_A  社媒 pid=$PID_B"
 
-wait $PID_A; RC_A=$?
-wait $PID_B; RC_B=$?
+RC_A=0
+wait "$PID_A" || RC_A=$?
+RC_B=0
+wait "$PID_B" || RC_B=$?
 echo "   电商退出码 $RC_A / 社媒退出码 $RC_B"
+if (( RC_A != 0 || RC_B != 0 )); then
+  echo "!! 至少一条生成线失败，不执行统一收尾。"
+  exit 1
+fi
 
 echo "== 阶段二：统一收尾（跨线汇聚 + 拆分检测 + 快照 + 放行）=="
 # 收尾单进程，可以用满整个并发额度
 export VOC_LLM_CONCURRENCY=64
+RC_CROSS=0
 .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --cross-only \
-      > /tmp/gen_cross.log 2>&1
-echo "   收尾退出码 $?"
-tail -6 /tmp/gen_cross.log
+      > /tmp/gen_cross.log 2>&1 || RC_CROSS=$?
+echo "   收尾退出码 $RC_CROSS"
+tail -6 /tmp/gen_cross.log || true
+(( RC_CROSS == 0 )) || exit "$RC_CROSS"

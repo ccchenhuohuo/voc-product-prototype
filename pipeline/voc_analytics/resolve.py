@@ -121,8 +121,11 @@ def resolve_one(new: dict, ctx) -> dict:
 
 # ---------------------------------------------------------------- 跨线汇聚
 def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
-                     src_line: str, week: str, ctx, limit: int = 40) -> int:
-    """从另一条线的证据池召回并挂载。这是 dual_source 成立的唯一途径（§6.5）。"""
+                     src_line: str, week: str, ctx, limit: int = 40) -> list[dict]:
+    """从另一条线的证据池召回待挂载关系（§6.5）。
+
+    本函数只做召回与判定；调用方将关系写入与 recount 置于同一事务。
+    """
     if src_line == "社媒":
         # 社媒机会点 → 借道【电商机会点】取其证据。
         #
@@ -167,10 +170,10 @@ def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
         texts = [r["snippet"] for r in rows]
 
     if not texts:
-        return 0
+        return []
     vecs = llm.embed(texts)
     scored = sorted(((llm.cosine(mode_vec, v), i) for i, v in enumerate(vecs)), reverse=True)
-    attached = 0
+    attached: list[dict] = []
     for score, i in scored[:5]:            # 只让最像的 5 条进 L3，控制成本
         r = rows[i]
         # 复用 L3：判断该证据是否支撑同一问题
@@ -182,12 +185,10 @@ def cross_line_merge(opp_id: str, mode_vec: Sequence[float], core_tag: str,
                                        [opp_id]) or "",
                         "rep_snippets": []}, ctx)
         if v["verdict"] == "same" and v["confidence"] >= 0.6:
-            db.upsert("voc_opp_evidence",
-                      [{"opp_id": opp_id, "message_id": r["message_id"], "seq": r["seq"],
-                        "attach_week": week, "match_by": "cross_line",
-                        "confidence": round(min(v["confidence"], 0.999), 3)}],
-                      ["opp_id", "message_id", "seq"])
-            attached += 1
+            attached.append(
+                {"opp_id": opp_id, "message_id": r["message_id"], "seq": r["seq"],
+                 "attach_week": week, "match_by": "cross_line",
+                 "confidence": round(min(v["confidence"], 0.999), 3)})
     return attached
 
 

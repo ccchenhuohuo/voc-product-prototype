@@ -218,13 +218,11 @@ def cross_line_merged(context: AssetExecutionContext) -> MaterializeResult:
     total = 0
     for r in rows:
         vec = [float(x) for x in r["v"].strip("[]").split(",")]
-        n = resolve.cross_line_merge(r["opp_id"], vec, r["core_tag"],
-                                     r["src_line"], week, rc)
-        if n:
-            # 必须重算：dual_source 由触发器从 evi_ec/evi_social 派生，
-            # 而这两个字段只有 recount 会更新。不调它，挂载了对侧证据
-            # dual_source 依然是 false，跨线汇聚等于白做。
-            pipeline.recount(r["opp_id"])
+        attached = resolve.cross_line_merge(
+            r["opp_id"], vec, r["core_tag"], r["src_line"], week, rc)
+        if attached:
+            # 关系与 recount 同事务；分类、计数与 dual_source 不会半更新。
+            n = pipeline.attach_evidence(r["opp_id"], attached)
             total += n
     dual = db.q1("SELECT count(*) FROM voc_opportunity WHERE dual_source") or 0
     return MaterializeResult(metadata={"跨线挂载": total, "双源印证条目": dual})

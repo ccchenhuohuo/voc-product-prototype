@@ -5,6 +5,7 @@ from collections import defaultdict
 from typing import Sequence
 
 from . import config as C, db, llm, prompts, resolve
+from .classification import classify_evidence
 from .stages import generate, stage1, validate
 
 
@@ -98,13 +99,19 @@ def intent_gate(rows: list[dict], ctx) -> tuple[list[dict], dict]:
 def build_opportunity(items: list[dict], group: dict, line: str, ctx_info: dict,
                       ctx, history: list[str]) -> dict | None:
     members = group["members"]
+    classification = classify_evidence(items[i] for i in members)
+    # R0 不会形成 group；R3 已由 line_a_pool 挡在生成池外。
+    # 若调用方越过生成池，仍不为了跑通而退回渠道判据。
+    if classification.opp_type is None:
+        return None
     # 兜底占位符不能进 prompt——模型会照抄进标题（实测产出过
     # 「摄影配件品类：填补未命名模式（用户自定义功能组合）」）。
     # 命名失败时让 Stage2 自己从证据里概括，比塞一个空洞的名字更好。
     mode_name = group["mode_name"]
     if mode_name == stage1.PLACEHOLDER_MODE:
         mode_name = "（未命名，请自行从证据中概括）"
-    obj = generate.write_prototype(items, members, mode_name, line, ctx_info, ctx)
+    obj = generate.write_prototype(
+        items, members, mode_name, line, ctx_info, classification.opp_type, ctx)
     if obj is None:
         return None
     sugg, ctx_hash = generate.write_suggestion(
@@ -142,7 +149,9 @@ def build_opportunity(items: list[dict], group: dict, line: str, ctx_info: dict,
                                 f'{ctx_info.get("tag") or ctx_info.get("channel","")}|'
                                 f'{group["mode_name"]}|'
                                 f'{obj.get("problem_mode") or obj.get("title") or ""}'),
-        "opp_type": "老品迭代" if line == "电商" else "新品创新",
+        "opp_type": classification.opp_type,
+        "classification_state": classification.classification_state,
+        "classify_rule": classification.classify_rule,
         "src_line": line,
         "channel": ctx_info.get("channel"),
         "prod_line": ctx_info.get("prod_line"),
@@ -187,23 +196,67 @@ def build_opportunity(items: list[dict], group: dict, line: str, ctx_info: dict,
 # 把机会点 build 出来后只是累加进列表就返回了，【从不落库】。也就是说周度
 # 调度这条路径跑完什么都没写进去。与 lifecycle.release_to_pm 是同一类问题：
 # 逻辑写在脚本里、调度器绕过脚本。提到这里由两条路径共用。
-def recount(opp_id: str) -> None:
-    """按已挂载证据重算计数与排序分。"""
-    db.execute("""
-      UPDATE voc_opportunity o SET
-        evi_total = s.n, evi_ec = s.ec, evi_social = s.sc,
-        low_star_rate = s.lsr,
-        rank_score = (s.n * (1 + COALESCE(s.lsr,0)))
-                     * CASE WHEN s.ec>0 AND s.sc>0 THEN 1.5 ELSE 1 END
-                     + CASE WHEN o.safety_flag THEN 1000 ELSE 0 END
-      FROM (SELECT oe.opp_id,
-                   count(*) n,
-                   count(*) FILTER (WHERE m.src_line='电商') ec,
-                   count(*) FILTER (WHERE m.src_line='社媒') sc,
-                   avg(CASE WHEN m.star<=2 THEN 1.0 WHEN m.star IS NULL THEN NULL ELSE 0 END) lsr
-              FROM voc_opp_evidence oe JOIN voc_message m USING(message_id)
-             WHERE oe.opp_id=%s GROUP BY 1) s
-      WHERE o.opp_id=s.opp_id""", [opp_id])
+def lock_opportunities(connection, opp_ids: Sequence[str]) -> None:
+    """按稳定顺序锁定即将改写证据集的机会点。
+
+    必须在写 ``voc_opp_evidence`` 之前取锁；否则并发挂载可以各自
+    基于看不到对方未提交关系的快照回算，后写者会覆盖权威统计。
+    """
+    ids = sorted(set(opp_ids))
+    if not ids:
+        return
+    connection.execute("""SELECT opp_id FROM voc_opportunity
+                           WHERE opp_id = ANY(%s)
+                           ORDER BY opp_id
+                           FOR UPDATE""", [ids]).fetchall()
+
+
+def recount(opp_id: str, connection=None) -> None:
+    """按已落库的完整证据集重算分类、计数与排序分。
+
+    build 阶段只看得到当前新组；attach 与 cross-line 都会改变最终
+    证据集。因此权威分类放在关系落库之后，不使用 ``src_line`` 参数。
+    传入 connection 时，读取与回写和证据改挂共用同一事务。
+    """
+    if connection is None:
+        with db.conn() as c:
+            recount(opp_id, c)
+        return
+
+    # 独立 recount 也与挂载者使用同一把机会点行锁；
+    # save / attach / merge 路径在关系变更前已先取得这把锁。
+    lock_opportunities(connection, [opp_id])
+    rows = connection.execute("""
+      SELECT m.src_line, m.spu, m.star
+        FROM voc_opp_evidence oe
+        JOIN voc_message m USING (message_id)
+       WHERE oe.opp_id=%s
+       ORDER BY oe.message_id, oe.seq
+    """, [opp_id]).fetchall()
+    classification = classify_evidence(rows)
+    ec = sum(1 for row in rows if row["src_line"] == "电商")
+    social = sum(1 for row in rows if row["src_line"] == "社媒")
+    stars = [row["star"] for row in rows if row.get("star") is not None]
+    low_star_rate = (sum(1 for star in stars if star <= 2) / len(stars)) if stars else None
+    rank_base = len(rows) * (1 + (low_star_rate or 0))
+    if ec > 0 and social > 0:
+        rank_base *= 1.5
+
+    connection.execute("""
+      UPDATE voc_opportunity
+         SET evi_total=%s,
+             evi_ec=%s,
+             evi_social=%s,
+             low_star_rate=%s,
+             opp_type=%s,
+             classification_state=%s,
+             classify_rule=%s,
+             rank_score=%s + CASE WHEN safety_flag THEN 1000 ELSE 0 END
+       WHERE opp_id=%s
+    """, [len(rows), ec, social,
+          round(low_star_rate, 4) if low_star_rate is not None else None,
+          classification.opp_type, classification.classification_state,
+          classification.classify_rule, rank_base, opp_id])
 
 
 def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
@@ -215,30 +268,50 @@ def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
     dec = (resolve.resolve_one(opp, ctx) if opp.get("mode_vec") is not None
            else {"action": "create", "opp_id": None, "proposals": []})
 
-    if dec["action"] == "attach":
-        opp_id = dec["opp_id"]
-        # 已有条目：只追加证据与统计，语义字段由触发器按锁级别决定是否放行
-        db.execute("UPDATE voc_opportunity SET last_week=%s, updated_at=now() "
-                   "WHERE opp_id=%s", [week, opp_id])
-    else:
-        opp_id = opp["opp_id"]
-        opp["first_week"] = opp["last_week"] = week
-        opp["backlog"] = True
-        db.upsert("voc_opportunity",
-                  [{k: v for k, v in opp.items() if not k.startswith("_")}], ["opp_id"])
+    with db.conn() as c:
+        if dec["action"] == "attach":
+            opp_id = dec["opp_id"]
+            # 已有条目：只追加证据与统计，语义字段由触发器按锁级别决定是否放行
+            c.execute("UPDATE voc_opportunity SET last_week=%s, updated_at=now() "
+                      "WHERE opp_id=%s", [week, opp_id])
+        else:
+            opp_id = opp["opp_id"]
+            opp["first_week"] = opp["last_week"] = week
+            opp["backlog"] = True
+            db.upsert_in_transaction(
+                c, "voc_opportunity",
+                [{k: v for k, v in opp.items() if not k.startswith("_")}],
+                ["opp_id"])
 
-    db.upsert("voc_opp_evidence",
-              [{"opp_id": opp_id, "message_id": items[i]["message_id"],
-                "seq": items[i].get("seq", 0), "attach_week": week,
-                "match_by": "rule" if dec["action"] == "create" else "llm",
-                "confidence": round(dec.get("confidence", 1.0), 3)} for i in members],
-              ["opp_id", "message_id", "seq"])
+        db.upsert_in_transaction(
+            c, "voc_opp_evidence",
+            [{"opp_id": opp_id, "message_id": items[i]["message_id"],
+              "seq": items[i].get("seq", 0), "attach_week": week,
+              "match_by": "rule" if dec["action"] == "create" else "llm",
+              "confidence": round(dec.get("confidence", 1.0), 3)} for i in members],
+            ["opp_id", "message_id", "seq"])
 
-    for p in dec.get("proposals", []):
-        db.execute("INSERT INTO voc_proposal(op_type,opp_ids,rationale,week) "
-                   "VALUES(%s,%s,%s,%s)",
-                   [p["op_type"], p["opp_ids"], p["rationale"], week])
+        for p in dec.get("proposals", []):
+            c.execute("INSERT INTO voc_proposal(op_type,opp_ids,rationale,week) "
+                      "VALUES(%s,%s,%s,%s)",
+                      [p["op_type"], p["opp_ids"], p["rationale"], week])
+
+        # 机会点、关系与权威回算不可分割；任一步失败整体回滚。
+        recount(opp_id, c)
     return opp_id
+
+
+def attach_evidence(opp_id: str, rows: list[dict]) -> int:
+    """cross-line 证据挂载与完整集合回算共用一个事务。"""
+    if not rows:
+        return 0
+    with db.conn() as c:
+        # 先锁机会点、再写外键关系，避免并发挂载快照丢失。
+        lock_opportunities(c, [opp_id])
+        n = db.upsert_in_transaction(
+            c, "voc_opp_evidence", rows, ["opp_id", "message_id", "seq"])
+        recount(opp_id, c)
+    return n
 
 
 def persist_opportunities(pairs: list, week: str, ctx, verbose: bool = False) -> list[str]:
@@ -252,7 +325,6 @@ def persist_opportunities(pairs: list, week: str, ctx, verbose: bool = False) ->
         opp["mode_vec"] = vec
         title = opp.get("title") or ""
         oid = save_opportunity(opp, items, week, ctx)
-        recount(oid)
         out.append(oid)
         if verbose:
             print(f"      -> {oid}  {title[:46]}", flush=True)

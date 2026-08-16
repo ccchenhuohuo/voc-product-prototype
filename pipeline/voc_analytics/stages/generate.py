@@ -33,9 +33,8 @@ def _uniq(seq: Sequence[Any]) -> list:
 
 # ---------------------------------------------------------------- Stage 2
 def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
-                    line: str, ctx_info: dict, ctx) -> dict | None:
+                    line: str, ctx_info: dict, opp_type: str, ctx) -> dict | None:
     idx = list(members)
-    opp_type = "老品迭代" if line == "电商" else "新品创新"
     if line == "电商":
         unit = "失效模式"
         ctx_line = (f'品类 {ctx_info.get("category","?")} | 标签 {ctx_info.get("tag","?")} | '

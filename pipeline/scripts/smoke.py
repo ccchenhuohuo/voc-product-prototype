@@ -44,25 +44,40 @@ def chk(name: str, ok: bool, detail: str = "") -> None:
 
 
 def cleanup() -> None:
-    """只删哨兵周的行。真实数据一律不碰。"""
-    ids = [r["opp_id"] for r in db.q(
-        "SELECT opp_id FROM voc_opportunity WHERE first_week=%s", [SMOKE_WEEK])]
-    if not ids:
-        return
-    # 两条删除路径缺一不可：按 opp_id 删的是哨兵机会自己的挂靠；按 attach_week
-    # 删的是探针把证据挂到【真实】机会上的那些——跨线汇聚本来就指向对侧真实数据，
-    # 这类残渣的 opp_id 是真实的，只按 opp_id 清会永远漏掉，一次一条地累积。
-    db.execute("DELETE FROM voc_opp_evidence WHERE opp_id = ANY(%s)", [ids])
-    db.execute("DELETE FROM voc_opp_evidence WHERE attach_week = %s", [SMOKE_WEEK])
-    db.execute("DELETE FROM voc_opp_snapshot  WHERE opp_id = ANY(%s)", [ids])
-    # 血缘表存的是数组（parent_ids/child_ids），不是单值列。写错列名会让 cleanup
-    # 在这里抛异常，而它排在删 voc_opportunity 之前——探针产出就整批留在库里了。
-    db.execute("DELETE FROM voc_opp_lineage   WHERE parent_ids && %s OR child_ids && %s",
-               [ids, ids])
-    db.execute("DELETE FROM voc_proposal      WHERE week=%s", [SMOKE_WEEK])
-    db.execute("DELETE FROM voc_unclassified_evidence WHERE week=%s", [SMOKE_WEEK])
-    db.execute("DELETE FROM voc_opportunity   WHERE opp_id = ANY(%s)", [ids])
-    print(f"  已清理哨兵周产出 {len(ids)} 条")
+    """原子清理哨兵周产出，不删真实机会点或事实证据。"""
+    with db.conn() as c:
+        ids = [r["opp_id"] for r in c.execute(
+            "SELECT opp_id FROM voc_opportunity WHERE first_week=%s", [SMOKE_WEEK]).fetchall()]
+        attached_ids = [r["opp_id"] for r in c.execute(
+            "SELECT DISTINCT opp_id FROM voc_opp_evidence WHERE attach_week=%s",
+            [SMOKE_WEEK]).fetchall()]
+        real_targets = sorted(set(attached_ids) - set(ids))
+
+        # 先锁所有将改变证据集的机会点。即使上次探针已没有哨兵机会点，
+        # attach_week 残留关系也必须被清理，不能因 ids 为空提前返回。
+        pipeline.lock_opportunities(c, [*ids, *real_targets])
+
+        # 两条删除路径缺一不可：按 opp_id 删哨兵机会自己的挂靠；
+        # 按 attach_week 删探针挂到真实机会上的哨兵关系。
+        if ids:
+            c.execute("DELETE FROM voc_opp_evidence WHERE opp_id = ANY(%s)", [ids])
+        c.execute("DELETE FROM voc_opp_evidence WHERE attach_week = %s", [SMOKE_WEEK])
+
+        if ids:
+            c.execute("DELETE FROM voc_opp_snapshot WHERE opp_id = ANY(%s)", [ids])
+            # 血缘表存的是数组（parent_ids/child_ids），不是单值列。
+            c.execute("DELETE FROM voc_opp_lineage WHERE parent_ids && %s OR child_ids && %s",
+                      [ids, ids])
+        c.execute("DELETE FROM voc_proposal WHERE week=%s", [SMOKE_WEEK])
+        c.execute("DELETE FROM voc_unclassified_evidence WHERE week=%s", [SMOKE_WEEK])
+        if ids:
+            c.execute("DELETE FROM voc_opportunity WHERE opp_id = ANY(%s)", [ids])
+
+        # 删掉挂到真实机会的哨兵关系后，在同一事务内恢复权威分类与计数。
+        for opp_id in real_targets:
+            pipeline.recount(opp_id, c)
+
+    print(f"  已清理哨兵机会 {len(ids)} 条，回算真实目标 {len(real_targets)} 条")
 
 
 def guard_no_concurrent_run() -> None:
@@ -216,9 +231,11 @@ def run_script_path(ctx) -> None:
     for r in db.q("SELECT opp_id, mode_vec::text v, core_tag, src_line FROM voc_opportunity "
                   "WHERE first_week=%s AND mode_vec IS NOT NULL", [SMOKE_WEEK]):
         vec = resolve._parse_vec(r["v"])
-        if vec and resolve.cross_line_merge(r["opp_id"], vec, r["core_tag"],
-                                            r["src_line"], SMOKE_WEEK, ctx):
-            pipeline.recount(r["opp_id"])
+        if vec:
+            attached = resolve.cross_line_merge(
+                r["opp_id"], vec, r["core_tag"], r["src_line"], SMOKE_WEEK, ctx)
+            if attached:
+                pipeline.attach_evidence(r["opp_id"], attached)
     db.execute("""INSERT INTO voc_opp_snapshot(opp_id,week,evi_total,rank_score,title,
                     problem_mode,desc_phenomenon,desc_attribution,desc_suggestion)
                   SELECT opp_id,%s,evi_total,rank_score,title,problem_mode,desc_phenomenon,

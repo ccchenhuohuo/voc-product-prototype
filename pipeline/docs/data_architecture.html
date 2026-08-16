@@ -114,10 +114,12 @@
   <div class="ico">🗂️</div>
   <h1>VOC 数据架构</h1>
   <p class="sub">这套库里现在装着什么、分几层、每层的单位是什么，以及一条真实评论如何从原始文本走到 PM 手里的一张卡。</p>
-  <p class="meta">全部数值为 2026-08-15 库内实测 · PostgreSQL 18 + pgvector · 生产实例 <code>voc-postgres</code></p>
+  <p class="meta">2026-08-15 库内实测（阶段 2a 迁移前快照） · PostgreSQL 18 + pgvector · 生产实例 <code>voc-postgres</code></p>
 </header>
 
 <main>
+
+<div class="callout"><span class="i">🚧</span><p><b>阶段 2a 状态：代码与 <code>015_classification_contract.sql</code> 已准备，迁移未执行。</b>本页的 51 张 SPU 卡、161 个问题条目及其他库内规模数字均是迁移前快照，不是迁移后实测。264 / 368 / 13 / 645 是迁移的目标自检断言，执行前不代表现网结果。</p></div>
 
 <section>
   <h2><span class="no">1</span>数据从哪来</h2>
@@ -131,7 +133,7 @@
         <dt>带 SPU 归属</dt><dd>25,055 · 94.9%</dd>
         <dt>平均星级</dt><dd>4.48</dd>
       </dl>
-      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。<b>当前展开层唯一准入来源</b>；阶段三才会评估让能匹配到在售 SPU 的社媒证据进入老品迭代。</p>
+      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。阶段 2a 的 <code>line_a_pool</code> 只让 <code>cardinality(spu) &gt; 0</code> 的电商消息进入生成池；无 SPU 电商消息仍保留在事实层，但作为上游打标缺陷，不应再产生机会点。</p>
     </div>
     <div class="chan">
       <h4>社交媒体</h4>
@@ -140,7 +142,7 @@
         <dt>带 SPU 归属</dt><dd>2,561 · 10.5%</dd>
         <dt>平均星级</dt><dd>—（无评分）</dd>
       </dl>
-      <p class="role">发帖人不会报型号，九成挂不到产品。胜在讲的是<b>没被满足的需求</b>而非已有产品的毛病，服务新品创新。</p>
+      <p class="role">发帖人很少自报型号，九成消息挂不到产品；这部分证据服务新品创新。但云听挂到 SPU 的社媒消息就是本品证据：执行 015 后，其机会点归为老品迭代，并可按实际 SPU 路由到产品卡。</p>
     </div>
   </div>
 
@@ -173,22 +175,22 @@
       <div class="lb">
         <p>把散落在不同产品、不同渠道的同类抱怨合并成一个问题。判定链路是结构签名 → 向量召回 → LLM 裁定，产品无关——这样才可能发现「横跨 30 个型号的品线级毛病」。</p>
         <div class="tbls">
-          <div class="tbl"><div class="tn">voc_opportunity</div><div class="tv">645</div><div class="td">共性问题本体</div></div>
+          <div class="tbl"><div class="tn">voc_opportunity</div><div class="tv">645</div><div class="td">共性问题本体；阶段 2a 增加有效性与分类规则留痕</div></div>
           <div class="tbl"><div class="tn">voc_opp_evidence</div><div class="tv">1,638</div><div class="td">问题 ← 证据的挂靠关系</div></div>
           <div class="tbl"><div class="tn">voc_unclassified_evidence</div><div class="tv">714</div><div class="td">够不上任何问题的余量</div></div>
         </div>
       </div>
     </div>
 
-    <div class="arrow"><span class="g">↓</span><span>沿 SPU 维度切开——纯 SQL，零 LLM 调用，因为证据本来就带着产品归属</span></div>
+    <div class="arrow"><span class="g">↓</span><span>只展开「确定的老品迭代」：沿证据实际 SPU 切开，不再用渠道代替产品归属</span></div>
 
     <div class="layer">
       <div class="lh"><span class="n">03</span><span class="nm">展开层 · 单位是「某个产品身上的某个问题」</span><span class="who">机器写 · 每周重算</span></div>
       <div class="lb">
-        <p>共性问题 × SPU 交叉，该 SPU 在该问题上攒够 2 条证据才成一个条目。这是 PM 真正认领和跟踪的最小单位。两张都是物化视图，每周随生成自动重算。</p>
+        <p>共性问题 × SPU 交叉，该 SPU 在该问题上攒够 2 条证据才成一个条目。015 将 <code>voc_spu_issue</code> 收录条件改为 <code>opp_type = '老品迭代'</code> 且 <code>classification_state = '确定'</code>，再对任何来源的证据按实际 SPU 展开；原有 <code>HAVING count(*) &gt;= 2</code> 门槛不变。这是 PM 真正认领和跟踪的最小单位。两张都是物化视图，每周随生成自动重算。</p>
         <div class="tbls">
           <div class="tbl"><div class="tn">voc_spu</div><div class="tv">328</div><div class="td">SPU 容器：全景、正负比、均星</div></div>
-          <div class="tbl"><div class="tn">voc_spu_issue</div><div class="tv">161</div><div class="td">问题条目，分布在 51 个 SPU 上</div></div>
+          <div class="tbl"><div class="tn">voc_spu_issue</div><div class="tv">161</div><div class="td">迁移前快照：问题条目分布在 51 个 SPU 上</div></div>
         </div>
       </div>
     </div>
@@ -208,7 +210,22 @@
 
   </div>
 
-  <p class="anno"><b>为什么 148,876 条证据只挂出 1,638 条关系</b>：绝大多数证据是正面或泛泛而谈的评价，构不成一个待解决的问题。挂靠出来的这 1,638 条里，<span class="pill p-neg">负面 980</span> <span class="pill p-neu">中性 404</span> <span class="pill p-pos">正面 254</span>——正面证据也会被挂进来，因为「别人夸的地方我们做得差」同样是问题的证据。</p>
+  <h3>阶段 2a：分类由完整证据集的 SPU 挂载决定</h3>
+  <p>机会点是老品迭代还是新品创新，决定因素是「能否通过 SPU 路由到具体产品 PM」，不是发现它的渠道。015 新增 <code>classification_state text NOT NULL DEFAULT '确定'</code> 和 <code>classify_rule text</code> 两列。执行迁移及后续分类时按下列顺序求值，先命中先生效；判定读取机会点的完整证据集合及其所属消息，不读生成入参里的单一 <code>line</code>。</p>
+  <div class="tablewrap"><table>
+    <tr><th>规则</th><th>条件（按顺序）</th><th><code>opp_type</code></th><th><code>classification_state</code></th><th>目标数</th></tr>
+    <tr><td class="num">R0</td><td>在 <code>voc_opp_evidence</code> 中零条证据</td><td>—</td><td>无效</td><td class="num">12</td></tr>
+    <tr><td class="num">R1</td><td>任一证据所属消息 <code>cardinality(spu) &gt; 0</code></td><td>老品迭代</td><td>确定</td><td class="num">264</td></tr>
+    <tr><td class="num">R2</td><td>无 SPU，且证据集含 <code>src_line = '社媒'</code></td><td>新品创新</td><td>确定</td><td class="num">368</td></tr>
+    <tr><td class="num">R3</td><td>无 SPU 且前规则未命中（仅有电商证据）</td><td>—</td><td>无效</td><td class="num">1</td></tr>
+  </table></div>
+  <p><code>classification_state</code> 只取「确定 / 无效」，与 <code>opp_type</code> 的「老品迭代 / 新品创新」正交；不给 <code>opp_type</code> 塞入第三个取值。<code>classify_rule</code> 记录本次命中的 R0–R3，供审计和回放。R0 / R3 只做无效标记，<b>不删除机会点或证据</b>；迁移后的所有使用者看板必须用 <code>classification_state = '确定'</code> 排除它们，排查端仍可保留完整证据链。</p>
+  <p><code>evi_total</code> 以 <code>voc_opp_evidence</code> 的实际关系行数为唯一口径。015 对全部 645 个机会点重算该字段，不信任旧写入值；其中 12 个零关系机会点的目标值为 0。</p>
+  <div class="callout"><span class="i">✅</span><p><b>015 的目标断言（尚未执行）</b>：确定的老品迭代 264，确定的新品创新 368，无效 13，总计 645，<code>classify_rule IS NULL</code> 为 0。任一不符即异常并回滚整个单事务迁移。</p></div>
+
+  <p class="anno"><b>当前仍有的来源限制</b>：阶段 2a 只把 <code>voc_spu_issue</code> 改为按任何来源的实际 SPU 展开；<code>voc_spu</code> 容器和 <code>n_eff</code> 计算仍保留 <code>m.src_line = '电商'</code> 条件，本阶段没有对它们做渠道解耦。</p>
+
+  <p class="anno"><b>为什么 148,876 条证据只挂出 1,638 条关系</b>（迁移前快照）：绝大多数证据是正面或泛泛而谈的评价，构不成一个待解决的问题。挂靠出来的这 1,638 条里，<span class="pill p-neg">负面 980</span> <span class="pill p-neu">中性 404</span> <span class="pill p-pos">正面 254</span>——正面证据也会被挂进来，因为「别人夸的地方我们做得差」同样是问题的证据。</p>
 </section>
 
 <section>
@@ -299,11 +316,11 @@
   <div class="tablewrap"><table>
     <tr><th>视角</th><th>单位</th><th>规模</th><th>回答什么问题</th></tr>
     <tr>
-      <td><b>SPU 卡</b></td><td>一个产品</td><td class="num">51 张有条目<br><span style="color:var(--faint)">共 328 个容器</span></td>
+      <td><b>SPU 卡</b></td><td>一个产品</td><td class="num">迁移前 51 张有条目<br><span style="color:var(--faint)">迁移前共 328 个容器</span></td>
       <td>我这个产品身上有哪些毛病，各有多少人在抱怨</td>
     </tr>
     <tr>
-      <td><b>共性问题</b></td><td>一类问题</td><td class="num">645 个</td>
+      <td><b>共性问题</b></td><td>一类问题</td><td class="num">645 个保留<br><span style="color:var(--faint)">015 目标：632 个确定</span></td>
       <td>这个毛病横跨多少产品，是单品问题还是品线通病</td>
     </tr>
     <tr>
@@ -311,9 +328,10 @@
       <td>按 SPU / 品类 / 标签路径查，我的新品上市反响如何</td>
     </tr>
   </table></div>
+  <p class="anno">按 015 契约，迁移后共性问题事实层仍完整保留 645 行；普通看板只展示目标状态为「确定」的 632 个机会点，13 个「无效」机会点仅供数据质量排查。这里的 632 是 015 自检目标推导值，尚未执行验证。</p>
 
   <h3>共性度：一个问题扩散多广</h3>
-  <p>每个共性问题算一个 <code>n_eff</code>（有效产品数，Simpson 倒数），据此打上范围标签。<code>n_eff = 1.82</code> 意思是「虽然涉及好几个 SPU，但抱怨主要压在其中不到 2 个身上」。</p>
+  <p>当前每个共性问题的 <code>n_eff</code>（有效产品数，Simpson 倒数）只使用电商来源的 SPU 挂靠计算，据此打上范围标签。<code>n_eff = 1.82</code> 意思是「在纳入计算的电商证据里，虽然涉及好几个 SPU，但抱怨主要压在其中不到 2 个身上」。阶段 2a 不改变这个口径，因此不能把它表述成已经覆盖带 SPU 的社媒证据。</p>
   <div class="tablewrap"><table>
     <tr><th>范围</th><th>判据</th><th>数量</th><th>含义</th></tr>
     <tr><td>单品</td><td class="num">n_eff &lt; 1.5</td><td class="num">92</td><td>就那一个产品的事</td></tr>
@@ -321,6 +339,7 @@
     <tr><td>品线级</td><td class="num">≥ 3</td><td class="num">68</td><td>整条产品线的通病，战略级信号</td></tr>
     <tr><td>无 SPU 挂靠</td><td>—</td><td class="num">432</td><td>主要来自社媒，算不出扩散度</td></tr>
   </table></div>
+  <p class="anno">以上共性度数量也是迁移前快照，合计包含全部 645 个机会点；015 执行后，用户看板还应叠加 <code>classification_state = '确定'</code>，迁移后的实际分布需另行验收。</p>
 
   <h3>SPU 容器按定级分布</h3>
   <div class="tablewrap"><table>
@@ -359,5 +378,5 @@
 </section>
 
 </main>
-<footer>VOC 数据架构 · 2026-08-15 库内实测 · 配套〈数据管道重构〉与〈机会模型规格〉</footer>
+<footer>VOC 数据架构 · 2026-08-15 迁移前库内快照 · 阶段 2a 的 015 迁移尚未执行 · 配套〈数据管道重构〉与〈机会模型规格〉</footer>
 </div>
