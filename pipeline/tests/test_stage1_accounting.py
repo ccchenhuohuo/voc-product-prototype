@@ -19,10 +19,16 @@ def _sequential_map(fn, items, workers=None):
     return [fn(item) for item in items]
 
 
-def test_split_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
+def test_systemic_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
     monkeypatch,
 ) -> None:
-    # 比单批多 1 条：第一批失败后，剩余 1 条必须记为取消。
+    """全部批次失败（100% > 20% 阈值）时必须中止本桶，并把账本闭合。
+
+    语义在 2026-08-17 调整过：不再「首个失败即取消其余批次」，而是让所有
+    批次跑完、按失败率裁决。原因是单批的 LLM 输出瑕疵（JSON 截断、字段
+    缺失）在几千次调用里是常态，一条即死会让整轮永远跑不完；而系统性失败
+    （提示词失效、模型行为变化）仍必须中止，不能产出残缺结果。
+    """
     items = [
         {"message_id": f"offline-{index}", "seq": 1, "evidence_text": "占位证据"}
         for index in range(C.BATCH_SIZE + 1)
@@ -38,7 +44,7 @@ def test_split_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
 
     monkeypatch.setattr(stage1, "split_batch", fail_without_llm)
 
-    with pytest.raises(RuntimeError) as caught:
+    with pytest.raises(stage1.llm.LLMError) as caught:
         stage1.split_bucket(
             items,
             "老品迭代",
@@ -47,7 +53,9 @@ def test_split_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
             vote=False,
         )
 
-    assert caught.value is original
+    assert "失败率过高" in str(caught.value)
+    assert str(original) in str(caught.value)      # 首因必须可追溯
+
     buckets = ctx.metrics["stage1"]["老品迭代"]["buckets"]
     assert len(buckets) == 1
     ledger = next(iter(buckets.values()))
@@ -55,8 +63,7 @@ def test_split_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
     assert ledger["status"] == "failed"
     assert ledger["planned_batches"] == 2
     assert ledger["completed_batches"] == 0
-    assert ledger["failed_batches"] == 1
-    assert ledger["cancelled_batches"] == 1
+    assert ledger["failed_batches"] == 2           # 两批都跑完并各自记账
     assert ledger["planned_batches"] == (
         ledger["completed_batches"]
         + ledger["failed_batches"]
@@ -64,16 +71,44 @@ def test_split_batch_failure_aborts_bucket_and_closes_batch_row_ledger(
     )
     assert ledger["planned_batch_rows"] == len(items)
     assert ledger["completed_batch_rows"] == 0
-    assert ledger["failed_batch_rows"] == C.BATCH_SIZE
-    assert ledger["cancelled_batch_rows"] == 1
     assert ledger["planned_batch_rows"] == (
         ledger["completed_batch_rows"]
         + ledger["failed_batch_rows"]
         + ledger["cancelled_batch_rows"]
     )
-    assert ctx.llm_failed_modes == 1
 
 
+def test_isolated_batch_failure_is_skipped_not_fatal(monkeypatch) -> None:
+    """低于阈值的零星失败必须跳过并继续，否则整轮跑不完。
+
+    2026-08-17 的 2b 第二轮就是被一个批次的 JSON 截断带崩整个进程的。
+    """
+    items = [
+        {"message_id": f"offline-{index}", "seq": 1, "evidence_text": "占位证据"}
+        for index in range(C.BATCH_SIZE * 6)          # 6 批，坏 1 批 = 17% < 20%
+    ]
+    ctx = RunCtx(run_id="offline-stage1-mixed", week="2026-W34")
+    monkeypatch.setattr(stage1.llm, "parallel_map", _sequential_map)
+
+    calls = {"n": 0}
+
+    def one_bad_batch(items_, opp_type, idx, ctx_info, batch_i, batch_n):
+        del items_, opp_type, ctx_info, batch_n
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise stage1.llm.LLMError("JSON 解析失败: 模拟截断")
+        return {"modes": {"松动": list(idx)}, "unclassified": [],
+                "missing": 0, "duplicated": 0}
+
+    monkeypatch.setattr(stage1, "split_batch", one_bad_batch)
+
+    out = stage1.split_bucket(items, "老品迭代",
+                              {"bucket_key": "offline-mixed"}, ctx, vote=False)
+
+    assert out["groups"], "跳过坏批次后仍应产出分组"
+    ledger = next(iter(ctx.metrics["stage1"]["老品迭代"]["buckets"].values()))
+    assert ledger["failed_batches"] == 1
+    assert ledger["completed_batches"] == 5
 
 def _parse_batch(monkeypatch, modes, unclassified, idx):
     payload = {"modes": modes, "unclassified": unclassified}

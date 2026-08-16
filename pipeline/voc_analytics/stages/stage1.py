@@ -151,7 +151,10 @@ def split_batch(items: list[dict], opp_type: str, idx: list[int], ctx_info: dict
         batch_i=batch_i, batch_n=batch_n, context=_context_line(ctx_info),
         items=_fmt_items(items, idx))
 
-    obj, _ = llm.chat_json(prompt, max_tokens=2000, required=["modes"])
+    # BATCH_SIZE=50 条证据可能产出十几个模式，每个带 mode_name + evidence_idx
+    # + mechanism。2000 实测不够：2b 首轮响应在 4465 字符处被截断，JSON 断在
+    # 半路。全历史池的桶比单周大得多，这个上限只在全量重建时才撑爆。
+    obj, _ = llm.chat_json(prompt, max_tokens=6000, required=["modes"])
     modes: dict[str, list[int]] = {}
     for m in obj.get("modes", []):
         name = str(m.get("mode_name", "")).strip()
@@ -258,10 +261,19 @@ def split_bucket(items: list[dict], opp_type: str, ctx_info: dict, ctx,
         job_i, bi, bidx, bn = job
         try:
             result = split_batch(items, opp_type, bidx, ctx_info, bi, bn)
-        except Exception:
+        except llm.FatalLLMError:
+            # 配额/鉴权耗尽这类错误继续跑也是白费，必须立刻停整轮。
             ctx.bump(failed=1)
             _record(job_i, "failed", len(bidx))
             raise
+        except Exception as error:  # noqa: BLE001
+            # 单批的输出瑕疵（JSON 截断、字段缺失）不是整轮该死的理由：
+            # 210 个桶 × 多批次 × 3 轮投票是几千次调用，指望每次都产出合法
+            # JSON 不现实。记进批次账本、返回异常对象让上层按失败率裁决。
+            # 2026-08-17 的 2b 第二轮就是被一个批次的 JSON 截断带崩全进程的。
+            ctx.bump(failed=1)
+            _record(job_i, "failed", len(bidx))
+            return error
         _record(job_i, "completed", len(bidx))
         return result
 
@@ -278,11 +290,23 @@ def split_bucket(items: list[dict], opp_type: str, ctx_info: dict, ctx,
     failed_results = [result for result in results if isinstance(result, BaseException)]
     invalid_results = [result for result in results
                        if not isinstance(result, dict) and not isinstance(result, BaseException)]
-    if failed_results or invalid_results:
+    if invalid_results:
         _finalize_metrics("failed")
-        if failed_results:
-            raise failed_results[0]
         raise llm.LLMError(f"Stage1 并行调用返回非法结果: {type(invalid_results[0]).__name__}")
+
+    # 个别批次失败可容忍并记账；失败率过高说明是系统性问题（提示词失效、
+    # 模型行为变化），继续跑只会产出残缺结果，必须中止让人来看。
+    if failed_results:
+        failed_ratio = len(failed_results) / max(all_batches, 1)
+        if failed_ratio > C.STAGE1_MAX_FAILED_RATIO:
+            _finalize_metrics("failed")
+            raise llm.LLMError(
+                f"Stage1 批次失败率过高: {len(failed_results)}/{all_batches} "
+                f"({failed_ratio:.0%} > {C.STAGE1_MAX_FAILED_RATIO:.0%})，"
+                f"首个错误: {failed_results[0]}")
+        print(f"   [Stage1] 桶内 {len(failed_results)}/{all_batches} 批失败已跳过"
+              f"（阈值 {C.STAGE1_MAX_FAILED_RATIO:.0%}）：{failed_results[0]}")
+    results = [r for r in results if isinstance(r, dict)]
 
     for r in results:
         for name, members in r["modes"].items():
@@ -322,16 +346,23 @@ def split_bucket(items: list[dict], opp_type: str, ctx_info: dict, ctx,
             f"Stage1 桶证据对账失败: input={n}, accounted={len(set(accounted))}, "
             f"assignments={len(accounted)}")
 
+    # 对账要的是【账目守恒】——每个计划中的批次都有归宿（完成/失败/取消），
+    # 而不是「必须全部完成」。后者会让账本永远记不下一个被容忍的失败：
+    # 上面刚按失败率放行的批次，到这里又会把整桶判死。
     with outcome_lock:
         completed_batches = sum(1 for state, _ in outcomes.values() if state == "completed")
+        failed_batches = sum(1 for state, _ in outcomes.values() if state == "failed")
         completed_rows = sum(rows for state, rows in outcomes.values() if state == "completed")
-    if completed_batches != all_batches or completed_rows != planned_batch_rows:
+        failed_rows = sum(rows for state, rows in outcomes.values() if state == "failed")
+    settled_batches = completed_batches + failed_batches
+    settled_rows = completed_rows + failed_rows
+    if settled_batches != all_batches or settled_rows != planned_batch_rows:
         _finalize_metrics(
             "failed", accounted_rows=n, groups=len(groups),
             unclassified=len(unclassified), dropped=len(dropped))
         raise RuntimeError(
-            f"Stage1 批次对账失败: batches={completed_batches}/{all_batches}, "
-            f"rows={completed_rows}/{planned_batch_rows}")
+            f"Stage1 批次对账失败（账目不守恒）: 已结算 {settled_batches}/{all_batches} 批, "
+            f"{settled_rows}/{planned_batch_rows} 行")
 
     _finalize_metrics(
         "completed", accounted_rows=n, groups=len(groups),

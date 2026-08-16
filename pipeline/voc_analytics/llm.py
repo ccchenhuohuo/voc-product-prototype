@@ -410,8 +410,15 @@ def chat_json(prompt: str, *, max_tokens: int = 1600, seed: int = 42,
             err = "未找到 JSON 对象"
         if attempt == 1:
             raise LLMError(f"{err}；原始输出前 300 字: {text[:300]}")
+        # 解析失败最常见的原因是【被 max_tokens 截断】，而不是模型不会写 JSON。
+        # 用同样的预算重试必然再截断一次，等于白跑——2026-08-17 的 2b 首轮
+        # 就是这样两次都失败：Stage1 预算 2000，响应在 4465 字符处断在半路。
+        # 因此重试时把预算翻倍（上限 8000，qwen-plus 的输出上限）。
+        retry_tokens = max_tokens
+        if "JSON 解析失败" in err or "未找到 JSON 对象" in err:
+            retry_tokens = min(max_tokens * 2, 8000)
         text, meta = chat(prompt + f"\n\n【上次输出无效：{err}】请只输出合法 JSON，不要任何解释文字。",
-                          max_tokens=max_tokens, seed=seed)
+                          max_tokens=retry_tokens, seed=seed)
     raise LLMError("unreachable")
 
 
