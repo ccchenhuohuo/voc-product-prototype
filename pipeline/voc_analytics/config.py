@@ -27,8 +27,16 @@ LLM_RETRY = 4
 #                      64 ->27.42/s  ← 采用
 # 取 64 而非 96/128：128 已触发限流，96 虽未报错但吞吐在 12~35 之间剧烈波动，
 # 说明已在边界上。超过阈值会触发 429 + 指数退避重试，实际反而更慢。
-# 64 实测稳定 27.4 次/秒，是吞吐/稳定性的拐点。周度 ~1300 次调用约 50 秒。
-LLM_CONCURRENCY = int(os.environ.get("VOC_LLM_CONCURRENCY", "64"))
+# 64 实测稳定 27.4 次/秒，是当时的吞吐/稳定性拐点。
+#
+# 2026-08-17 复测（embedding，10 条/批，每档 3×并发数 次调用）：
+#     64 -> 2.42 次/秒  0 失败
+#     96 -> 3.67 次/秒  0 失败   ← 改用
+#    128 -> 全部失败：Connection reset by peer
+#    160 -> 全部失败：Remote end closed connection without response
+# 拐点已上移到 96，比旧值高约 50%。128 起连接被对端直接掐断，重试也救不回来。
+# 注：本次口径是「调用/秒」而每次调用带 10 条文本，与上面那组旧数字不可直接比较。
+LLM_CONCURRENCY = int(os.environ.get("VOC_LLM_CONCURRENCY", "96"))
 
 # ---- PostgreSQL ----
 PG = dict(

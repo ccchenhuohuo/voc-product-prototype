@@ -24,9 +24,9 @@ cd ~/voc-analytics
 # 所有应用环境变量都在任何停止/清库动作前加载；后续监督契约据最终值校验。
 set -a; . ./.env; set +a
 
-# 全局闸门 _GATE 是【进程内】的信号量，两个进程各持一份。实测拐点是合计 64，
-# 128 会触发 429 Throttling，所以每个进程分一半。
-PER_PROC_CONCURRENCY="${PER_PROC_CONCURRENCY:-32}"
+# 全局闸门 _GATE 是【进程内】的信号量，两个进程各持一份，所以每个进程分一半。
+# 2026-08-17 复测拐点由 64 上移到 96（128 起连接被对端掐断），故每进程 48。
+PER_PROC_CONCURRENCY="${PER_PROC_CONCURRENCY:-48}"
 RUN_ID="${RUN_ID:-gen_2026W33_$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 # 两个 Python 进程共享首个 fatal；文件路径按本次 supervisor PID 隔离。
 # llm.py 用原子发布保留首因，另一进程每次请求前都会检查。

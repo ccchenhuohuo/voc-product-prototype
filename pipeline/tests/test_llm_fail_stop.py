@@ -207,6 +207,30 @@ class LLMFailStopTest(unittest.TestCase):
         self.assertTrue(llm._is_fatal("Access denied by API-Key restrictions"))
         self.assertTrue(llm._is_fatal("Arrearage"))
 
+    def test_transport_truncation_is_retryable_not_fatal(self) -> None:
+        """传输层截断必须可重试，否则一次网络抖动就打断整轮全量重跑。
+
+        2026-08-17 压测实测：embedding 批量响应约 200 KB，高并发下会被截断成
+        http.client.IncompleteRead。它当时既不匹配 _RETRYABLE 也不属于
+        URLError/TimeoutError/ConnectionError，于是一次截断直接失败；
+        再叠加 2c 的失败即停，整轮 3.5 小时的重跑会被一次抖动中止。
+        """
+        import http.client
+
+        transient = [
+            http.client.IncompleteRead(b"partial", 500),
+            http.client.BadStatusLine("garbage"),
+            http.client.RemoteDisconnected("closed by peer"),
+        ]
+        for error in transient:
+            with self.subTest(error=type(error).__name__):
+                text = f"{type(error).__name__}: {error}"
+                self.assertTrue(llm._is_retryable(error, text))
+                self.assertFalse(llm._is_fatal(text))
+
+        # 程序错误不得被这条放宽带进重试
+        self.assertFalse(llm._is_retryable(ValueError("bad json"), "ValueError: bad json"))
+
     def test_plain_429_throttling_retries(self) -> None:
         transport = mock.Mock(side_effect=[
             _http_error(429, '{"code":"Throttling.RateLimit","message":"slow down"}'),

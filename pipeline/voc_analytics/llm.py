@@ -11,7 +11,7 @@ M0 实测约束：
 """
 from __future__ import annotations
 
-import json, math, os, re, threading, time, urllib.error, urllib.request
+import http.client, json, math, os, re, threading, time, urllib.error, urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
@@ -264,7 +264,14 @@ def _is_retryable(error: BaseException, error_text: str,
     if status is not None:
         return status == 429 or 500 <= status <= 599
     return (
-        isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
+        isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError,
+                           # http.client.HTTPException 覆盖 IncompleteRead /
+                           # BadStatusLine / RemoteDisconnected 等传输层截断。
+                           # 2026-08-17 压测实测：embedding 批量响应约 200 KB，
+                           # 高并发下会被截断成 IncompleteRead。它原本既不致命
+                           # 也不可重试，于是一次截断直接失败；叠加 2c 的失败即停，
+                           # 会让一轮 3.5 小时的全量重跑因为一次网络抖动整个中止。
+                           http.client.HTTPException))
         or _RETRYABLE.search(error_text) is not None
     )
 
