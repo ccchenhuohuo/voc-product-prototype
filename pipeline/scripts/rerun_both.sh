@@ -237,11 +237,11 @@ export VOC_LLM_CONCURRENCY="$PER_PROC_CONCURRENCY"
 
 echo "== 阶段一：两个生命周期并行生成（每进程并发 ${PER_PROC_CONCURRENCY}，run_id=${RUN_ID}）=="
 CHILDREN_DRAINED=0
-nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
+nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --full-history \
       --lifecycle existing --run-id "$RUN_ID" --limit-buckets "${BUCKETS:-0}" \
       --skip-finalize > /tmp/gen_existing.log 2>&1 &
 PID_EXISTING=$!
-nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
+nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --full-history \
       --lifecycle innovation --run-id "$RUN_ID" --limit-buckets "${BUCKETS:-0}" \
       --skip-finalize > /tmp/gen_innovation.log 2>&1 &
 PID_INNOVATION=$!
@@ -318,6 +318,7 @@ echo "== 阶段二：统一收尾（汇聚 + 拆分检测 + 快照 + 放行）==
 export VOC_LLM_CONCURRENCY=64
 RC_FINALIZE=0
 CHILDREN_DRAINED=0
+# 收尾不取生成池，故不带 --full-history。
 .venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
       --lifecycle both --run-id "$RUN_ID" --finalize-only \
       > /tmp/gen_finalize.log 2>&1 &

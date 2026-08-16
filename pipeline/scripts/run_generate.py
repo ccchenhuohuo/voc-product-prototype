@@ -148,6 +148,14 @@ def _parse_args() -> argparse.Namespace:
                         dest="skip_finalize")
     parser.add_argument("--finalize-only", "--cross-only", action="store_true",
                         dest="finalize_only")
+    # 默认按 --week 的窗口取池，服务周度增量。全量重建必须显式打开本开关：
+    # 机会点层是【跨周去重】的结构，逐周分别生成得到的结果与一次全量生成
+    # 并不等价（消解在整池上做才能把跨周的同一问题收敛成一条）。
+    # 0.0.1 基线的 bucket_line_a() 本就不传周边界，即全历史；2c 统一入口时
+    # 改成按周取池，若在此基础上执行 rerun_both.sh（先清空再按单周重建），
+    # 会用一周的产物替换掉全部历史。2026-08-17 排查发现，加此开关修正。
+    parser.add_argument("--full-history", action="store_true",
+                        help="忽略周窗口，在整个事实层上生成（全量重建用）")
     return parser.parse_args()
 
 
@@ -166,7 +174,11 @@ def main() -> int:
             result = _finalize(args, ctx)
             print(f"收尾完成：{result}")
         else:
-            window_start, window_end = ingest.window_bounds(args.week)
+            if args.full_history:
+                window_start = window_end = None
+                print("[全历史] 忽略周窗口，在整个事实层上生成")
+            else:
+                window_start, window_end = ingest.window_bounds(args.week)
             result = pipeline.generate_opportunities(
                 args.week, ctx, week_start=window_start, week_end=window_end,
                 opp_types=LIFECYCLE_ARGS[args.lifecycle],
