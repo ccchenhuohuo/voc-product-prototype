@@ -1,0 +1,30 @@
+{% import "macros.html" as M with context %}
+<tbody id="issue-list">
+  {% for issue in issues %}
+    {% set inactive = issue.inactive or issue.status in ['已完成', '不考虑'] %}
+    {% set revived = issue.display_status == '待复议' or (issue.revived_at and issue.status == '考虑中') %}
+    {% set recent = issue.recent_evi_count|default(0, true) %}
+    {% set evidence_count = issue.evi_count|default(0, true) %}
+    <tr id="issue-row-{{ issue.opp_id }}" class="{% if loop.first %}sel {% endif %}{% if inactive %}muted {% endif %}{% if revived %}flag{% endif %}"
+        tabindex="0" data-href="/issue/{{ issue.spu or spu }}/{{ issue.opp_id }}">
+      <td class="mark">{{ M.status_mark(issue.status, issue.revived_at, issue.mark_class) }}</td>
+      <td>
+        <a class="nm" href="/issue/{{ issue.spu or spu }}/{{ issue.opp_id }}" style="text-decoration:none">{{ issue.display_title }}</a>
+        <div class="sub">{{ M.taxonomy(issue) }}{% if issue.historical %} · 历史条目{% endif %}</div>
+        {% if revived %}<div class="flagbox">{{ issue.revive_reason or '上市后仍有新反馈' }}</div>{% endif %}
+        {% if issue.status == '已完成' and (issue.release_date or issue.target_release) %}
+          <div class="flagbox ok">{{ issue.target_release or '版本未填' }}{% if issue.release_date %} 于 {{ issue.release_date }} 上市{% endif %}</div>
+        {% endif %}
+        {% with kind='issue', spu=issue.spu or spu, opp_id=issue.opp_id, status=issue.status, revived_at=issue.revived_at, target_release=issue.target_release, release_date=issue.release_date %}
+          {% include "partials/status_control.html" %}
+        {% endwith %}
+      </td>
+      <td class="r"><span class="bar" style="--w:{{ (evidence_count * 100 / max_evidence)|round if max_evidence is defined and max_evidence else 0 }}"><span class="n">{{ evidence_count|num }}</span></span></td>
+      <td class="r n{% if not recent %} dim{% endif %}">{{ recent if recent else '·' }}</td>
+      <td class="r"><span class="n">{{ issue.n_eff|num }}</span><div class="sub">{{ issue.scope or '—' }}</div></td>
+      <td>{{ M.status_label(issue.status, issue.revived_at, issue.display_status) }}</td>
+    </tr>
+  {% else %}
+    <tr><td class="empty" colspan="6">当前没有问题条目。</td></tr>
+  {% endfor %}
+</tbody>

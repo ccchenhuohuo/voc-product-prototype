@@ -1,0 +1,45 @@
+{% macro status_mark(status, revived_at=None, mark_class=None) -%}
+  {% set shown = '待复议' if revived_at and status == '考虑中' else (status or '考虑中') %}
+  {% set cls = mark_class or ('mk-rev' if shown == '待复议' else ('mk-todo' if shown == '考虑中' else ('mk-wip' if shown in ['在跟进', '项目中'] else 'mk-none'))) %}
+  <span class="mk {{ cls }}" aria-hidden="true"></span>
+{%- endmacro %}
+
+{% macro status_label(status, revived_at=None, display_status=None) -%}
+  {% set shown = display_status or ('待复议' if revived_at and status == '考虑中' else (status or '考虑中')) %}
+  <span class="stat{% if shown == '待复议' %} rev{% elif status in ['已完成', '不考虑'] %} off{% endif %}">{{ shown }}</span>
+{%- endmacro %}
+
+{% macro taxonomy(row) -%}
+  {% set parts = [row.tax_domain, row.tax_sub, row.tax_leaf] | select | list %}
+  {%- if parts -%}
+    {%- for part in parts -%}{{ part }}{% if not loop.last %} › {% endif %}{%- endfor -%}
+  {%- elif row.breadcrumb -%}
+    {%- for part in row.breadcrumb -%}{{ part }}{% if not loop.last %} › {% endif %}{%- endfor -%}
+  {%- else -%}标签路径缺失{%- endif -%}
+{%- endmacro %}
+
+{% macro sort_header(request, sorting, label, key, align='', width='', title='') -%}
+  {% set active = sorting.key == key %}
+  {% set next_dir = 'asc' if not active else ('desc' if sorting.dir == 'asc' else none) %}
+  <th class="sort-col{% if align %} {{ align }}{% endif %}{% if active %} sorted{% endif %}"{% if width %} style="width:{{ width }}"{% endif %}>
+    <span class="sort-heading">
+      <span class="sort-label">{{ label }}</span>
+      <a class="sort-control" href="{{ query_url(request, sort=key if next_dir else none, dir=next_dir) }}"
+         aria-label="{% if not active %}按{{ label }}升序排列{% elif sorting.dir == 'asc' %}按{{ label }}降序排列{% else %}恢复默认排列{% endif %}"{% if title %} title="{{ title }}"{% endif %}>
+      {% if active and sorting.dir == 'asc' %}
+        <svg class="sort-icon" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
+          <path d="M6 9.5v-7m-2.5 2.5L6 2.5 8.5 5" />
+        </svg>
+      {% elif active and sorting.dir == 'desc' %}
+        <svg class="sort-icon" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
+          <path d="M6 2.5v7M3.5 7 6 9.5 8.5 7" />
+        </svg>
+      {% else %}
+        <svg class="sort-icon idle" viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
+          <path d="M3.5 4 6 1.5 8.5 4M3.5 8 6 10.5 8.5 8" />
+        </svg>
+      {% endif %}
+      </a>
+    </span>
+  </th>
+{%- endmacro %}

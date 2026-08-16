@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ opportunity.title }} · 新品创新{% endblock %}
+{% block body_class %}inno-detail-page{% endblock %}
+{% block body_attrs %}data-back-url="/inno"{% endblock %}
+{% block content %}
+<header class="head">
+  <nav class="trail" aria-label="面包屑"><a href="/inno">新品创新</a><i>/</i><span>{{ opportunity.title|truncate(18, true, '') }}</span></nav>
+  <h1 class="detail-title">{{ opportunity.title }}</h1>
+  <p class="lede"><span class="code">{{ opportunity.opp_id }}</span>{% if opportunity.core_tag %} · {{ opportunity.core_tag }}{% endif %}{% if opportunity.first_week or opportunity.last_week %} · {{ opportunity.first_week or '—' }}–{{ opportunity.last_week or '—' }}{% endif %}</p>
+</header>
+<div class="scroll">
+  <div class="readout">
+    <div class="ro"><div class="v">{{ (opportunity.evi_total or 0)|num }}</div><div class="k">条证据</div>{% if opportunity.evi_social is defined and opportunity.evi_social == opportunity.evi_total %}<div class="cmp">全部来自社媒</div>{% endif %}</div>
+    <div class="ro"><div class="v">{{ (opportunity.interactions or 0)|num }}</div><div class="k">互动合计</div><div class="cmp">证据聚合而来</div></div>
+    <div class="ro"><div class="v">{{ opportunity.tagged_count or 0 }}/{{ opportunity.attached_count or 0 }}</div><div class="k">标签覆盖</div></div>
+    <div class="ro"><div class="v">{{ opportunity.brands|length if opportunity.brands else 0 }}</div><div class="k">对标品牌</div></div>
+  </div>
+
+  {% if opportunity.desc_phenomenon %}<div class="grp"><h2>现象</h2></div><p class="prose">{{ opportunity.desc_phenomenon }}</p>{% endif %}
+  {% if opportunity.desc_attribution %}<div class="grp"><h2>归因</h2></div><p class="prose">{{ opportunity.desc_attribution }}</p>{% endif %}
+  {% if opportunity.desc_suggestion %}<div class="grp"><h2>建议 · 市面缺口</h2></div><p class="prose">{{ opportunity.desc_suggestion }}</p>{% endif %}
+
+  <div class="grp"><h2>灵感来源</h2><span class="c">{{ evidence[:3]|length }} / {{ opportunity.evi_total or 0 }}</span></div>
+  {% for row in evidence[:3] %}
+    <article class="voice">
+      <p>{{ row.snippet or row.voice_text or row.content }}</p>
+      <div class="meta"><span>{{ row.platform or '平台未知' }}</span><span class="s">互动 {{ (row.interactions or 0)|num }}</span><span class="s">{{ row.publish_time.date() if row.publish_time and row.publish_time.date is defined else (row.publish_time or '日期未知') }}</span></div>
+    </article>
+  {% else %}
+    <p class="empty">暂无可展示的证据原声。</p>
+  {% endfor %}
+
+  <div class="grp"><h2>对标品牌</h2></div>
+  <p class="prose">{{ opportunity.brands|join(' · ') if opportunity.brands else '—' }}</p>
+  {% with kind='inno', opp_id=opportunity.opp_id, status=opportunity.status, target_release=opportunity.target_release, release_date=opportunity.release_date %}
+    {% include "partials/status_control.html" %}
+  {% endwith %}
+</div>
+{% endblock %}

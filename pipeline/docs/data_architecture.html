@@ -1,0 +1,362 @@
+<title>VOC 数据架构</title>
+<style>
+  :root{
+    --paper:#fff; --side:#f7f6f3; --ink:#37352f; --muted:#787774; --faint:#9b9a97;
+    --line:#e9e9e7; --accent:#2383e2; --accent-ink:#1b6ec2; --code-bg:#f7f6f3;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --pos:#448361; --pos-bg:#dbeddb; --pos-ink:#1c3829;
+    --neu:#787774; --neu-bg:#e9e9e7; --neu-ink:#37352f;
+    --neg:#a1272b; --neg-bg:#ffe2dd; --neg-ink:#5d1715;
+    --band:#d3e5ef;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --paper:#191919; --side:#202020; --ink:#d3d3d1; --muted:#9b9998; --faint:#6f6d6b;
+    --line:#2f2f2f; --accent:#529cca; --accent-ink:#6cb0dc; --code-bg:#202020;
+    --pos-bg:#243d30; --pos-ink:#c8e6d0; --neu-bg:#2f2f2f; --neu-ink:#c9c8c6;
+    --neg-bg:#3d2422; --neg-ink:#f3ccc7; --band:#25384a;}}
+  :root[data-theme="dark"]{
+    --paper:#191919; --side:#202020; --ink:#d3d3d1; --muted:#9b9998; --faint:#6f6d6b;
+    --line:#2f2f2f; --accent:#529cca; --accent-ink:#6cb0dc; --code-bg:#202020;
+    --pos-bg:#243d30; --pos-ink:#c8e6d0; --neu-bg:#2f2f2f; --neu-ink:#c9c8c6;
+    --neg-bg:#3d2422; --neg-ink:#f3ccc7; --band:#25384a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-size:15.5px;line-height:1.78;
+    font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 32px}
+  header.doc{padding:58px 0 6px}
+  .ico{font-size:50px;line-height:1}
+  h1{font-size:30px;font-weight:700;line-height:1.25;margin:12px 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin:0;max-width:44em}
+  .meta{color:var(--faint);font-size:13px;margin-top:12px}
+  main{padding:26px 0 90px}
+  section{margin-bottom:54px}
+  h2{font-size:21px;font-weight:700;margin:0 0 6px;padding-top:20px;border-top:1px solid var(--line)}
+  h2 .no{color:var(--accent);margin-right:9px}
+  .lede{color:var(--muted);margin:0 0 18px;max-width:44em}
+  h3{font-size:16px;font-weight:600;margin:26px 0 8px}
+  p{margin:0 0 12px;max-width:44em}
+  ul{margin:0 0 14px;padding-left:1.35em;max-width:42em}li{margin:5px 0}li::marker{color:var(--faint)}
+  code{font-family:var(--mono);font-size:.85em;background:var(--code-bg);border-radius:4px;padding:1.5px 6px;color:#c0455f}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) code{color:#e88}}
+  :root[data-theme="dark"] code{color:#e88}
+  .tablewrap{overflow-x:auto;margin:2px 0 18px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th{font-size:12.5px;color:var(--muted);text-align:left;font-weight:500;border-bottom:1px solid var(--line);padding:7px 14px 7px 0;white-space:nowrap}
+  td{border-bottom:1px solid var(--line);padding:9px 14px 9px 0;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .callout{display:flex;gap:11px;background:var(--side);border-radius:6px;padding:15px 18px;margin:0 0 18px;max-width:50em}
+  .callout .i{flex:0 0 auto;font-size:17px}.callout p{margin:0}
+  .anno{color:var(--muted);font-size:13.5px;max-width:46em;margin:12px 0 0}
+  .anno b{color:var(--ink);font-weight:600}
+  footer{border-top:1px solid var(--line);color:var(--faint);font-size:13px;padding:20px 0 56px}
+  .pill{display:inline-block;font-size:11.5px;line-height:19px;padding:0 7px;border-radius:4px;font-weight:600;white-space:nowrap}
+  .p-pos{background:var(--pos-bg);color:var(--pos-ink)}
+  .p-neu{background:var(--neu-bg);color:var(--neu-ink)}
+  .p-neg{background:var(--neg-bg);color:var(--neg-ink)}
+
+  /* 渠道对照 */
+  .chans{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;margin:18px 0 8px}
+  .chan{border:1px solid var(--line);border-radius:9px;padding:16px 18px}
+  .chan h4{margin:0 0 3px;font-size:15px;font-weight:600}
+  .chan .cnt{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:25px;font-weight:600;line-height:1.2}
+  .chan .unit{font-size:12.5px;color:var(--faint);font-weight:400;margin-left:5px}
+  .chan dl{margin:12px 0 0;font-size:13px;display:grid;grid-template-columns:auto 1fr;gap:5px 12px}
+  .chan dt{color:var(--muted);white-space:nowrap}
+  .chan dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .chan .role{margin:11px 0 0;font-size:13px;color:var(--muted);line-height:1.6}
+  .chan .role b{color:var(--ink);font-weight:600}
+
+  /* 四层结构 */
+  .layers{margin:20px 0 10px;display:flex;flex-direction:column;gap:0}
+  .layer{border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .lh{display:flex;align-items:baseline;gap:10px;padding:10px 16px;background:var(--side);border-bottom:1px solid var(--line)}
+  .lh .n{font-family:var(--mono);color:var(--accent);font-size:13px}
+  .lh .nm{font-size:14px;font-weight:600}
+  .lh .who{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
+  .lb{padding:14px 16px}
+  .lb>p{margin:0 0 11px;font-size:13.5px;color:var(--muted);max-width:48em}
+  .lb>p:last-child{margin-bottom:0}
+  .tbls{display:flex;flex-wrap:wrap;gap:8px}
+  .tbl{border:1px solid var(--line);border-radius:6px;padding:7px 11px;min-width:150px;flex:1 1 150px}
+  .tbl .tn{font-family:var(--mono);font-size:12px;color:var(--accent-ink)}
+  .tbl .tv{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:17px;font-weight:600;line-height:1.35}
+  .tbl .td{font-size:11.5px;color:var(--faint);line-height:1.45}
+  .arrow{display:flex;align-items:center;gap:9px;padding:7px 0 7px 22px;font-size:12.5px;color:var(--muted)}
+  .arrow .g{color:var(--faint);font-family:var(--mono)}
+
+  /* 旅程 */
+  .trip{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin:18px 0 8px}
+  .trow{display:grid;grid-template-columns:88px 1fr;gap:0;border-bottom:1px solid var(--line)}
+  .trow:last-child{border-bottom:none}
+  .tk{background:var(--side);padding:12px 13px;font-size:12px;color:var(--muted);border-right:1px solid var(--line)}
+  .tk b{display:block;color:var(--ink);font-weight:600;font-size:12.5px}
+  .tv2{padding:12px 15px;font-size:13.5px;min-width:0}
+  .tv2 .q{background:var(--side);border-left:2px solid var(--accent);border-radius:0 5px 5px 0;
+    padding:8px 12px;margin:0 0 8px;color:var(--ink);line-height:1.65}
+  .kv{display:flex;flex-wrap:wrap;gap:5px 7px;margin:0}
+  .kv span{font-family:var(--mono);font-size:11.5px;background:var(--code-bg);border-radius:4px;padding:2px 7px;color:var(--muted)}
+  .kv span b{color:var(--ink);font-weight:600}
+  .path{font-family:var(--mono);font-size:12px;color:var(--muted);word-break:break-all;line-height:1.7}
+  .path b{color:var(--ink)}
+
+  /* 分布条 */
+  .bars{display:flex;flex-direction:column;gap:7px;margin:14px 0 6px;max-width:46em}
+  .bar{display:grid;grid-template-columns:104px 1fr 62px;align-items:center;gap:11px;font-size:13px}
+  .bar .bl{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar .bt{height:9px;border-radius:5px;background:var(--band);min-width:3px}
+  .bar .bv{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted);text-align:right}
+</style>
+
+<div class="wrap">
+<header class="doc">
+  <div class="ico">🗂️</div>
+  <h1>VOC 数据架构</h1>
+  <p class="sub">这套库里现在装着什么、分几层、每层的单位是什么，以及一条真实评论如何从原始文本走到 PM 手里的一张卡。</p>
+  <p class="meta">全部数值为 2026-08-15 库内实测 · PostgreSQL 18 + pgvector · 生产实例 <code>voc-postgres</code></p>
+</header>
+
+<main>
+
+<section>
+  <h2><span class="no">1</span>数据从哪来</h2>
+  <p class="lede">上游只有云听 CEM 一个供应商，但走两个渠道。两个渠道的价值完全不同，差别不在数据量，而在<b>能不能挂到具体产品上</b>。</p>
+
+  <div class="chans">
+    <div class="chan">
+      <h4>电商评论</h4>
+      <div class="cnt">26,407<span class="unit">条消息</span></div>
+      <dl>
+        <dt>带 SPU 归属</dt><dd>25,055 · 94.9%</dd>
+        <dt>平均星级</dt><dd>4.48</dd>
+      </dl>
+      <p class="role">渠道自带商品元信息，能精确落到 SPU / SKU。<b>老品迭代的唯一可靠来源</b>——「我到底该改哪个产品」只有这里答得了。</p>
+    </div>
+    <div class="chan">
+      <h4>社交媒体</h4>
+      <div class="cnt">24,495<span class="unit">条消息</span></div>
+      <dl>
+        <dt>带 SPU 归属</dt><dd>2,561 · 10.5%</dd>
+        <dt>平均星级</dt><dd>—（无评分）</dd>
+      </dl>
+      <p class="role">发帖人不会报型号，九成挂不到产品。胜在讲的是<b>没被满足的需求</b>而非已有产品的毛病，服务新品创新。</p>
+    </div>
+  </div>
+
+  <div class="callout"><span class="i">🚫</span><p><b>客服会话不接</b>——业务判断价值不足，明确排除在处理范围外。所以库里只有上面两条线，没有第三条。</p></div>
+</section>
+
+<section>
+  <h2><span class="no">2</span>四层结构</h2>
+  <p class="lede">数据从原始文本到可跟踪的待办，要过四层。每层的<b>单位</b>都不一样，这是理解整套架构的关键——搞混单位就会把「一条评论」和「一个问题」当成一回事。</p>
+
+  <div class="layers">
+
+    <div class="layer">
+      <div class="lh"><span class="n">01</span><span class="nm">抽取层 · 单位是「一句话里的一个标签」</span><span class="who">机器写</span></div>
+      <div class="lb">
+        <p>把每条评论按标签炸开成证据三元组：一个标签 + 一种情感 + 一段原声。一条评论平均产出 2.9 条证据，因为一条评论往往同时夸了外观、骂了吸盘。</p>
+        <div class="tbls">
+          <div class="tbl"><div class="tn">voc_message</div><div class="tv">50,902</div><div class="td">消息本体、产品归属、国家、星级</div></div>
+          <div class="tbl"><div class="tn">voc_evidence</div><div class="tv">148,876</div><div class="td">标签 × 情感 × 原声片段</div></div>
+          <div class="tbl"><div class="tn">voc_tag_taxonomy</div><div class="tv">7,722</div><div class="td">标签树字典，两棵树</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"><span class="g">↓</span><span>只有约 <b>1.1%</b> 的证据会挂到问题上——绝大多数是正面或泛泛评价，留在库里做产品全景</span></div>
+
+    <div class="layer">
+      <div class="lh"><span class="n">02</span><span class="nm">消解层 · 单位是「一个共性问题」</span><span class="who">机器写</span></div>
+      <div class="lb">
+        <p>把散落在不同产品、不同渠道的同类抱怨合并成一个问题。判定链路是结构签名 → 向量召回 → LLM 裁定，产品无关——这样才可能发现「横跨 30 个型号的品线级毛病」。</p>
+        <div class="tbls">
+          <div class="tbl"><div class="tn">voc_opportunity</div><div class="tv">645</div><div class="td">共性问题本体</div></div>
+          <div class="tbl"><div class="tn">voc_opp_evidence</div><div class="tv">1,638</div><div class="td">问题 ← 证据的挂靠关系</div></div>
+          <div class="tbl"><div class="tn">voc_unclassified_evidence</div><div class="tv">714</div><div class="td">够不上任何问题的余量</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"><span class="g">↓</span><span>沿 SPU 维度切开——纯 SQL，零 LLM 调用，因为证据本来就带着产品归属</span></div>
+
+    <div class="layer">
+      <div class="lh"><span class="n">03</span><span class="nm">展开层 · 单位是「某个产品身上的某个问题」</span><span class="who">机器写 · 每周重算</span></div>
+      <div class="lb">
+        <p>共性问题 × SPU 交叉，该 SPU 在该问题上攒够 2 条证据才成一个条目。这是 PM 真正认领和跟踪的最小单位。两张都是物化视图，每周随生成自动重算。</p>
+        <div class="tbls">
+          <div class="tbl"><div class="tn">voc_spu</div><div class="tv">328</div><div class="td">SPU 容器：全景、正负比、均星</div></div>
+          <div class="tbl"><div class="tn">voc_spu_issue</div><div class="tv">161</div><div class="td">问题条目，分布在 51 个 SPU 上</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="arrow"><span class="g">↓</span><span>物化视图每周被覆盖，所以 PM 的决定必须存到另一张普通表里</span></div>
+
+    <div class="layer">
+      <div class="lh"><span class="n">04</span><span class="nm">人工层 · 单位是「PM 的一个决定」</span><span class="who">只有人能写</span></div>
+      <div class="lb">
+        <p>状态、负责人、闭环理由、上市日期都落在这里，与机器算出来的东西物理隔离——<b>重算永远覆盖不到人的决定</b>。目前 PM 机会看板已上线，由 <code>system/</code> 中的 FastAPI 应用读取计算层、写入人工状态表，数据库触发器再记录审计流水。</p>
+        <div class="tbls">
+          <div class="tbl"><div class="tn">voc_spu_issue_manual</div><div class="tv">0</div><div class="td">状态机作用于此</div></div>
+          <div class="tbl"><div class="tn">voc_spu_issue_log</div><div class="tv">0</div><div class="td">每次状态变更的审计流水</div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="anno"><b>为什么 148,876 条证据只挂出 1,638 条关系</b>：绝大多数证据是正面或泛泛而谈的评价，构不成一个待解决的问题。挂靠出来的这 1,638 条里，<span class="pill p-neg">负面 980</span> <span class="pill p-neu">中性 404</span> <span class="pill p-pos">正面 254</span>——正面证据也会被挂进来，因为「别人夸的地方我们做得差」同样是问题的证据。</p>
+</section>
+
+<section>
+  <h2><span class="no">3</span>一条真实评论的旅程</h2>
+  <p class="lede">上面四层是抽象的，下面这条是库里真实存在的数据，从原文一路走到问题条目。</p>
+
+  <div class="trip">
+    <div class="trow">
+      <div class="tk"><b>抽取层</b>消息</div>
+      <div class="tv2">
+        <p class="q">有点晃，不太稳受不了啦，吸不住，经常掉，才买几天，现在直接掉马桶里边，上厕所挂墙上看，直接掉马桶里，受不了了，堵住了马桶还……</p>
+        <p class="kv"><span>渠道 <b>电商</b></span><span>SPU <b>MA39</b></span><span>SKU <b>S002</b></span><span>定级 <b>A级</b></span><span>星级 <b>1.0</b></span><span>国家 <b>CN</b></span><span>品类 <b>S支架类</b></span></p>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="tk"><b>抽取层</b>证据</div>
+      <div class="tv2">
+        <p style="margin:0 0 7px">这条评论炸开后的第 0 条证据：标签 <code>吸盘</code>，情感 <span class="pill p-neg">负面</span>，原声片段 <b>「吸不住」</b>。</p>
+        <p class="path">支撑-全局分析 / <b>A4.Act</b> / <b>产品体验</b> / <b>产品部件</b> / <b>手机夹</b></p>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="tk"><b>消解层</b>共性问题</div>
+      <div class="tv2">
+        <p style="margin:0 0 7px">被规则匹配挂到了这个问题上（<code>match_by = rule</code>）：</p>
+        <p class="q" style="border-left-color:var(--neg)">S支架类吸盘：防止初始吸附失败（磨砂 / 曲面 / 非洁净表面）</p>
+        <p class="kv"><span>共性度 n_eff <b>1.82</b></span><span>扩散范围 <b>多品</b></span></p>
+      </div>
+    </div>
+    <div class="trow">
+      <div class="tk"><b>展开层</b>问题条目</div>
+      <div class="tv2">
+        <p style="margin:0">这个问题在 <b>MA39</b> 这个 SPU 上攒够了证据，于是成为 MA39 卡片下的一个条目。PM 看到的是：<b>MA39 这张卡上，「吸盘吸附失败」这个问题有 N 条证据</b>——可以单独认领、单独跟踪、单独闭环。</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="anno"><b>注意标签与叶子不同名</b>：标签是 <code>吸盘</code>，而它在树里的叶子节点是 <code>手机夹</code>。标签树的叶子是分类节点，具体标签挂在节点下面，检索时两个都可用。</p>
+</section>
+
+<section>
+  <h2><span class="no">4</span>标签树</h2>
+  <p class="lede">供应商给的分类体系，共 7,722 个标签，分 <code>支撑-全局分析</code>（5,044）和 <code>灯光-全局分析</code>（2,678）两棵树。每个标签的完整路径是五段。</p>
+
+  <p class="path" style="background:var(--code-bg);border-radius:6px;padding:11px 14px;max-width:46em">
+    树名 / <b>5A 阶段</b> / <b>体验域</b> / <b>子域</b> / <b>叶子</b>
+  </p>
+  <p class="anno" style="margin-bottom:20px">第一段是树名不是业务层级，这是个容易踩的坑——按位置拆，不能按顺序数。</p>
+
+  <h3>5A 阶段分布</h3>
+  <div class="bars">
+    <div class="bar"><span class="bl">A4.Act 购买使用</span><span class="bt" style="width:100%"></span><span class="bv">105,750</span></div>
+    <div class="bar"><span class="bl">A2.Appeal 吸引</span><span class="bt" style="width:8.1%"></span><span class="bv">8,605</span></div>
+    <div class="bar"><span class="bl">A5.Advocate 推荐</span><span class="bt" style="width:5.5%"></span><span class="bv">5,776</span></div>
+    <div class="bar"><span class="bl">A1.Aware 认知</span><span class="bt" style="width:2.3%"></span><span class="bv">2,412</span></div>
+    <div class="bar"><span class="bl">A3.Ask 问询</span><span class="bt" style="width:1.6%"></span><span class="bv">1,730</span></div>
+  </div>
+  <p class="anno">压倒性集中在 A4——买了以后的使用反馈。这符合数据源的性质：电商评论天然是买完才写的。</p>
+
+  <h3>体验域分布</h3>
+  <div class="bars">
+    <div class="bar"><span class="bl">产品体验</span><span class="bt" style="width:100%"></span><span class="bv">101,598</span></div>
+    <div class="bar"><span class="bl">价格</span><span class="bt" style="width:6.6%"></span><span class="bv">6,745</span></div>
+    <div class="bar"><span class="bl">品牌口碑</span><span class="bt" style="width:4.1%"></span><span class="bv">4,210</span></div>
+    <div class="bar"><span class="bl">物流体验</span><span class="bt" style="width:2.6%"></span><span class="bv">2,603</span></div>
+    <div class="bar"><span class="bl">生态吸引</span><span class="bt" style="width:1.8%"></span><span class="bv">1,860</span></div>
+    <div class="bar"><span class="bl">售前客服</span><span class="bt" style="width:1.7%"></span><span class="bv">1,730</span></div>
+    <div class="bar"><span class="bl">品牌忠诚</span><span class="bt" style="width:1.5%"></span><span class="bv">1,566</span></div>
+    <div class="bar"><span class="bl">种草</span><span class="bt" style="width:1.3%"></span><span class="bv">1,275</span></div>
+  </div>
+
+  <h3>产品体验往下一层</h3>
+  <div class="bars">
+    <div class="bar"><span class="bl">产品性能</span><span class="bt" style="width:100%"></span><span class="bv">53,944</span></div>
+    <div class="bar"><span class="bl">产品部件</span><span class="bt" style="width:29.8%"></span><span class="bv">16,087</span></div>
+    <div class="bar"><span class="bl">产品外观</span><span class="bt" style="width:23.1%"></span><span class="bv">12,464</span></div>
+    <div class="bar"><span class="bl">用户群体&amp;场景</span><span class="bt" style="width:17.2%"></span><span class="bv">9,299</span></div>
+    <div class="bar"><span class="bl">产品质量</span><span class="bt" style="width:9.6%"></span><span class="bv">5,178</span></div>
+    <div class="bar"><span class="bl">产品组件</span><span class="bt" style="width:5.4%"></span><span class="bv">2,913</span></div>
+  </div>
+  <p class="anno">这四级是<b>检索维度</b>：PM 想问「我的产品在『部件』上被吐槽最多的是什么」，靠的就是这套路径，不止 SPU 一个抓手。</p>
+</section>
+
+<section>
+  <h2><span class="no">5</span>三个能查的视角</h2>
+  <p class="lede">同一批数据，三种看法。前两个是给 PM 干活用的，第三个是给管理层看趋势的。</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>视角</th><th>单位</th><th>规模</th><th>回答什么问题</th></tr>
+    <tr>
+      <td><b>SPU 卡</b></td><td>一个产品</td><td class="num">51 张有条目<br><span style="color:var(--faint)">共 328 个容器</span></td>
+      <td>我这个产品身上有哪些毛病，各有多少人在抱怨</td>
+    </tr>
+    <tr>
+      <td><b>共性问题</b></td><td>一类问题</td><td class="num">645 个</td>
+      <td>这个毛病横跨多少产品，是单品问题还是品线通病</td>
+    </tr>
+    <tr>
+      <td><b>产品检索</b></td><td>任意维度</td><td class="num">328 个 SPU<br><span style="color:var(--faint)">7,722 个标签</span></td>
+      <td>按 SPU / 品类 / 标签路径查，我的新品上市反响如何</td>
+    </tr>
+  </table></div>
+
+  <h3>共性度：一个问题扩散多广</h3>
+  <p>每个共性问题算一个 <code>n_eff</code>（有效产品数，Simpson 倒数），据此打上范围标签。<code>n_eff = 1.82</code> 意思是「虽然涉及好几个 SPU，但抱怨主要压在其中不到 2 个身上」。</p>
+  <div class="tablewrap"><table>
+    <tr><th>范围</th><th>判据</th><th>数量</th><th>含义</th></tr>
+    <tr><td>单品</td><td class="num">n_eff &lt; 1.5</td><td class="num">92</td><td>就那一个产品的事</td></tr>
+    <tr><td>多品</td><td class="num">1.5 – 3</td><td class="num">53</td><td>几个产品共有</td></tr>
+    <tr><td>品线级</td><td class="num">≥ 3</td><td class="num">68</td><td>整条产品线的通病，战略级信号</td></tr>
+    <tr><td>无 SPU 挂靠</td><td>—</td><td class="num">432</td><td>主要来自社媒，算不出扩散度</td></tr>
+  </table></div>
+
+  <h3>SPU 容器按定级分布</h3>
+  <div class="tablewrap"><table>
+    <tr><th>定级</th><th>SPU 数</th><th>消息合计</th></tr>
+    <tr><td><b>PS 级</b></td><td class="num">15</td><td class="num">3,542</td></tr>
+    <tr><td>S 级</td><td class="num">78</td><td class="num">12,153</td></tr>
+    <tr><td>A 级</td><td class="num">119</td><td class="num">11,227</td></tr>
+    <tr><td>B 级</td><td class="num">33</td><td class="num">1,175</td></tr>
+    <tr><td>C 级</td><td class="num">1</td><td class="num">3</td></tr>
+    <tr><td>D 级</td><td class="num">4</td><td class="num">62</td></tr>
+    <tr><td>其他</td><td class="num">78</td><td class="num">1,573</td></tr>
+  </table></div>
+  <p class="anno">15 个 PS 级产品扛着 3,542 条反馈——<b>卡片排序按定级走</b>，PS 在最前，PM 一打开就先看到最重要的产品。</p>
+</section>
+
+<section>
+  <h2><span class="no">6</span>谁能写哪张表</h2>
+  <p class="lede">权限不是配置，是<b>数据库层面的硬边界</b>。机器算出来的东西和人做的决定分表存放，各自只有一个角色能写，越界会被数据库直接拒绝。</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>角色</th><th>能写什么</th><th>写不了什么</th></tr>
+    <tr><td><code>voc_writer</code></td><td>机器表：消息、证据、共性问题、挂靠关系、物化视图刷新</td><td>任何人工表——只有只读权</td></tr>
+    <tr><td><code>voc_human</code></td><td>人工表：状态、负责人、闭环理由、上市日期</td><td>任何机器算出来的字段</td></tr>
+    <tr><td><code>voc_reader</code></td><td>什么都写不了</td><td>—</td></tr>
+  </table></div>
+
+  <p>状态流转本身也由数据库的触发器把关，不靠应用层自觉：</p>
+  <ul>
+    <li>五个状态：<b>考虑中 · 在跟进 · 项目中 · 已完成 · 不考虑</b>，非法值直接被约束拒绝</li>
+    <li>置为「不考虑」必须填理由，不填就报错——因为日后复议要靠它</li>
+    <li>每次状态变更自动写审计流水，改了什么、谁改的、什么时候，跑不掉</li>
+    <li>问题闭环后卡片变灰成墓碑；如果之后又有新反馈，需运行 <code>system/scripts/check_revive.py</code> 检测并复活为「待复议」——默认建议先用 <code>--dry-run</code> 只读预演，只有正式执行才会写库</li>
+  </ul>
+
+  <div class="callout"><span class="i">💡</span><p><b>这套隔离是整个设计的地基</b>：数据每周都要重算，但 PM 上周做的判断一个字都不能被冲掉。分表 + 分角色 + 触发器，三重保证。</p></div>
+</section>
+
+</main>
+<footer>VOC 数据架构 · 2026-08-15 库内实测 · 配套〈数据管道重构〉与〈机会模型规格〉</footer>
+</div>

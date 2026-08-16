@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "macros.html" as M with context %}
+{% block title %}新品创新 · VOC{% endblock %}
+{% block body_class %}inno-page{% endblock %}
+{% block content %}
+<header class="head"><h1>新品创新</h1></header>
+<div class="scroll">
+  <div class="grp"><h2>共享池</h2><span class="c">{{ innovations|length }}</span><span class="r">按热度排序</span></div>
+  <table>
+    <thead><tr>
+      <th style="width:3px"></th><th>诉求</th>
+      <th class="r" style="width:70px">证据</th>
+      <th class="r" style="width:74px">互动</th>
+      <th style="width:190px">对标品牌</th>
+      <th style="width:96px">状态</th>
+    </tr></thead>
+    <tbody>
+    {% for row in innovations %}
+      {% set inactive = row.status in ['已完成', '不考虑'] %}
+      {% set revived = row.display_status == '待复议' %}
+      <tr class="{% if loop.first %}sel {% endif %}{% if inactive %}muted {% endif %}{% if revived %}flag{% endif %}"
+          tabindex="0" data-inno="{{ row.opp_id }}" data-href="/inno/{{ row.opp_id }}">
+        <td class="mark">{{ M.status_mark(row.status, row.revived_at, row.mark_class) }}</td>
+        <td><div class="nm">{{ row.title }}</div><div class="sub"><span class="code">{{ row.opp_id }}</span>{% if row.core_tag %} · {{ row.core_tag }}{% endif %}</div></td>
+        <td class="r n">{{ (row.evi_total or 0)|num }}</td>
+        <td class="r n dim">{{ (row.interactions or 0)|num }}</td>
+        <td class="sub" style="font-size:11px">{{ row.brands[:4]|join(' · ') if row.brands else '—' }}</td>
+        <td>{{ M.status_label(row.status, row.revived_at, row.display_status) }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="6">当前共享池中没有新品创新条目。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% import "macros.html" as M with context %}
+{% block title %}产品检索 · VOC{% endblock %}
+{% block body_class %}search-page{% endblock %}
+{% block content %}
+<header class="head"><h1>产品检索</h1></header>
+{# 搜索框与标签树放在滚动区之外：筛选条件是操作面板，滚动看结果时它必须一直在，
+   否则往下翻几屏想改个筛选就得先滚回顶部。只有下面的结果表参与滚动。 #}
+<div class="filterbar">
+  <form class="search" method="get" action="/search">
+    <span class="dim">/</span>
+    <input id="q" type="search" name="q" placeholder="SPU 编号、品名、SKU" value="{{ filters.q }}" data-instant-search>
+    {% if filters.category %}<input type="hidden" name="category" value="{{ filters.category }}">{% endif %}
+    {% if filters.domain %}<input type="hidden" name="domain" value="{{ filters.domain }}">{% endif %}
+    {% if filters.sub %}<input type="hidden" name="sub" value="{{ filters.sub }}">{% endif %}
+    {% if filters.leaf %}<input type="hidden" name="leaf" value="{{ filters.leaf }}">{% endif %}
+    {% if sorting.key %}<input type="hidden" name="sort" value="{{ sorting.key }}"><input type="hidden" name="dir" value="{{ sorting.dir }}">{% endif %}
+  </form>
+  <section class="tag-tree" aria-label="标签树筛选">
+    <div class="tag-head">
+      <span>标签筛选</span>
+      {% if selected_path %}
+        <span class="tag-path">{{ selected_path|join(' › ') }}</span>
+        <a class="tag-clear" href="{{ query_url(request, domain=None, sub=None, leaf=None) }}">清除</a>
+      {% endif %}
+    </div>
+    <div class="tag-levels">
+      <div class="tag-level" data-tag-level="category">
+        <div class="tag-level-title">品类</div>
+        <div class="tag-options">
+          <a class="f tag-option{% if not filters.category %} on{% endif %}"
+             href="{{ query_url(request, category=None) }}">全部<span class="n2">{{ facets.category.get('__all__', shell.search if shell.search is defined else rows|length) }}</span></a>
+          {% for value in categories %}
+            <a class="f tag-option{% if filters.category == value %} on{% endif %}"
+               href="{{ query_url(request, category=None if filters.category == value else value) }}">{{ value }}<span class="n2">{{ facets.category.get(value, 0) }}</span></a>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="tag-level">
+        <div class="tag-level-title">体验域</div>
+        <div class="tag-options">
+          {% for option in tag_options.domains %}
+            {% set active = filters.domain == option.domain %}
+            <a class="f tag-option{% if loop.index > 8 %} tag-overflow{% endif %}{% if active %} on{% endif %}" data-level="domain"
+               href="{{ query_url(request, domain=None if active else option.domain, sub=None, leaf=None) }}">{{ option.domain }}<span class="n2">{{ option.count }}</span></a>
+          {% else %}<span class="tag-empty">暂无标签</span>{% endfor %}
+          {% if tag_options.domains|length > 8 %}
+            <button class="tag-toggle" type="button" data-tag-toggle aria-expanded="false"><span class="tag-expand">展开全部 ({{ tag_options.domains|length }})</span><span class="tag-collapse">收起</span></button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="tag-level">
+        <div class="tag-level-title">子域</div>
+        <div class="tag-options">
+          {% for option in tag_options.subs %}
+            {% set active = filters.domain == option.domain and filters.sub == option.sub %}
+            <a class="f tag-option{% if loop.index > 8 %} tag-overflow{% endif %}{% if active %} on{% endif %}" data-level="sub"
+               href="{{ query_url(request, domain=option.domain, sub=None if active else option.sub, leaf=None) }}">{{ option.sub }}<span class="n2">{{ option.count }}</span></a>
+          {% else %}<span class="tag-empty">暂无标签</span>{% endfor %}
+          {% if tag_options.subs|length > 8 %}
+            <button class="tag-toggle" type="button" data-tag-toggle aria-expanded="false"><span class="tag-expand">展开全部 ({{ tag_options.subs|length }})</span><span class="tag-collapse">收起</span></button>
+          {% endif %}
+        </div>
+      </div>
+      <div class="tag-level">
+        <div class="tag-level-title">叶子</div>
+        <div class="tag-options">
+          {% for option in tag_options.leaves %}
+            {% set active = filters.domain == option.domain and filters.sub == option.sub and filters.leaf == option.leaf %}
+            <a class="f tag-option{% if loop.index > 8 %} tag-overflow{% endif %}{% if active %} on{% endif %}" data-level="leaf"
+               href="{{ query_url(request, domain=option.domain, sub=option.sub, leaf=None if active else option.leaf) }}">{{ option.leaf }}<span class="n2">{{ option.count }}</span></a>
+          {% else %}<span class="tag-empty">暂无标签</span>{% endfor %}
+          {% if tag_options.leaves|length > 8 %}
+            <button class="tag-toggle" type="button" data-tag-toggle aria-expanded="false"><span class="tag-expand">展开全部 ({{ tag_options.leaves|length }})</span><span class="tag-collapse">收起</span></button>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="scroll">
+  <table>
+    <thead><tr>
+      <th>产品</th>{{ M.sort_header(request, sorting, '定级', 'grade', width='44px') }}
+      {{ M.sort_header(request, sorting, '负面占比', 'ratio', align='r', width='78px', title='按置信下界排序，样本量少的会被压低') }}
+      {{ M.sort_header(request, sorting, '负面证据', 'evidence', align='r', width='84px') }}
+      {{ M.sort_header(request, sorting, '均星', 'star', align='r', width='52px') }}
+      {{ M.sort_header(request, sorting, '待办/总', 'issues', align='r', width='62px') }}
+    </tr></thead>
+    <tbody>
+    {% for row in rows %}
+      {% set ratio = row.negative_ratio|default(0, true) %}
+      {% set ratio_alarm = ratio >= 0.20 %}
+      {% set neg = row.negative_evi_count|default(0, true) %}
+      {% set avg = row.avg_star|default(none, true) %}
+      {% set total = row.issue_count if row.issue_count is defined and row.issue_count is not none else 0 %}
+      {% set opened = row.open_issue_count if row.open_issue_count is defined and row.open_issue_count is not none else total %}
+      {% set revived = row.has_revived_issue|default(false, true) %}
+      <tr class="{% if loop.first %}sel {% endif %}{% if revived %}flag{% endif %}" tabindex="0" data-spu="{{ row.spu }}" data-href="/spu/{{ row.spu }}">
+        <td><div class="nm">{{ product_name(row) }}</div><div class="sub"><span class="code">{{ row.spu }}</span> · {{ row.category or row.prod_line or '—' }} · {{ row.launch_period or '—' }}</div></td>
+        <td class="n dim">{{ (row.grade or '—')|replace('级', '') }}</td>
+        <td class="r"><span class="n-lg{% if ratio_alarm %} alarm-text{% endif %}">{{ '%.1f'|format(ratio * 100) }}</span><span class="dim n" style="font-size:10.5px">%</span></td>
+        <td class="r"><span class="bar{% if ratio_alarm %} hot{% endif %}" style="--w:{{ (neg * 100 / max_negative)|round if max_negative else 0 }}"><span class="n">{{ neg|num }}</span></span></td>
+        <td class="r n{% if avg is none or avg >= 4 %} dim{% else %} alarm-text{% endif %}">{{ avg|num }}</td>
+        <td class="r n dim">{{ opened }}/{{ total }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="6">没有匹配的产品。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">检索覆盖全部 SPU，包括<b>没有待办的产品</b>。队列只展示当前有问题条目的产品。</p>
+</div>
+{% endblock %}

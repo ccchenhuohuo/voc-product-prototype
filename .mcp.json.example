@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cem-mcp": {
+      "type": "http",
+      "url": "https://ytcem.cn/mcp",
+      "headers": {
+        "X-MCP-Api-Key": "<YOUR_API_KEY>"
+      }
+    }
+  }
+}

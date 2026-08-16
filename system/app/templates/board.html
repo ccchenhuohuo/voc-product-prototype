@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "macros.html" as M with context %}
+{% block title %}老品迭代 · VOC{% endblock %}
+{% block body_class %}iter-page{% endblock %}
+{% block content %}
+<header class="head">
+  <h1>老品迭代</h1>
+  <nav class="tabs" aria-label="队列视图">
+    <a class="tab{% if not selected_filter %} on{% endif %}" href="{{ query_url(request, filter=none) }}">全部 <span class="n">{{ shell.iter if shell.iter is defined else cards|length }}</span></a>
+    <a class="tab{% if selected_filter == 'revived' %} on{% endif %}" href="{{ query_url(request, filter='revived') }}">待复议 <span class="n">{{ shell.revived if shell.revived is defined else 0 }}</span></a>
+    <button class="tab" type="button" disabled title="待接入认证后可用">我负责的 <span class="n">—</span></button>
+  </nav>
+</header>
+<div class="scroll">
+  <table>
+    <thead><tr>
+      <th style="width:3px"></th>
+      <th>产品</th>
+      {{ M.sort_header(request, sorting, '定级', 'grade', width='44px') }}
+      {{ M.sort_header(request, sorting, '负面占比', 'ratio', align='r', width='78px', title='按置信下界排序，样本量少的会被压低') }}
+      {{ M.sort_header(request, sorting, '负面证据', 'evidence', align='r', width='84px') }}
+      {{ M.sort_header(request, sorting, '均星', 'star', align='r', width='52px') }}
+      {{ M.sort_header(request, sorting, '待办/总', 'issues', align='r', width='62px') }}
+      <th style="width:34%">头号问题</th>
+      <th class="r" style="width:74px">近60天</th>
+    </tr></thead>
+    <tbody>
+    {% for card in cards %}
+      {% set ratio = card.negative_ratio|default(0, true) %}
+      {% set ratio_alarm = ratio >= 0.20 %}
+      {% set neg = card.negative_evi_count|default(0, true) %}
+      {% set avg = card.avg_star|default(none, true) %}
+      {% set total = card.issue_count if card.issue_count is defined and card.issue_count is not none else card.issues|length %}
+      {% set opened = card.open_issue_count if card.open_issue_count is defined and card.open_issue_count is not none else total %}
+      {% set recent = card.recent_evi_count|default(0, true) %}
+      {% set top = card.top_issue if card.top_issue is defined and card.top_issue else (card.issues[0] if card.issues else none) %}
+      {% set revived = top and top.status == '考虑中' and top.revived_at is not none %}
+      <tr class="{% if loop.first %}sel {% endif %}{% if revived %}flag{% endif %}"
+          tabindex="0" data-spu="{{ card.spu }}" data-href="/spu/{{ card.spu }}">
+        <td class="mark">{% if top %}{{ M.status_mark(top.status, top.revived_at, top.mark_class) }}{% else %}<span class="mk mk-none"></span>{% endif %}</td>
+        <td><div class="nm">{{ product_name(card) }}</div><div class="sub"><span class="code">{{ card.spu }}</span> · {{ card.category or card.prod_line or '—' }} · {{ card.launch_period or '—' }}</div></td>
+        <td class="n dim">{{ (card.grade or '—')|replace('级', '') }}</td>
+        <td class="r"><span class="n-lg{% if ratio_alarm %} alarm-text{% endif %}">{{ '%.1f'|format(ratio * 100) }}</span><span class="dim n" style="font-size:10.5px">%</span></td>
+        <td class="r"><span class="bar{% if ratio_alarm %} hot{% endif %}" style="--w:{{ (neg * 100 / max_negative)|round if max_negative else 0 }}"><span class="n">{{ neg|num }}</span></span></td>
+        <td class="r n{% if avg is none or avg >= 4 %} dim{% else %} alarm-text{% endif %}">{{ avg|num }}</td>
+        <td class="r n dim">{{ opened }}/{{ total }}</td>
+        <td class="tight"><span style="font-size:12px">{{ top.display_title if top else '—' }}</span></td>
+        <td class="r n{% if not recent %} dim{% endif %}">{{ recent if recent else '·' }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="9">{% if selected_filter == 'revived' %}当前没有待复议的条目{% else %}当前没有需要处理的产品。{% endif %}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

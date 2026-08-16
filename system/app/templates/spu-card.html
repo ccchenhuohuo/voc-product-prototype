@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ product_name(card) }} · VOC{% endblock %}
+{% block body_class %}spu-page{% endblock %}
+{% block body_attrs %}data-back-url="/iter"{% endblock %}
+{% block content %}
+{% set ratio = card.negative_ratio|default(0, true) %}
+{% set avg = card.avg_star|default(none, true) %}
+{% set median_ratio = card.median_negative_ratio|default(none) %}
+{% set median_star = card.median_avg_star|default(none) %}
+{% set total = card.issue_count if card.issue_count is defined and card.issue_count is not none else issues|length %}
+{% set opened = card.open_issue_count if card.open_issue_count is defined and card.open_issue_count is not none else total %}
+<header class="head">
+  <nav class="trail" aria-label="面包屑"><a href="/iter">老品迭代</a><i>/</i><span>{{ product_name(card) }}</span></nav>
+  <h1>{{ product_name(card) }}</h1>
+  <p class="lede"><span class="code">{{ card.spu }}</span>
+    {% if card.skus %} · SKU {{ card.skus|join(' / ') }}{% endif %}
+    · {{ card.category or card.prod_line or '—' }} · {{ card.launch_period or '—' }}
+    · 定级 {{ card.grade or '—' }} · 负责人 <b>未分配</b></p>
+</header>
+<div class="scroll">
+  <div class="readout">
+    <div class="ro"><div class="v{% if ratio >= 0.20 %} bad{% endif %}">{{ '%.1f'|format(ratio * 100) }}%</div><div class="k">负面占比</div><div class="cmp">组内中位 {% if median_ratio is not none %}{{ '%.1f'|format(median_ratio * 100) }}%{% else %}—{% endif %}</div></div>
+    <div class="ro"><div class="v{% if avg is not none and avg < 4 %} bad{% endif %}">{{ avg|num }}</div><div class="k">均星</div><div class="cmp">组内中位 {{ median_star|num }}</div></div>
+    <div class="ro"><div class="v">{{ (card.message_count or 0)|num }}</div><div class="k">消息</div></div>
+    <div class="ro"><div class="v">{{ (card.negative_evi_count or 0)|num }}</div><div class="k">负面证据</div><div class="cmp">正面 {{ (card.positive_evi_count or 0)|num }}</div></div>
+    <div class="ro"><div class="v">{{ opened }}/{{ total }}</div><div class="k">待办 / 总条目</div></div>
+  </div>
+
+  <div class="grp"><h2>问题条目</h2><span class="c">{{ issues|length }}{% if issues|length > total %} · 含历史 {{ issues|length - total }}{% endif %}</span><span class="r">已完成沉底 · 复活置顶 · 其余按证据数</span></div>
+  <table>
+    <thead><tr>
+      <th style="width:3px"></th><th>问题</th>
+      <th class="r" style="width:86px">证据</th>
+      <th class="r" style="width:60px">近60天</th>
+      <th class="r" style="width:84px">扩散</th>
+      <th style="width:150px">状态</th>
+    </tr></thead>
+    {% with spu=card.spu, max_evidence=max_evidence %}{% include "partials/issue_list.html" %}{% endwith %}
+  </table>
+</div>
+{% endblock %}

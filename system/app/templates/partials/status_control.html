@@ -1,0 +1,43 @@
+{% set endpoint = '/issue/' ~ spu ~ '/' ~ opp_id ~ '/status' if kind == 'issue' else '/inno/' ~ opp_id ~ '/status' %}
+{% set current = status or '考虑中' %}
+{% set attempted = attempted_status or current %}
+{% set show_drop = error and attempted == '不考虑' %}
+{% set show_done = error and attempted == '已完成' %}
+<div class="status-control" id="status-{{ kind }}-{{ opp_id }}{% if spu is defined and spu %}-{{ spu }}{% endif %}">
+  {% if error and not show_drop and not show_done %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+  <div class="ops" aria-label="状态流转">
+    <span class="lbl">状态</span>
+    {% for next_status in ['考虑中', '在跟进', '项目中'] %}
+      <form method="post" action="{{ endpoint }}" hx-post="{{ endpoint }}" hx-target="closest .status-control" hx-swap="outerHTML">
+        <input type="hidden" name="status" value="{{ next_status }}">
+        <button class="act{% if current == next_status %} on{% endif %}" type="submit">{{ next_status }}</button>
+      </form>
+    {% endfor %}
+    <button class="act{% if current == '已完成' %} on{% else %} grave{% endif %}" type="button" data-status-toggle="done" aria-expanded="{{ 'true' if show_done else 'false' }}">已完成</button>
+    <button class="act{% if current == '不考虑' %} on{% else %} grave{% endif %}" type="button" data-status-toggle="drop" aria-expanded="{{ 'true' if show_drop else 'false' }}">不考虑</button>
+  </div>
+
+  <div class="form" data-status-panel="done"{% if not show_done %} hidden{% endif %}>
+    <form method="post" action="{{ endpoint }}" hx-post="{{ endpoint }}" hx-target="closest .status-control" hx-swap="outerHTML">
+      <input type="hidden" name="status" value="已完成">
+      {% if show_done %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+      <div class="fr">
+        <div><label for="release-{{ kind }}-{{ opp_id }}">版本号</label><input id="release-{{ kind }}-{{ opp_id }}" name="target_release" value="{{ target_release or '' }}" placeholder="v2.1"></div>
+        <div><label for="date-{{ kind }}-{{ opp_id }}">上市日期 · 必填 · 复活判定的分界</label><input id="date-{{ kind }}-{{ opp_id }}" type="date" name="release_date" value="{{ release_date or '' }}" required></div>
+      </div>
+      <button class="act on" type="submit">确认</button>
+      <button class="act" type="button" data-status-cancel>取消</button>
+    </form>
+  </div>
+
+  <div class="form" data-status-panel="drop"{% if not show_drop %} hidden{% endif %}>
+    <form method="post" action="{{ endpoint }}" hx-post="{{ endpoint }}" hx-target="closest .status-control" hx-swap="outerHTML">
+      <input type="hidden" name="status" value="不考虑">
+      {% if show_drop %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+      <label for="note-{{ kind }}-{{ opp_id }}">不考虑的理由（必填）</label>
+      <textarea id="note-{{ kind }}-{{ opp_id }}" name="decision_note" rows="2" placeholder="日后复议要靠它">{{ decision_note or '' }}</textarea>
+      <button class="act on" type="submit">确认</button>
+      <button class="act" type="button" data-status-cancel>取消</button>
+    </form>
+  </div>
+</div>

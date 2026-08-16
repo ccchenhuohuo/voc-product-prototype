@@ -1,0 +1,601 @@
+<!-- @dsCard group="原型" -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>可点原型</title>
+<meta name="description" content="整个系统的交互逻辑，点得动">
+<style>
+/* VOC 系统设计令牌 · Notion 体系 · 三态主题 */
+:root{
+  --paper:#fff; --side:#f7f6f3; --sunk:#fbfbfa; --ink:#37352f; --muted:#787774;
+  --faint:#9b9a97; --line:#e9e9e7; --line2:#f1f0ee; --accent:#2383e2; --hover:#f1f0ee;
+  --g-bg:#e9e9e7; --g-ink:#37352f;
+  --b-bg:#d3e5ef; --b-ink:#183347;
+  --gr-bg:#dbeddb; --gr-ink:#1c3829;
+  --y-bg:#fdecc8; --y-ink:#402c1b;
+  --r-bg:#ffe2dd; --r-ink:#5d1715;
+  --p-bg:#e8deee; --p-ink:#412454;
+  --o-bg:#faebdd; --o-ink:#49290f;
+  --spu-edge:#2383e2; --inn-edge:#448361;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#191919; --side:#202020; --sunk:#1c1c1c; --ink:#d3d3d1; --muted:#9b9998;
+  --faint:#6f6d6b; --line:#2f2f2f; --line2:#252525; --accent:#529cca; --hover:#252525;
+  --g-bg:#373737; --g-ink:#d3d3d1;
+  --b-bg:#243d4d; --b-ink:#cfe3f0;
+  --gr-bg:#243d30; --gr-ink:#c8e6d0;
+  --y-bg:#4a3a1c; --y-ink:#f7e2b5;
+  --r-bg:#3d2422; --r-ink:#f3ccc7;
+  --p-bg:#372a41; --p-ink:#e2d3ee;
+  --o-bg:#3f2c1c; --o-ink:#f2d9bd;
+  --spu-edge:#529cca; --inn-edge:#5b9c74;}}
+:root[data-theme="dark"]{
+  --paper:#191919; --side:#202020; --sunk:#1c1c1c; --ink:#d3d3d1; --muted:#9b9998;
+  --faint:#6f6d6b; --line:#2f2f2f; --line2:#252525; --accent:#529cca; --hover:#252525;
+  --g-bg:#373737; --g-ink:#d3d3d1;
+  --b-bg:#243d4d; --b-ink:#cfe3f0;
+  --gr-bg:#243d30; --gr-ink:#c8e6d0;
+  --y-bg:#4a3a1c; --y-ink:#f7e2b5;
+  --r-bg:#3d2422; --r-ink:#f3ccc7;
+  --p-bg:#372a41; --p-ink:#e2d3ee;
+  --o-bg:#3f2c1c; --o-ink:#f2d9bd;
+  --spu-edge:#529cca; --inn-edge:#5b9c74;}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  font-size:14.5px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.n{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* 状态标签 —— 方角粉彩，Notion 风格 */
+.st{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;line-height:19px;
+  padding:0 7px;border-radius:4px;font-weight:600;white-space:nowrap}
+.st-consider{background:var(--g-bg);color:var(--g-ink)}
+.st-track{background:var(--b-bg);color:var(--b-ink)}
+.st-project{background:var(--p-bg);color:var(--p-ink)}
+.st-done{background:var(--gr-bg);color:var(--gr-ink)}
+.st-drop{background:var(--g-bg);color:var(--faint)}
+.st-revive{background:var(--o-bg);color:var(--o-ink)}
+/* 扩散范围 */
+.sc{display:inline-block;font-size:11px;line-height:18px;padding:0 6px;border-radius:4px;font-weight:600}
+.sc-one{background:var(--g-bg);color:var(--muted)}
+.sc-multi{background:var(--y-bg);color:var(--y-ink)}
+.sc-line{background:var(--r-bg);color:var(--r-ink)}
+/* 幽灵按钮 */
+.gh{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;line-height:26px;padding:0 10px;
+  border:1px solid var(--line);border-radius:5px;background:transparent;color:var(--muted);
+  cursor:pointer;font-family:inherit;transition:background .12s,color .12s}
+.gh:hover{background:var(--hover);color:var(--ink)}
+.gh-primary{border-color:transparent;background:var(--accent);color:#fff}
+.gh-primary:hover{background:var(--accent);color:#fff;filter:brightness(1.08)}
+.gh:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* 面包屑 */
+.crumb{font-size:12px;color:var(--faint);display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.crumb b{color:var(--muted);font-weight:500}
+.crumb i{font-style:normal;color:var(--line);}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<style>
+/* ============================================================
+   量具（instrument）· 这不是文档页，是读数仪器
+   ------------------------------------------------------------
+   界面上八成有效内容是数字，用户是固定的少数人每周重复使用，
+   永远不需要说服谁。所以设计预算全给密度与可辨性：
+   等宽定宽数字主导 · 可见的细网格 · 近无彩表面 + 单一告警色 ·
+   不用圆角阴影 emoji。留白从行内挤出来，全部放到分组之间。
+   ============================================================ */
+:root{
+  /* 表面：冷中性。网格线要画出来——Notion 刻意不画，数据表必须画 */
+  --field:#fcfcfd; --row:#ffffff; --alt:#fafafb; --sunk:#f4f4f6;
+  --rule:#e4e4e7; --rule-2:#eeeef0; --rule-strong:#c8c8cd;
+  /* 墨色四档，对底色全部 ≥4.5:1 */
+  --ink:#18181b; --ink-2:#3f3f46; --ink-3:#5c5c66; --ink-4:#71717a;
+  /* 色彩预算：一个告警色。没有蓝紫绿粉各来一块 */
+  --alarm:#c2321f; --alarm-wash:#fdf2f0; --alarm-dim:#e8b4ab;
+  --focus:#2b6cb0;
+  /* 拉丁与中文出自同一设计体系：PingFang SC 本就是为搭配 SF 而设计的。
+     此前把 Manrope 排在首位，导致拉丁走几何无衬线、中文回退人文黑体，
+     同一行里两套毫不相干的字面——那才是「看起来通用」的真正原因。 */
+  --sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','PingFang SC','Hiragino Sans GB',
+         'Microsoft YaHei',system-ui,sans-serif;
+  --mono:ui-monospace,Menlo,'SF Mono',Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --field:#0f0f11; --row:#151517; --alt:#131315; --sunk:#1c1c1f;
+  --rule:#2a2a2e; --rule-2:#232327; --rule-strong:#3f3f46;
+  --ink:#f4f4f5; --ink-2:#d4d4d8; --ink-3:#a1a1aa; --ink-4:#8b8b93;
+  --alarm:#f2705a; --alarm-wash:#2a1815; --alarm-dim:#7a3a30;
+  --focus:#63a4dd;}}
+:root[data-theme="dark"]{
+  --field:#0f0f11; --row:#151517; --alt:#131315; --sunk:#1c1c1f;
+  --rule:#2a2a2e; --rule-2:#232327; --rule-strong:#3f3f46;
+  --ink:#f4f4f5; --ink-2:#d4d4d8; --ink-3:#a1a1aa; --ink-4:#8b8b93;
+  --alarm:#f2705a; --alarm-wash:#2a1815; --alarm-dim:#7a3a30;
+  --focus:#63a4dd;}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--field);color:var(--ink);font-family:var(--sans);
+  font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow:hidden;
+  font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+
+/* ---------- 骨架 ---------- */
+.shell{display:flex;height:100vh;overflow:hidden}
+.sb{width:186px;flex:0 0 186px;background:var(--field);border-right:1px solid var(--rule);
+  padding:16px 0 12px;display:flex;flex-direction:column;overflow-y:auto}
+.brand{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-4);
+  padding:0 16px 14px;font-weight:600}
+.nav{display:flex;align-items:baseline;gap:8px;width:100%;padding:5px 16px;
+  font-size:13px;color:var(--ink-3);text-align:left;border-left:2px solid transparent}
+.nav:hover{color:var(--ink);background:var(--sunk)}
+.nav.on{color:var(--ink);font-weight:600;border-left-color:var(--ink);background:var(--sunk)}
+.nav .nc{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink-4)}
+.nav.on .nc{color:var(--ink-3)}
+.nav.alarm .nc{color:var(--alarm);font-weight:700}
+.sb-gap{height:14px}
+.sb-note{margin-top:auto;padding:12px 16px 0;border-top:1px solid var(--rule);
+  font-size:11px;color:var(--ink-4);line-height:1.5}
+.body{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--row);overflow:hidden}
+
+.head{flex:0 0 auto;padding:18px 26px 0;border-bottom:1px solid var(--rule)}
+.trail{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-4);margin-bottom:9px}
+.trail button{color:var(--ink-4);padding:1px 3px}
+.trail button:hover{color:var(--ink);text-decoration:underline}
+.trail i{font-style:normal;color:var(--rule-strong)}
+h1{font-size:17px;font-weight:600;margin:0 0 3px;letter-spacing:-.005em}
+.lede{font-size:12px;color:var(--ink-3);margin:0 0 13px;max-width:62em;line-height:1.55}
+.lede b{color:var(--ink-2);font-weight:600}
+.tabs{display:flex;gap:2px;margin-bottom:-1px}
+.tab{font-size:12px;padding:6px 11px;color:var(--ink-3);border-bottom:2px solid transparent}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--ink);font-weight:600;border-bottom-color:var(--ink)}
+.tab .n{font-family:var(--mono);font-size:11px;color:var(--ink-4);margin-left:5px}
+.scroll{flex:1;min-height:0;overflow-y:auto;padding:0 26px 40px;scrollbar-width:thin}
+.scroll::-webkit-scrollbar{width:9px}
+.scroll::-webkit-scrollbar-thumb{background:var(--rule);border-radius:5px;
+  border:2px solid var(--row);background-clip:padding-box}
+
+/* ---------- 表 ---------- */
+table{width:100%;border-collapse:collapse}
+thead th{position:sticky;top:0;z-index:2;background:var(--row);text-align:left;
+  font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--ink-4);padding:11px 8px 7px;border-bottom:1px solid var(--rule-strong);white-space:nowrap}
+thead th.r{text-align:right}
+tbody tr{border-bottom:1px solid var(--rule-2)}
+tbody tr:hover{background:var(--sunk)}
+tbody tr.sel{background:var(--sunk)}
+tbody tr.muted{opacity:.42}
+tbody tr.flag{background:var(--alarm-wash)}
+tbody tr.flag:hover{background:var(--alarm-wash);filter:brightness(.985)}
+td{padding:6px 8px;vertical-align:middle}
+td.r{text-align:right}
+.n{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12.5px}
+.n-lg{font-family:var(--mono);font-size:13.5px;font-weight:600}
+.dim{color:var(--ink-4)}
+.nm{font-weight:500;color:var(--ink)}
+.code{font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+.sub{font-size:11px;color:var(--ink-4);margin-top:1px}
+.tight{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:1px}
+
+/* 状态：3px 竖标 + 墨色 + 透明度。不用六块粉彩 */
+td.mark{width:3px;padding:0}
+.mk{display:block;width:3px;height:26px}
+.mk-todo{background:var(--ink)}
+.mk-wip{background:var(--ink-4)}
+.mk-rev{background:var(--alarm)}
+.mk-none{background:transparent}
+.stat{font-size:11.5px;color:var(--ink-3);white-space:nowrap}
+.stat.rev{color:var(--alarm);font-weight:600}
+.stat.off{color:var(--ink-4)}
+
+/* 数字背后的条：共同基线长度，比彩色数字准得多，且不占垂直空间 */
+.bar{position:relative;display:inline-block;min-width:52px;text-align:right;padding:0 7px}
+.bar::before{content:'';position:absolute;right:0;top:50%;transform:translateY(-50%);
+  height:16px;width:calc(var(--w,0) * 1%);background:var(--ink);opacity:.09;border-radius:1px}
+.bar.hot::before{background:var(--alarm);opacity:.17}
+.bar>span{position:relative}
+
+/* 分组标题 */
+.grp{display:flex;align-items:baseline;gap:9px;margin:30px 0 0;padding-bottom:6px}
+.grp:first-child{margin-top:16px}
+.grp h2{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin:0}
+.grp .c{font-family:var(--mono);font-size:11px;color:var(--ink-4)}
+.grp .r{margin-left:auto;font-size:11px;color:var(--ink-4)}
+
+/* 控件：筛选与状态迁移必须长得不一样 */
+.filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:11px 0 12px}
+.f{font-size:11.5px;padding:2px 9px;color:var(--ink-3);border:1px solid var(--rule);border-radius:11px}
+.f:hover{border-color:var(--rule-strong);color:var(--ink)}
+.f.on{background:var(--ink);color:var(--row);border-color:var(--ink);font-weight:600}
+.f .n2{font-family:var(--mono);opacity:.6;margin-left:4px}
+.act{font-size:11.5px;padding:3px 10px;border:1px solid var(--rule-strong);color:var(--ink-2);
+  border-radius:2px;font-weight:500}
+.act:hover{background:var(--ink);color:var(--row);border-color:var(--ink)}
+.act.on{background:var(--ink);color:var(--row);border-color:var(--ink);font-weight:600}
+.act.grave{border-color:var(--alarm-dim);color:var(--alarm)}
+.act.grave:hover{background:var(--alarm);color:#fff;border-color:var(--alarm)}
+.ops{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:7px}
+.ops .lbl{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4);margin-right:3px}
+
+.form{margin-top:8px;border:1px solid var(--rule-strong);border-radius:2px;padding:11px 13px;background:var(--field);max-width:520px}
+.form label{display:block;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:4px}
+.form input,.form textarea{width:100%;border:1px solid var(--rule-strong);border-radius:2px;padding:6px 8px;
+  font:inherit;font-size:12.5px;background:var(--row);color:var(--ink);margin-bottom:9px}
+.form textarea{resize:vertical;min-height:44px}
+.form .fr{display:flex;gap:11px}.form .fr>div{flex:1}
+.err{color:var(--alarm);font-size:11.5px;margin:0 0 8px;line-height:1.5}
+
+/* 详情页读数区 */
+.readout{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--rule);margin:14px 0 4px}
+.ro{padding:9px 15px;border-right:1px solid var(--rule);flex:1 1 auto;min-width:96px}
+.ro:last-child{border-right:none}
+.ro .v{font-family:var(--mono);font-size:17px;font-weight:600;line-height:1.2}
+.ro .v.bad{color:var(--alarm)}
+.ro .k{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);margin-top:2px}
+.ro .cmp{font-size:10.5px;color:var(--ink-4);margin-top:1px}
+.note{font-size:11.5px;color:var(--ink-4);line-height:1.6;border-top:1px solid var(--rule);
+  margin-top:22px;padding-top:12px;max-width:70em}
+.note b{color:var(--ink-3)}
+.flagbox{font-size:11.5px;padding:6px 10px;border-left:2px solid var(--alarm);background:var(--alarm-wash);
+  color:var(--ink-2);margin-top:6px;line-height:1.5}
+.flagbox.ok{border-left-color:var(--ink-4);background:var(--sunk)}
+
+.voice{padding:10px 0;border-bottom:1px solid var(--rule-2)}
+.voice p{margin:0;font-size:13px;line-height:1.6}
+.voice .meta{display:flex;gap:10px;margin-top:4px;font-size:11px;color:var(--ink-4)}
+.voice .meta .s{font-family:var(--mono);color:var(--ink-3)}
+.search{display:flex;align-items:center;gap:8px;border:1px solid var(--rule-strong);border-radius:2px;
+  padding:6px 11px;margin:12px 0 4px;max-width:420px}
+.search input{flex:1;border:none;outline:none;background:none;color:var(--ink);font:inherit;font-size:12.5px}
+.kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--rule);border-radius:2px;
+  padding:0 4px;color:var(--ink-4);background:var(--field)}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);
+  color:var(--row);font-size:12px;padding:7px 14px;border-radius:2px;opacity:0;
+  transition:opacity .18s;pointer-events:none;z-index:9}
+.toast.show{opacity:1}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="shell">
+  <aside class="sb">
+    <div class="brand">VOC 机会看板</div>
+    <button class="nav" data-go="iter"><span>老品迭代</span><span class="nc" id="c-iter"></span></button>
+    <button class="nav" data-go="inno"><span>新品创新</span><span class="nc" id="c-inno"></span></button>
+    <button class="nav" data-go="strategy"><span>战略视图</span><span class="nc" id="c-str"></span></button>
+    <button class="nav" data-go="search"><span>产品检索</span><span class="nc" id="c-search"></span></button>
+    <div class="sb-note">
+      <span class="kbd">J</span> <span class="kbd">K</span> 移动 · <span class="kbd">↵</span> 进入 · <span class="kbd">Esc</span> 返回
+    </div>
+  </aside>
+  <div class="body"><div id="view" style="display:flex;flex-direction:column;flex:1;min-height:0"></div></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const DB = {"spus": [{"spu": "MA39", "name": "maglock小小吸盘支架", "skus": ["S002"], "category": "S支架类", "grade": "A级", "launch_period": "2025年Q4", "message_count": 1737, "negative_evi_count": 608, "positive_evi_count": 2093, "avg_star": 3.87, "issues": [{"opp_id": "OPP-EBA01F9CDC", "evi_count": 46, "title": "S支架类吸盘：防止初始吸附失败（磨砂/曲面/非洁净表面）", "scope": "多品", "n_eff": 1.8, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-96564F14CB", "evi_count": 21, "title": "S支架类吸盘：防止初始吸附失败（光滑/微曲面场景）", "scope": "单品", "n_eff": 1.1, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-D60818910F", "evi_count": 18, "title": "S支架类：强化磁吸部件（手机侧吸附力）", "scope": "品线级", "n_eff": 6.8, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-4C4C362570", "evi_count": 18, "title": "S支架类吸盘：防止真空密封失效（吸附力快速衰减）", "scope": "多品", "n_eff": 1.7, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-AFA48BA959", "evi_count": 7, "title": "S支架类：更换塑料连接件（提升抗脆断能力）", "scope": "品线级", "n_eff": 5.1, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-5358CFE8D6", "evi_count": 7, "title": "S支架类：修复主体结构开裂问题", "scope": "多品", "n_eff": 1.6, "d": "产品体验", "sub": "产品质量", "leaf": null}, {"opp_id": "OPP-B270955FB1", "evi_count": 6, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-1DF417C284", "evi_count": 6, "title": "T脚架类：强化塑料部件结构强度", "scope": "品线级", "n_eff": 14.3, "d": "产品体验", "sub": "产品质量", "leaf": null}, {"opp_id": "OPP-E8957EC3CD", "evi_count": 5, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-106CDC3DCE", "evi_count": 4, "title": "T脚架类：修复寿命显著低于6个月问题（结构耐久性）", "scope": "品线级", "n_eff": 15.9, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-1726C1D8F6", "evi_count": 4, "title": "S支架类（磁吸部件）：强化磁吸结构紧固性", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-2B7B69B53B", "evi_count": 4, "title": "S支架类：防止主体结构脆性断裂", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-9DAEB1397B", "evi_count": 4, "title": "S支架类吸盘：强化侧向承重能力", "scope": "多品", "n_eff": 2.6, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-E81B3EC6E3", "evi_count": 4, "title": "S支架类：增加最大伸展高度", "scope": "品线级", "n_eff": 13.2, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-95162D69CF", "evi_count": 3, "title": "S支架类：更换吸盘材料（解决脆化与脱胶）", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-296DDBE07F", "evi_count": 3, "title": "S支架类（吸盘）：降低吸盘脱离阻力", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-21847CDB36", "evi_count": 3, "title": "S支架类：强化承重部件结构强度", "scope": "多品", "n_eff": 1.6, "d": "价格", "sub": "活动", "leaf": null}, {"opp_id": "OPP-122BE5E795", "evi_count": 3, "title": "S支架类：强化塑料件粘接附着力", "scope": "品线级", "n_eff": 3.8, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-3ABAF9B181", "evi_count": 2, "title": "S支架类：更换关键活动部件材质（卡扣/连接件/磁吸环）", "scope": "品线级", "n_eff": 5.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-3A70AFF53C", "evi_count": 2, "title": "S支架类：修复塑料本体开裂问题", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品质量", "leaf": null}, {"opp_id": "OPP-BEE7153875", "evi_count": 2, "title": "S支架类：修复吸盘吸附力丧失问题", "scope": "多品", "n_eff": 2.7, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-D1C1B3D770", "evi_count": 2, "title": "S支架类：防止负载下缓慢位移滑脱（承重保持能力）", "scope": "品线级", "n_eff": 12.8, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-F23628C53B", "evi_count": 2, "title": "S支架类：强化铰链部位塑料结构强度", "scope": "品线级", "n_eff": 6.2, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-FF3802CF78", "evi_count": 2, "title": "S支架类：更换夹持部件尺寸（适配大尺寸手机与纤细手持）", "scope": "品线级", "n_eff": 5.4, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-76FA495815", "evi_count": 2, "title": "S支架类：强化夹持臂承重能力", "scope": "品线级", "n_eff": 3.8, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-5AB4FBE237", "evi_count": 2, "title": "S支架类：防止可动关节松脱失效（铰链/转轴连接处）", "scope": "品线级", "n_eff": 3.6, "d": "价格", "sub": "活动", "leaf": null}, {"opp_id": "OPP-F14B28B8E7", "evi_count": 2, "title": "S支架类：强化轻载承重结构（正常手持/桌面支撑场景）", "scope": "品线级", "n_eff": 11.1, "d": "价格", "sub": "活动", "leaf": null}, {"opp_id": "OPP-F8BB5BF13A", "evi_count": 2, "title": "S支架类：强化磁吸兼容性（适配带壳手机与MagSafe生态）", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品质量", "leaf": null}, {"opp_id": "OPP-ACF9F9CFCB", "evi_count": 2, "title": "S支架类磁吸卡扣：强化锁止可靠性（防滑脱与操作顺滑性）", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-AF9B8AA52A", "evi_count": 2, "title": "S支架类：防止胶粘部位脱胶", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品性能", "leaf": null}]}, {"spu": "MA60", "name": "MagLock补光灯（白色）", "skus": ["L015", "L049GBB1", "L183", "L235", "L238", "L289", "M094A", "S025", "S035", "S036", "S037", "S038", "S039", "S040"], "category": "S支架类", "grade": "S级", "launch_period": "2024年Q1", "message_count": 1409, "negative_evi_count": 412, "positive_evi_count": 2636, "avg_star": 4.43, "issues": [{"opp_id": "OPP-B270955FB1", "evi_count": 17, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-D60818910F", "evi_count": 14, "title": "S支架类：强化磁吸部件（手机侧吸附力）", "scope": "品线级", "n_eff": 6.8, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-2DE490C235", "evi_count": 4, "title": "S支架类：强化转轴调节部位结构强度", "scope": "多品", "n_eff": 2.0, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-F14B28B8E7", "evi_count": 4, "title": "S支架类：强化轻载承重结构（正常手持/桌面支撑场景）", "scope": "品线级", "n_eff": 11.1, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-F8BB5BF13A", "evi_count": 3, "title": "S支架类：强化磁吸兼容性（适配带壳手机与MagSafe生态）", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-B57020734F", "evi_count": 3, "title": "S支架类：强化铰链/转轴结构强度（防止松动与断裂）", "scope": "品线级", "n_eff": 7.1, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-875F745B09", "evi_count": 2, "title": "S支架类：强化磁吸面胶圈包覆完整性（全金属圈覆盖）", "scope": "多品", "n_eff": 1.8, "d": null, "sub": null, "leaf": null}, {"opp_id": "OPP-64D5F1E0FD", "evi_count": 2, "title": "S支架类：防止夹持结构失效致手机脱落", "scope": "多品", "n_eff": 2.7, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-2059E95C1D", "evi_count": 2, "title": "S支架类：增加整体尺寸（适配主流大屏手机）", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-CE6EF348FB", "evi_count": 2, "title": "S支架类：强化支撑稳定性（抗倾覆与姿态保持能力）", "scope": "多品", "n_eff": 1.8, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-5AB4FBE237", "evi_count": 2, "title": "S支架类：防止可动关节松脱失效（铰链/转轴连接处）", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-E81B3EC6E3", "evi_count": 2, "title": "S支架类：增加最大伸展高度", "scope": "品线级", "n_eff": 13.2, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-E8957EC3CD", "evi_count": 2, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-EBA01F9CDC", "evi_count": 2, "title": "S支架类吸盘：防止初始吸附失败（磨砂/曲面/非洁净表面）", "scope": "多品", "n_eff": 1.8, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-514A43E943", "evi_count": 2, "title": "S支架类：强化整体抗倾覆稳定性（负载下防前倾倒塌）", "scope": "品线级", "n_eff": 4.0, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-F2328B7A5F", "evi_count": 2, "title": "S支架类底座：增加底部支撑面积（提升静态稳定性）", "scope": "品线级", "n_eff": 8.3, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-76FA495815", "evi_count": 2, "title": "S支架类：强化夹持臂承重能力", "scope": "品线级", "n_eff": 3.8, "d": "产品体验", "sub": "产品性能", "leaf": null}]}, {"spu": "MT44 B", "name": "gopro 底座", "skus": ["0605", "2287C", "2575", "C007", "S056"], "category": "S支架类", "grade": "PS级", "launch_period": "2023年及以前", "message_count": 1212, "negative_evi_count": 351, "positive_evi_count": 2267, "avg_star": 4.7, "issues": [{"opp_id": "OPP-B270955FB1", "evi_count": 13, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-E8957EC3CD", "evi_count": 6, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-F14B28B8E7", "evi_count": 4, "title": "S支架类：强化轻载承重结构（正常手持/桌面支撑场景）", "scope": "品线级", "n_eff": 11.1, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-514A43E943", "evi_count": 3, "title": "S支架类：强化整体抗倾覆稳定性（负载下防前倾倒塌）", "scope": "品线级", "n_eff": 4.0, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-C8C00E3DF1", "evi_count": 3, "title": "S支架类：强化塑料结构刚性（承重部件）", "scope": "品线级", "n_eff": 7.9, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-E81B3EC6E3", "evi_count": 3, "title": "S支架类：增加最大伸展高度", "scope": "品线级", "n_eff": 13.2, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-EC6F57F3A0", "evi_count": 3, "title": "S支架类：缩短闭合长度（便携收纳尺寸）", "scope": "品线级", "n_eff": 6.9, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-9C1075825F", "evi_count": 2, "title": "手机云台支架品类：优化重量与高度平衡能力（轻量化前提下的结构稳定性）", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-E7717BCE1D", "evi_count": 2, "title": "S支架类：强化支撑杆直径", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品性能", "leaf": null}]}, {"spu": "MT85", "name": "magsafe补光灯白色", "skus": ["L015", "L049GBB1", "L238", "M094A", "S043", "T122"], "category": "S支架类", "grade": "S级", "launch_period": "2024年Q1", "message_count": 1226, "negative_evi_count": 349, "positive_evi_count": 2167, "avg_star": 4.65, "issues": [{"opp_id": "OPP-B270955FB1", "evi_count": 24, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-EC6F57F3A0", "evi_count": 6, "title": "S支架类：缩短闭合长度（便携收纳尺寸）", "scope": "品线级", "n_eff": 6.9, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-D60818910F", "evi_count": 4, "title": "S支架类：强化磁吸部件（手机侧吸附力）", "scope": "品线级", "n_eff": 6.8, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-593B5A9C5B", "evi_count": 2, "title": "S支架类：防止铰链部位断裂", "scope": "品线级", "n_eff": 6.4, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-B65D5DAC2B", "evi_count": 2, "title": "S支架类（磁吸）：强化磁体与基体连接结构", "scope": "多品", "n_eff": 1.8, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-E81B3EC6E3", "evi_count": 2, "title": "S支架类：增加最大伸展高度", "scope": "品线级", "n_eff": 13.2, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-E8957EC3CD", "evi_count": 2, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-214B7A5EA2", "evi_count": 2, "title": "T脚架类：强化塑料部件质感（触感/视觉高级感）", "scope": "品线级", "n_eff": 14.6, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-F8BB5BF13A", "evi_count": 2, "title": "S支架类：强化磁吸兼容性（适配带壳手机与MagSafe生态）", "scope": "品线级", "n_eff": 3.6, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-3D6D3CE9CA", "evi_count": 2, "title": "S支架类：修正标称重量信息（含包装与净重）", "scope": "多品", "n_eff": 1.8, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-47D955B136", "evi_count": 2, "title": "S支架类：减小支撑杆直径", "scope": "品线级", "n_eff": 7.1, "d": "产品体验", "sub": "产品性能", "leaf": "灵活性"}]}, {"spu": "2575", "name": "1/4”款电动吸盘", "skus": ["0848", "1403", "1601", "1672", "1781A", "2028", "2046", "2052", "2287C", "2575", "3032", "3058", "C052", "C057", "M085", "S044A", "S056", "T048GBB1", "T075GBB1", "T082", "T090GBB1", "T171A"], "category": "S支架类", "grade": "PS级", "launch_period": "2023年及以前", "message_count": 835, "negative_evi_count": 302, "positive_evi_count": 1223, "avg_star": 4.21, "issues": [{"opp_id": "OPP-C8C00E3DF1", "evi_count": 6, "title": "S支架类：强化塑料结构刚性（承重部件）", "scope": "品线级", "n_eff": 7.9, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-1DF417C284", "evi_count": 4, "title": "T脚架类：强化塑料部件结构强度", "scope": "品线级", "n_eff": 14.3, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-214B7A5EA2", "evi_count": 3, "title": "T脚架类：强化塑料部件质感（触感/视觉高级感）", "scope": "品线级", "n_eff": 14.6, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-282A482EEC", "evi_count": 3, "title": "三脚架类：更换真实材质标识（铝制宣称与实际塑料部件）", "scope": "品线级", "n_eff": 7.1, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-E8957EC3CD", "evi_count": 3, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-2B7B69B53B", "evi_count": 2, "title": "S支架类：防止主体结构脆性断裂", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": null}]}, {"spu": "1764", "name": "1/4”款电动吸盘", "skus": ["0605", "1601", "1672", "1764", "1781A", "2046", "2052", "2066", "2109", "2134", "2287C", "2481", "2638", "2666", "2778", "2846A", "2993", "3031", "3032", "3058", "3089", "3090", "3115", "3266", "3271", "C014", "C113", "M085", "S027", "S044A", "T075GBB1", "T085", "T090GBB1", "T117", "T136", "T168A", "T171A"], "category": "S支架类", "grade": "S级", "launch_period": "2023年及以前", "message_count": 889, "negative_evi_count": 260, "positive_evi_count": 1639, "avg_star": 4.62, "issues": [{"opp_id": "OPP-E8957EC3CD", "evi_count": 5, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-106CDC3DCE", "evi_count": 2, "title": "T脚架类：修复寿命显著低于6个月问题（结构耐久性）", "scope": "品线级", "n_eff": 15.9, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-2B7B69B53B", "evi_count": 2, "title": "S支架类：防止主体结构脆性断裂", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-61FEC32BD3", "evi_count": 2, "title": "S支架类：防止表面涂层脱落", "scope": "品线级", "n_eff": 5.4, "d": "产品体验", "sub": "产品质量", "leaf": null}, {"opp_id": "OPP-B270955FB1", "evi_count": 2, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}]}, {"spu": "TT24", "name": "action6 1/4金属转接头", "skus": ["0605", "1764", "1781A", "2575", "2846A", "C068", "C113", "L168", "S044", "S044A"], "category": "S支架类", "grade": "A级", "launch_period": "2023年及以前", "message_count": 1071, "negative_evi_count": 220, "positive_evi_count": 2017, "avg_star": 4.73, "issues": [{"opp_id": "OPP-B270955FB1", "evi_count": 5, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-C8C00E3DF1", "evi_count": 4, "title": "S支架类：强化塑料结构刚性（承重部件）", "scope": "品线级", "n_eff": 7.9, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-8BFA4DD19F", "evi_count": 3, "title": "S支架类：强化整体抗弯刚度（支撑结构）", "scope": "品线级", "n_eff": 3.0, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-EC6F57F3A0", "evi_count": 3, "title": "S支架类：缩短闭合长度（便携收纳尺寸）", "scope": "品线级", "n_eff": 6.9, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-F173C7801E", "evi_count": 2, "title": "S支架类：修复标称尺寸与实物尺寸偏差", "scope": "多品", "n_eff": 2.7, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-47D955B136", "evi_count": 2, "title": "S支架类：减小支撑杆直径", "scope": "品线级", "n_eff": 7.1, "d": "产品体验", "sub": "产品包装", "leaf": null}, {"opp_id": "OPP-E8957EC3CD", "evi_count": 2, "title": "S支架类：升级材质观感（降低塑料感）", "scope": "品线级", "n_eff": 15.4, "d": "价格", "sub": "活动", "leaf": null}, {"opp_id": "OPP-1DF417C284", "evi_count": 2, "title": "T脚架类：强化塑料部件结构强度", "scope": "品线级", "n_eff": 14.3, "d": "产品体验", "sub": "产品外观", "leaf": null}]}, {"spu": "MA38", "name": "MagLock手机摄影支架", "skus": ["L015", "L049GBB1", "M094A", "T163", "T189", "T190", "T191"], "category": "T脚架类", "grade": "S级", "launch_period": "2024年Q1", "message_count": 724, "negative_evi_count": 208, "positive_evi_count": 1429, "avg_star": 4.55, "issues": [{"opp_id": "OPP-67AD3C8639", "evi_count": 2, "title": "T脚架类：强化摩擦关节耐久性（防止正常使用中早期磨损松动）", "scope": "单品", "n_eff": 1.0, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-805937975C", "evi_count": 2, "title": "T脚架类：强化支撑腿抗塑性弯曲能力", "scope": "品线级", "n_eff": 3.8, "d": "售前客服", "sub": null, "leaf": null}]}, {"spu": "0605", "name": "1/4”款电动吸盘", "skus": ["0605", "1601", "1764", "1781A", "1907", "2014", "2028", "2052", "2066", "2502B", "2846A", "2993", "3031", "3032", "3058", "3089", "3090", "3268", "C014", "C052", "C062GBB1", "C113", "M085", "S006", "S044", "S044A", "S056", "T058GBB1", "T136", "T171A"], "category": "S支架类", "grade": "PS级", "launch_period": "2023年及以前", "message_count": 743, "negative_evi_count": 206, "positive_evi_count": 1421, "avg_star": 4.58, "issues": [{"opp_id": "OPP-B270955FB1", "evi_count": 5, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "价格", "sub": "活动", "leaf": null}, {"opp_id": "OPP-2B7B69B53B", "evi_count": 3, "title": "S支架类：防止主体结构脆性断裂", "scope": "品线级", "n_eff": 9.5, "d": "售前客服", "sub": null, "leaf": null}, {"opp_id": "OPP-61FEC32BD3", "evi_count": 2, "title": "S支架类：防止表面涂层脱落", "scope": "品线级", "n_eff": 5.4, "d": "产品体验", "sub": "产品质量", "leaf": null}, {"opp_id": "OPP-809B491AF2", "evi_count": 2, "title": "T脚架类：强化塑料腿部抗过度伸展变形能力", "scope": "品线级", "n_eff": 3.8, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-D1C1B3D770", "evi_count": 2, "title": "S支架类：防止负载下缓慢位移滑脱（承重保持能力）", "scope": "品线级", "n_eff": 12.8, "d": "产品体验", "sub": "产品性能", "leaf": null}]}, {"spu": "SL03", "name": "Mini引闪器", "skus": ["C059", "C101", "L199", "L200"], "category": "L灯光类", "grade": "A级", "launch_period": "2023年及以前", "message_count": 862, "negative_evi_count": 197, "positive_evi_count": 2030, "avg_star": 4.5, "issues": [{"opp_id": "OPP-A68C6B3608", "evi_count": 2, "title": "灯光类：修复供电后无法启动照明（主控电路/电源管理模块）", "scope": "品线级", "n_eff": 16.3, "d": null, "sub": null, "leaf": null}, {"opp_id": "OPP-EF5EC021D7", "evi_count": 2, "title": "灯光类：修复闪光灯功能间歇性失效", "scope": "多品", "n_eff": 2.8, "d": "产品体验", "sub": "产品性能", "leaf": null}]}, {"spu": "TT88", "name": "Ulanzi VL49 RGB补光灯（白色升级版）", "skus": ["1672", "2215", "2287C", "2586A", "T111", "T139"], "category": "T脚架类", "grade": "S级", "launch_period": "2023年及以前", "message_count": 604, "negative_evi_count": 186, "positive_evi_count": 1180, "avg_star": 4.45, "issues": [{"opp_id": "OPP-106CDC3DCE", "evi_count": 4, "title": "T脚架类：修复寿命显著低于6个月问题（结构耐久性）", "scope": "品线级", "n_eff": 15.9, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-214B7A5EA2", "evi_count": 4, "title": "T脚架类：强化塑料部件质感（触感/视觉高级感）", "scope": "品线级", "n_eff": 14.6, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-876CEA86E6", "evi_count": 2, "title": "T脚架类：强化支撑结构刚性", "scope": "品线级", "n_eff": 6.2, "d": "售前客服", "sub": null, "leaf": null}]}, {"spu": "SK21", "name": "一键打开落地支架", "skus": ["L238", "M094A", "M103"], "category": "S支架类", "grade": "S级", "launch_period": "2025年Q4", "message_count": 642, "negative_evi_count": 174, "positive_evi_count": 1630, "avg_star": 4.65, "issues": [{"opp_id": "OPP-D60818910F", "evi_count": 9, "title": "S支架类：强化磁吸部件（手机侧吸附力）", "scope": "品线级", "n_eff": 6.8, "d": "产品体验", "sub": "产品部件", "leaf": "手机夹"}, {"opp_id": "OPP-B270955FB1", "evi_count": 7, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-EC6F57F3A0", "evi_count": 4, "title": "S支架类：缩短闭合长度（便携收纳尺寸）", "scope": "品线级", "n_eff": 6.9, "d": "产品体验", "sub": "产品性能", "leaf": "尺寸"}, {"opp_id": "OPP-1DF417C284", "evi_count": 2, "title": "T脚架类：强化塑料部件结构强度", "scope": "品线级", "n_eff": 14.3, "d": "产品体验", "sub": "产品外观", "leaf": null}]}, {"spu": "1781A", "name": "Cka快拆自拍杆", "skus": ["0605", "1601", "1672", "1764", "1781A", "1907", "2052", "2245", "2268", "2287C", "2395", "2481", "2502B", "2503A", "2575", "2586A", "3089", "3090", "3318", "F38B3803", "L088", "M039", "S005", "S044A", "T171A"], "category": "S支架类", "grade": "S级", "launch_period": "2023年及以前", "message_count": 529, "negative_evi_count": 145, "positive_evi_count": 888, "avg_star": 4.61, "issues": [{"opp_id": "OPP-B270955FB1", "evi_count": 4, "title": "S支架类：降低整体重量（提升便携性）", "scope": "品线级", "n_eff": 9.5, "d": "产品体验", "sub": "产品性能", "leaf": "便携性"}, {"opp_id": "OPP-1DF417C284", "evi_count": 2, "title": "T脚架类：强化塑料部件结构强度", "scope": "品线级", "n_eff": 14.3, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-805937975C", "evi_count": 2, "title": "T脚架类：强化支撑腿抗塑性弯曲能力", "scope": "品线级", "n_eff": 3.8, "d": "产品体验", "sub": "产品质量", "leaf": null}]}, {"spu": "MT89", "name": "Ulanzi MT-89 2M冷靴快拆灯架", "skus": ["2575", "L031GBB1", "L058GBB2", "L099", "L130", "T082"], "category": "S支架类", "grade": "S级", "launch_period": "2023年及以前", "message_count": 204, "negative_evi_count": 133, "positive_evi_count": 373, "avg_star": 4.2, "issues": [{"opp_id": "OPP-1DF417C284", "evi_count": 5, "title": "T脚架类：强化塑料部件结构强度", "scope": "品线级", "n_eff": 14.3, "d": "产品体验", "sub": "产品外观", "leaf": null}, {"opp_id": "OPP-106CDC3DCE", "evi_count": 3, "title": "T脚架类：修复寿命显著低于6个月问题（结构耐久性）", "scope": "品线级", "n_eff": 15.9, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-565E4B99D8", "evi_count": 2, "title": "S支架类：强化支撑臂抗塑性变形能力", "scope": "品线级", "n_eff": 6.4, "d": "产品体验", "sub": "产品性能", "leaf": null}, {"opp_id": "OPP-F14B28B8E7", "evi_count": 2, "title": "S支架类：强化轻载承重结构（正常手持/桌面支撑场景）", "scope": "品线级", "n_eff": 11.1, "d": "产品体验", "sub": "产品性能", "leaf": null}]}], "strategy": [{"opp_id": "OPP-A68C6B3608", "title": "灯光类：修复供电后无法启动照明（主控电路/电源管理模块）", "n_eff": 16.3, "scope": "品线级", "evi_total": 32, "prod_line": "灯光", "spus": 8}, {"opp_id": "OPP-106CDC3DCE", "title": "T脚架类：修复寿命显著低于6个月问题（结构耐久性）", "n_eff": 15.9, "scope": "品线级", "evi_total": 12, "prod_line": "支撑", "spus": 7}, {"opp_id": "OPP-E8957EC3CD", "title": "S支架类：升级材质观感（降低塑料感）", "n_eff": 15.4, "scope": "品线级", "evi_total": 37, "prod_line": "支撑", "spus": 9}, {"opp_id": "OPP-214B7A5EA2", "title": "T脚架类：强化塑料部件质感（触感/视觉高级感）", "n_eff": 14.6, "scope": "品线级", "evi_total": 30, "prod_line": "支撑", "spus": 6}, {"opp_id": "OPP-1DF417C284", "title": "T脚架类：强化塑料部件结构强度", "n_eff": 14.3, "scope": "品线级", "evi_total": 17, "prod_line": "支撑", "spus": 8}, {"opp_id": "OPP-E81B3EC6E3", "title": "S支架类：增加最大伸展高度", "n_eff": 13.2, "scope": "品线级", "evi_total": 26, "prod_line": "支撑", "spus": 7}, {"opp_id": "OPP-D1C1B3D770", "title": "S支架类：防止负载下缓慢位移滑脱（承重保持能力）", "n_eff": 12.8, "scope": "品线级", "evi_total": 10, "prod_line": "支撑", "spus": 2}, {"opp_id": "OPP-F14B28B8E7", "title": "S支架类：强化轻载承重结构（正常手持/桌面支撑场景）", "n_eff": 11.1, "scope": "品线级", "evi_total": 22, "prod_line": "支撑", "spus": 4}, {"opp_id": "OPP-2B7B69B53B", "title": "S支架类：防止主体结构脆性断裂", "n_eff": 9.5, "scope": "品线级", "evi_total": 16, "prod_line": "支撑", "spus": 4}, {"opp_id": "OPP-B270955FB1", "title": "S支架类：降低整体重量（提升便携性）", "n_eff": 9.5, "scope": "品线级", "evi_total": 94, "prod_line": "支撑", "spus": 14}, {"opp_id": "OPP-04D5A25D73", "title": "T脚架类：修复支撑腿在铰链处断裂问题", "n_eff": 9.0, "scope": "品线级", "evi_total": 7, "prod_line": "支撑", "spus": 0}, {"opp_id": "OPP-489D79EBE1", "title": "T脚架类：修复表面划痕与磕碰损伤", "n_eff": 8.3, "scope": "品线级", "evi_total": 9, "prod_line": "支撑", "spus": 1}], "facets": {"category": {"T脚架类": 96, "L灯光类": 96, "S支架类": 136}, "grade": {"D级": 4, "其他": 78, "S级": 78, "PS级": 15, "A级": 119, "C级": 1, "B级": 33}, "total": 328}}, VOICES = {"OPP-4C4C362570": [{"text": "吸得不牢", "star": 3.0, "plat": "抖音小店", "country": "CN", "date": "2026-08-10"}, {"text": "后面自己会掉", "star": 1.0, "plat": "天猫", "country": "CN", "date": "2026-07-11"}, {"text": "吸盘时间长了会自己掉下来", "star": null, "plat": "天猫", "country": "CN", "date": "2026-07-04"}, {"text": "吸了一下换个器械就不粘了", "star": 1.0, "plat": "抖音小店", "country": "CN", "date": "2026-06-26"}, {"text": "吸盘不稳", "star": 2.0, "plat": "天猫", "country": "CN", "date": "2026-06-24"}, {"text": "magnet is decent", "star": 1.0, "plat": "亚马逊国际", "country": "US", "date": "2026-06-23"}], "OPP-96564F14CB": [{"text": "吸盘吸得很牢固", "star": null, "plat": "天猫", "country": "CN", "date": "2026-08-11"}, {"text": "磁吸那边确实挺牢固的", "star": 1.0, "plat": "抖音小店", "country": "CN", "date": "2026-08-10"}, {"text": "用了几次就吸不住了", "star": null, "plat": "天猫", "country": "CN", "date": "2026-08-07"}, {"text": "磁吸那一面挺紧的", "star": null, "plat": "天猫", "country": "CN", "date": "2026-07-26"}, {"text": "谁知道第一次用吸在柱子上没两分钟就脱落了", "star": 1.0, "plat": "抖音小店", "country": "CN", "date": "2026-07-22"}, {"text": "吸不到3分钟就要掉", "star": 1.0, "plat": "京东", "country": "CN", "date": "2026-07-18"}], "OPP-D60818910F": [{"text": "手机无法磁吸", "star": null, "plat": "天猫", "country": "CN", "date": "2026-08-11"}, {"text": "发货迅速", "star": null, "plat": "天猫", "country": "CN", "date": "2026-08-06"}, {"text": "对于安卓手机吸力不好", "star": null, "plat": "天猫", "country": "CN", "date": "2026-08-05"}, {"text": "just after a week of use so now its useles", "star": 1.0, "plat": "亚马逊国际", "country": "US", "date": "2026-08-03"}, {"text": "i dont really recommend to that product", "star": 1.0, "plat": "亚马逊国际", "country": "US", "date": "2026-07-30"}, {"text": "跟本吸不住", "star": null, "plat": "天猫", "country": "CN", "date": "2026-07-27"}], "OPP-EBA01F9CDC": [{"text": "质量非常差", "star": 1.0, "plat": "天猫", "country": "CN", "date": "2026-08-12"}, {"text": "这个价钱性价比不高", "star": 1.0, "plat": "天猫", "country": "CN", "date": "2026-08-07"}, {"text": "一点也粘不住", "star": 1.0, "plat": "抖音小店", "country": "CN", "date": "2026-08-03"}, {"text": "健身器材根本吸不住", "star": 1.0, "plat": "抖音小店", "country": "CN", "date": "2026-08-02"}, {"text": "我在衣柜上 墙壁上都粘不牢", "star": null, "plat": "抖音小店", "country": "CN", "date": "2026-07-28"}, {"text": "只能吸硬的纯平的地方", "star": null, "plat": "天猫", "country": "CN", "date": "2026-07-27"}]}, INNO = [{"opp_id": "OPP-066472B6E2", "title": "旅行三脚架：填补轻量高稳结构形态的综合权衡能力", "core_tag": "旅行三脚架结构形态、承重能力与便携性之间的综合权衡", "phenomenon": "有用户称‘most of them involve some kind of compromise — stability, height, weight or annoying design choices’（多数产品总要在稳定性、高度、重量或设计体验中做取舍）；另有用户反馈‘I never used it for run & gun (shooting wildlife outside)’（从未用于野外跟拍），转而选用单脚架+小底座方案；还有用户强调‘it’s small and lightweight enough to actually want to carry but still feels solid’（足够轻小到愿意随身携带，同时又感觉扎实）；另有用户称‘the best travel tripod I’ve ever used’（用过的最佳旅行三脚架）。另有4条类似反馈均围绕同一矛盾展开：对‘轻’‘稳’‘高’‘快’四要素无法兼得的反复确认与权衡。", "attribution": "推断用户并非单纯追求参数极限，而是要求在真实移动场景（如海边、日本多地连续测试、野外拍摄）中，结构形态能同步支撑便携收纳、可靠承重、有效工作高度及即用响应。这表明当前旅行三脚架的形态范式仍停留在单项指标优化阶段，缺乏对多维约束条件下的系统性结构解耦与协同设计。", "suggestion": "建议采用分段式碳纤维+钛合金关节的混合结构：中管与脚管主体用T700级碳纤维实现轻量化，关键承力节点（如云台接口、锁紧旋钮基座、脚管伸缩节）替换为TC4钛合金嵌件；脚管截面由传统圆形改为扁椭圆轮廓，提升抗弯刚度同时降低收拢直径；设计三档可调中管高度（0/35/70cm），取消全伸展中管以规避高重心失稳；SKU按承重能力拆分为1.5kg（超轻型，4节脚管）、3kg（标准旅行型，3节脚管）、5kg（野外增强型，3节加粗脚管+可拆卸配重挂钩）三档，每档独立定义弯曲耐久次数指标（如10万次锁紧循环）与沙尘环境下的旋钮阻尼衰减阈值。", "evi_total": 9, "evi_social": 9, "rank": 9.0, "first_week": "2026-W33", "last_week": "2026-W33", "interactions": 1247, "brands": ["VIJIM", "小隼", "斯莫格", "爱图仕", "猛玛", "纽尔"], "tagged": 9, "attached": 9, "quotes": [{"text": "quick release security: dual locking system demo", "plat": "YouTube", "act": 35, "date": "2026-05-28"}, {"text": "its small and lightweight enough to actually want to carry", "plat": "YouTube", "act": 43, "date": "2026-03-12"}, {"text": "null", "plat": "YouTube", "act": 3, "date": "2026-06-14"}]}, {"opp_id": "OPP-BE5343EBC3", "title": "八爪鱼支架品类：增强多表面吸附稳定性（磨砂/曲面/低温场景）", "core_tag": "八爪鱼支架吸力与多场景附着稳定性", "phenomenon": "有用户称‘JOBY八爪鱼支架吸力绝了📱 自拍直播都稳稳的✨’；另有用户用英文表示‘Taking the GorillaPod™ 3K deep into the forest to test its limits.’；还有用户日文反馈‘ちゃんと“つかまって”ます🐙 平らな場所がなくても大丈夫！’（确实‘抓得住’🐙 即使没有平整地方也没关系！）；第四条提到‘clipped the JOBY HandyPod™ Clip Extend onto a playground railing… using Mantis Mode’，显示依赖夹持而非吸盘实现非平面固定。四条证据全部指向同一诉求主题——用户正主动将八爪鱼类支架用于非标准平面（森林枝干、游乐场栏杆、不规则岩石、斜坡等），但仅1条明确肯定吸力表现，其余均回避吸盘使用、转而依赖缠绕或夹持结构。", "attribution": "推断用户对吸盘在非理想表面（如微纹理磨砂漆、轻微弧度金属管、低温塑料）下的可靠性缺乏信心，导致实际使用中规避吸盘功能、改用其他附着方式；这说明当前吸盘材料配方与形变适配逻辑未能覆盖真实拍摄场景中的常见表面变量，而非单纯追求极限吸附力数值。", "suggestion": "建议开发双模吸附底座SKU：保留现有吸盘结构，但增加可翻转式硅胶微凸阵列贴片（非平滑面），贴片厚度0.8–1.2mm、邵氏A硬度30–40，适配磨砂/低温/微曲面；同步优化吸盘边缘密封唇结构，加宽至3.5mm并引入渐变截面设计以提升曲面贴合形变容差。针对-5℃至15℃低温场景，改用低玻璃化转变温度（Tg≤-25℃）硅胶配方，避免硬化失粘。SKU按表面适配类型拆分为‘通用型’（原吸盘）、‘微纹曲面型’（双模底座+低温硅胶）、‘户外强化型’（双模底座+低温硅胶+防滑夹持辅助槽），三者共用主体关节与脚管接口，降低产线切换成本。", "evi_total": 4, "evi_social": 4, "rank": 4.0, "first_week": "2026-W33", "last_week": "2026-W33", "interactions": 48, "brands": ["VIJIM", "宙比", "小隼"], "tagged": 4, "attached": 4, "quotes": [{"text": "null", "plat": "小红书", "act": null, "date": "2026-07-05"}, {"text": "null", "plat": "Instagram", "act": 30, "date": "2026-03-18"}, {"text": "null", "plat": "Instagram", "act": 15, "date": "2026-02-24"}]}, {"opp_id": "OPP-FE17365B45", "title": "便携三脚架品类：优化一键弹开支脚的展开速度与可控性", "core_tag": "三脚架一键弹开操作体验对比", "phenomenon": "有用户称‘r家air因为支脚弹簧弹力过大，展开速度非常快，也因此非常“一惊一乍”（个人比较不喜欢这种弹簧太强劲的，总担心误触底部按钮突然展开吓人一跳）’；另有用户对比指出‘底部支架开合顺畅程度：优篮子=绿巨能>锐际>卓尔>Flymile=锐际Air’；还有用户描述‘优SK21有点特殊，它不靠弹簧而是靠自身重力展开支脚，也因此速度较慢，很“轻柔”’；另有1条反馈提及‘除卓尔MS08、优TT88外的5款均可’触地即开，但未评价其展开质感。以上共4条证据全部聚焦于不同品牌便携三脚架支脚‘一键弹开’动作的动态体验差异，包括速度突兀性、顺滑度、响应轻柔感等维度。", "attribution": "推断支脚弹开机构的动力来源（弹簧驱动 vs 重力驱动）与调校参数（如弹簧刚度、阻尼匹配、释放行程）存在明显分化，导致用户感知到‘一惊一乍’或‘过于迟缓’两类极端体验；这说明当前行业尚未形成对弹开速度区间、加速度曲线及触觉反馈的一致性设计共识，用户实际使用中需凭主观偏好试错选型。", "suggestion": "建议在弹开机构中采用可调刚度弹簧+线性阻尼器复合方案，弹簧预压量与阻尼油黏度作为关键调校参数；结构上将释放行程延长至12–15mm并设置双段式解锁路径（前3mm为轻触预释放，后9mm触发主弹开），以分离误触响应与有效展开动作；SKU层面按‘轻柔型’（目标展开时间≥0.8s，加速度峰值≤15m/s²）、‘均衡型’（0.4–0.6s，加速度峰值22–28m/s²）、‘迅捷型’（≤0.3s，加速度峰值≥35m/s²）三级拆分，每级对应独立弹簧包与阻尼组件，避免共用底盘导致调校妥协；材料上优先验证低滞后丁腈橡胶阻尼垫片替代硅油腔体，提升低温环境一致性。", "evi_total": 4, "evi_social": 4, "rank": 4.0, "first_week": "2026-W33", "last_week": "2026-W33", "interactions": 18, "brands": ["VIJIM", "卓尔"], "tagged": 4, "attached": 4, "quotes": [{"text": "全部都带可拆卸蓝牙遥控器", "plat": "小红书", "act": 16, "date": "2026-06-25"}, {"text": "承重也没办法用打鸟的长焦镜头", "plat": "小红书", "act": 1, "date": "2026-05-25"}, {"text": "伸缩杆顺滑程度:优篮子>其他品牌", "plat": "小红书", "act": 1, "date": "2026-06-24"}]}, {"opp_id": "OPP-330F6E8472", "title": "车载磁吸拍摄配件：扩展多表面多角度适配能力（曲面/栏杆/斜面/非平面）", "core_tag": "车载磁吸拍摄多场景多角度适配", "phenomenon": "有用户称‘平らな場所がなくても大丈夫！ 巻きつければ、そこが三脚ポイント’（即使不在平整场所也没关系！缠绕上去，那里就是三脚架支点），另有用户展示‘From smooth surfaces to railings, handheld shooting to tabletop setups…adapts in seconds’（从光滑表面到栏杆、手持到桌面设置……秒级适配），还有用户实拍‘开车第一视角揭秘：原来车载视频可以这样拍摄’，并演示将支架‘clipped the JOBY HandyPod™ Clip Extend onto a playground railing…secured our phone via MagSafe’（夹在游乐场栏杆上，通过MagSafe固定手机）。另有1条类似反馈。", "attribution": "推断用户正主动突破传统车载磁吸场景（如挡风玻璃、空调出风口），转向栏杆、斜面、曲面、悬挂结构等非标安装位；这表明当前磁吸方案对非平面接触面的吸附稳定性与姿态保持能力不足，且缺乏针对异形支撑结构的机械耦合机制。", "suggestion": "开发双模耦合车载支架SKU：主体采用可扭转硅胶包覆的360°万向节结构，内置钕铁硼环形磁体阵列（中心场强≥450mT）与机械夹爪复合设计；夹爪开合行程覆盖12–65mm，咬合面嵌入梯形截面硅胶条（邵氏硬度40A），适配栏杆/扶手等圆柱体及斜面；磁吸面增加微凸点阵列（直径0.8mm，间距2.5mm）提升曲面接触率；推出三档承重SKU（0.3kg/0.6kg/1.2kg），对应不同磁体数量与夹爪弹簧刚度；同步规划非对称快拆释放键布局，确保单手操作时拇指可触达且不干扰夹持状态。", "evi_total": 4, "evi_social": 4, "rank": 4.0, "first_week": "2026-W33", "last_week": "2026-W33", "interactions": 18, "brands": ["VIJIM", "宙比"], "tagged": 4, "attached": 4, "quotes": [{"text": "null", "plat": "Twitter", "act": 4, "date": "2026-02-24"}, {"text": "null", "plat": "TikTok", "act": 6, "date": "2026-07-29"}, {"text": "null", "plat": "抖音", "act": 2, "date": "2026-06-27"}]}, {"opp_id": "OPP-04D8E978F5", "title": "摄影马甲品类：推出专业摄影马甲（含多点快挂与器材承重设计）", "core_tag": "摄影马甲上市期待", "phenomenon": "多名用户在抖音、小红书、Bilibili等平台反复询问摄影马甲上市进度，表达明确期待。有用户称‘摄影马甲啥时候上呀[戳手手]’，另有用户称‘背心什么时候出啊[皱眉R]’，另有用户称‘背心啥时候上啊？’，另有用户称‘摄影马甲啥时候上呀？’。四条证据均未提及具体功能需求或竞品对比，仅聚焦于产品是否可购及何时可购。", "attribution": "推断用户已形成对ULANZI拓展穿戴类摄影配件的品类预期，且将‘摄影马甲’视为与现有支架、滑轨等同级的正式产品线；该诉求集中出现在社交平台轻互动场景（点赞量0–1），说明并非小众试探，而是未经引导的自发聚合性期待，指向品牌在专业摄影穿戴装备领域存在明确新品空白。", "suggestion": "建议首代摄影马甲采用模块化快挂结构：在前胸、后背及两侧肩带设置共8个标准化快挂接口（非对称布局，前4后2侧2），接口基座嵌入高密度TPU包覆的6061-T6铝合金嵌件，承重设计目标单点静态≥8kg、动态冲击≥3kg；面料选用双层复合结构——外层为120g/m²防刮尼龙+PU涂层，内层为透气网布+弹性涤纶混纺（横向拉伸率≥35%）；SKU按承重能力与挂载密度拆分：基础版（4接口/6kg总承重）、专业版（8接口/12kg总承重）、轻量版（4接口/4kg，取消背部嵌件以减重至320g）；建议定义弯曲耐久次数指标（模拟肩部反复屈伸），并预设腰围调节范围65–110cm，覆盖95%成人体型。", "evi_total": 4, "evi_social": 4, "rank": 4.0, "first_week": "2026-W33", "last_week": "2026-W33", "interactions": 3, "brands": ["VIJIM"], "tagged": 4, "attached": 4, "quotes": [{"text": "null", "plat": "抖音", "act": null, "date": "2026-05-27"}, {"text": "null", "plat": "小红书", "act": 1, "date": "2026-02-27"}, {"text": "null", "plat": "bilibili", "act": 1, "date": "2026-04-25"}]}], TREND = {"0605|OPP-2B7B69B53B": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "0605|OPP-61FEC32BD3": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "0605|OPP-809B491AF2": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "0605|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "0605|OPP-D1C1B3D770": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "1764|OPP-106CDC3DCE": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "1764|OPP-2B7B69B53B": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "1764|OPP-61FEC32BD3": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "1764|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "1764|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "1781A|OPP-1DF417C284": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "1781A|OPP-805937975C": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "1781A|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "2575|OPP-1DF417C284": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "2575|OPP-214B7A5EA2": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "2575|OPP-282A482EEC": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "2575|OPP-2B7B69B53B": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "2575|OPP-C8C00E3DF1": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "2575|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA38|OPP-67AD3C8639": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA38|OPP-805937975C": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-106CDC3DCE": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-122BE5E795": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-1726C1D8F6": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-1DF417C284": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-21847CDB36": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-296DDBE07F": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA39|OPP-2B7B69B53B": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA39|OPP-3A70AFF53C": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-3ABAF9B181": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-4C4C362570": {"first": "2026-W33", "last": "2026-W33", "recent": 6}, "MA39|OPP-5358CFE8D6": {"first": "2026-W33", "last": "2026-W33", "recent": 3}, "MA39|OPP-5AB4FBE237": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-76FA495815": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-95162D69CF": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA39|OPP-96564F14CB": {"first": "2026-W33", "last": "2026-W33", "recent": 7}, "MA39|OPP-9DAEB1397B": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-ACF9F9CFCB": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-AF9B8AA52A": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-AFA48BA959": {"first": "2026-W33", "last": "2026-W33", "recent": 4}, "MA39|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 4}, "MA39|OPP-BEE7153875": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-D1C1B3D770": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-D60818910F": {"first": "2026-W33", "last": "2026-W33", "recent": 6}, "MA39|OPP-E81B3EC6E3": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA39|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA39|OPP-EBA01F9CDC": {"first": "2026-W33", "last": "2026-W33", "recent": 15}, "MA39|OPP-F14B28B8E7": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA39|OPP-F23628C53B": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA39|OPP-F8BB5BF13A": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA39|OPP-FF3802CF78": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-2059E95C1D": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA60|OPP-2DE490C235": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA60|OPP-514A43E943": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MA60|OPP-5AB4FBE237": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-64D5F1E0FD": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-76FA495815": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA60|OPP-875F745B09": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA60|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 5}, "MA60|OPP-B57020734F": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-CE6EF348FB": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA60|OPP-D60818910F": {"first": "2026-W33", "last": "2026-W33", "recent": 7}, "MA60|OPP-E81B3EC6E3": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MA60|OPP-EBA01F9CDC": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-F14B28B8E7": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-F2328B7A5F": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MA60|OPP-F8BB5BF13A": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-514A43E943": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-9C1075825F": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 4}, "MT44 B|OPP-C8C00E3DF1": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT44 B|OPP-E7717BCE1D": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-E81B3EC6E3": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-EC6F57F3A0": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT44 B|OPP-F14B28B8E7": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT85|OPP-214B7A5EA2": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT85|OPP-3D6D3CE9CA": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT85|OPP-47D955B136": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT85|OPP-593B5A9C5B": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT85|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 6}, "MT85|OPP-B65D5DAC2B": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT85|OPP-D60818910F": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "MT85|OPP-E81B3EC6E3": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT85|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT85|OPP-EC6F57F3A0": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT85|OPP-F8BB5BF13A": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT89|OPP-106CDC3DCE": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "MT89|OPP-1DF417C284": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT89|OPP-565E4B99D8": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "MT89|OPP-F14B28B8E7": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "SK21|OPP-1DF417C284": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "SK21|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "SK21|OPP-D60818910F": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "SK21|OPP-EC6F57F3A0": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "SL03|OPP-A68C6B3608": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "SL03|OPP-EF5EC021D7": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT24|OPP-1DF417C284": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT24|OPP-47D955B136": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT24|OPP-8BFA4DD19F": {"first": "2026-W33", "last": "2026-W33", "recent": 1}, "TT24|OPP-B270955FB1": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT24|OPP-C8C00E3DF1": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "TT24|OPP-E8957EC3CD": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT24|OPP-EC6F57F3A0": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "TT24|OPP-F173C7801E": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT88|OPP-106CDC3DCE": {"first": "2026-W33", "last": "2026-W33", "recent": 2}, "TT88|OPP-214B7A5EA2": {"first": "2026-W33", "last": "2026-W33", "recent": 0}, "TT88|OPP-876CEA86E6": {"first": "2026-W33", "last": "2026-W33", "recent": 0}};
+
+const GRADE={'PS级':1,'S级':2,'A级':3,'B级':4,'C级':5,'D级':6,'其他':7};
+const FLOW=['考虑中','在跟进','项目中','已完成','不考虑'];
+const manual={}, key=(a,b)=>a+'|'+b, get=(a,b)=>manual[key(a,b)]||{status:'考虑中'};
+let S={view:'iter',spu:null,opp:null,editing:null,err:null,q:'',cat:null,scope:'品线级',cur:0};
+
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=n=>(n??0).toLocaleString('en-US');
+const ratio=s=>{const t=s.negative_evi_count+s.positive_evi_count;return t?s.negative_evi_count/t*100:0;};
+const shown=m=>(m.revived&&m.status==='考虑中')?'待复议':m.status;
+const trend=(spu,opp)=>(TREND[key(spu,opp)]||{}).recent??0;
+
+// 状态只用三档竖标 + 透明度表达。已完成与不考虑是「减去」，不是「上色」——
+// 给它们一块绿或一块灰，等于在扫视时和待办抢注意力。
+function mark(st){return st==='待复议'?'mk-rev':st==='考虑中'?'mk-todo'
+  :(st==='在跟进'||st==='项目中')?'mk-wip':'mk-none';}
+const isOff=st=>st==='已完成'||st==='不考虑';
+
+// 排序按负面占比，不是负面绝对值——后者基本是销量的代理变量。
+// 实测：占比最高的两个产品在旧排序里被压到第 11、12 位。
+const iterList=()=>[...DB.spus].sort((a,b)=>ratio(b)-ratio(a));
+function issueList(spu,issues){
+  return [...issues].sort((a,b)=>{
+    const ma=get(spu,a.opp_id),mb=get(spu,b.opp_id);
+    const da=isOff(ma.status)?1:0,db=isOff(mb.status)?1:0; if(da!==db)return da-db;
+    const ra=(ma.revived&&ma.status==='考虑中')?0:1,rb=(mb.revived&&mb.status==='考虑中')?0:1;
+    if(ra!==rb)return ra-rb;
+    return b.evi_count-a.evi_count;});
+}
+const backlog=s=>{const open=s.issues.filter(i=>!isOff(get(s.spu,i.opp_id).status)).length;
+  return open+'/'+s.issues.length;};
+
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');
+  clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),1800);}
+function go(v,spu,opp){S.view=v;S.spu=spu||null;S.opp=opp||null;S.editing=null;S.err=null;S.cur=0;render();}
+
+function setStatus(spu,opp,st){
+  const m={...get(spu,opp)},prev=m.status;
+  if(st==='不考虑'&&!((S.editing||{}).note||'').trim()){
+    S.editing={spu,opp,want:'不考虑'};
+    S.err='置为「不考虑」必须填理由。数据库那层会拒绝——前端拦只是提前告诉你，不是替代。';return render();}
+  if(st==='已完成'&&!((S.editing||{}).date)){S.editing={spu,opp,want:'已完成'};S.err=null;return render();}
+  m.status=st;
+  if(st==='不考虑'){m.note=S.editing.note.trim();
+    m.baseline=DB.spus.find(s=>s.spu===spu).issues.find(i=>i.opp_id===opp).evi_count;}
+  if(st==='已完成'){m.release=S.editing.release||'';m.date=S.editing.date||'';}
+  if(st!=='考虑中')m.revived=false;
+  manual[key(spu,opp)]=m;S.editing=null;S.err=null;toast(prev+' → '+st);render();
+}
+function revive(spu,opp){const m={...get(spu,opp)};
+  if(m.status!=='已完成'){toast('只有「已完成」的条目才谈得上复活');return;}
+  m.status='考虑中';m.revived=true;
+  m.reason=(m.release||'新版本')+' 于 '+(m.date||'上市')+' 之后仍收到 6 条同类反馈 —— 改动未生效';
+  manual[key(spu,opp)]=m;toast('已复活 → 待复议');render();}
+
+// ---------- 视图 ----------
+function trail(items){return '<div class="trail">'+items.map((t,i)=>
+  i===items.length-1?`<span>${esc(t.t)}</span>`
+  :`<button data-trail="${esc(t.go)}">${esc(t.t)}</button><i>/</i>`).join('')+'</div>';}
+
+function viewIter(){
+  const list=iterList(), maxNeg=Math.max(...list.map(s=>s.negative_evi_count));
+  const revCount=list.reduce((n,s)=>n+s.issues.filter(i=>shown(get(s.spu,i.opp_id))==='待复议').length,0);
+  let h=`<div class="head"><h1>老品迭代</h1>
+    <div class="tabs"><button class="tab on">全部 <span class="n">${list.length}</span></button>
+      <button class="tab">待复议 <span class="n">${revCount}</span></button>
+      <button class="tab">我负责的 <span class="n">—</span></button></div></div>
+    <div class="scroll"><table><thead><tr>
+      <th style="width:3px"></th><th>产品</th><th style="width:44px">定级</th>
+      <th class="r" style="width:78px">负面占比</th><th class="r" style="width:84px">负面证据</th>
+      <th class="r" style="width:52px">均星</th><th class="r" style="width:62px">待办/总</th>
+      <th style="width:34%">头号问题</th><th class="r" style="width:74px">近60天</th></tr></thead><tbody>`;
+  list.forEach((s,idx)=>{
+    const r=ratio(s), top=issueList(s.spu,s.issues)[0];
+    const topSt=top?shown(get(s.spu,top.opp_id)):null;
+    const hot=r>=20, rec=s.issues.reduce((n,i)=>n+trend(s.spu,i.opp_id),0);
+    h+=`<tr data-spu="${esc(s.spu)}" class="${idx===S.cur?'sel':''} ${hot?'flag':''}" tabindex="0">
+      <td class="mark"><span class="mk ${topSt?mark(topSt):'mk-none'}"></span></td>
+      <td><div class="nm">${esc(s.name)}</div><div class="sub"><span class="code">${esc(s.spu)}</span> · ${esc(s.category||'')} · ${esc(s.launch_period||'—')}</div></td>
+      <td class="n dim">${esc((s.grade||'').replace('级',''))}</td>
+      <td class="r"><span class="n-lg" style="${hot?'color:var(--alarm)':''}">${r.toFixed(1)}</span><span class="dim n" style="font-size:10.5px">%</span></td>
+      <td class="r"><span class="bar ${hot?'hot':''}" style="--w:${(s.negative_evi_count/maxNeg*100).toFixed(0)}"><span class="n">${fmt(s.negative_evi_count)}</span></span></td>
+      <td class="r n ${s.avg_star<4?'':'dim'}" style="${s.avg_star<4?'color:var(--alarm);font-weight:600':''}">${s.avg_star}</td>
+      <td class="r n dim">${backlog(s)}</td>
+      <td class="tight"><span style="font-size:12px">${esc(top?top.title:'—')}</span></td>
+      <td class="r n ${rec?'':'dim'}">${rec||'·'}</td></tr>`;});
+  return h+`</tbody></table></div>`;
+}
+
+function viewSpu(){
+  const s=DB.spus.find(x=>x.spu===S.spu), list=issueList(s.spu,s.issues);
+  const r=ratio(s), maxE=Math.max(...list.map(i=>i.evi_count));
+  const med=(DB.spus.map(x=>x.avg_star).sort((a,b)=>a-b)[Math.floor(DB.spus.length/2)]);
+  let h=`<div class="head">${trail([{t:'老品迭代',go:'iter'},{t:s.name}])}
+    <h1>${esc(s.name)}</h1>
+    <p class="lede"><span class="code">${esc(s.spu)}</span> · SKU ${esc((s.skus||[]).join(' / ')||'—')}
+      · ${esc(s.category||'')} · ${esc(s.launch_period||'')} · 定级 ${esc(s.grade||'')} · 负责人 <b>未分配</b></p>
+    </div><div class="scroll">
+    <div class="readout">
+      <div class="ro"><div class="v ${r>=20?'bad':''}">${r.toFixed(1)}%</div><div class="k">负面占比</div>
+        <div class="cmp">组内中位 13.6%</div></div>
+      <div class="ro"><div class="v ${s.avg_star<4?'bad':''}">${s.avg_star}</div><div class="k">均星</div>
+        <div class="cmp">组内中位 ${med}</div></div>
+      <div class="ro"><div class="v">${fmt(s.message_count)}</div><div class="k">消息</div></div>
+      <div class="ro"><div class="v">${fmt(s.negative_evi_count)}</div><div class="k">负面证据</div>
+        <div class="cmp">正面 ${fmt(s.positive_evi_count)}</div></div>
+      <div class="ro"><div class="v">${backlog(s)}</div><div class="k">待办 / 总条目</div></div>
+    </div>
+    <div class="grp"><h2>问题条目</h2><span class="c">${list.length}</span>
+      <span class="r">已完成沉底 · 复活置顶 · 其余按证据数</span></div>
+    <table><thead><tr><th style="width:3px"></th><th>问题</th>
+      <th class="r" style="width:86px">证据</th><th class="r" style="width:60px">近60天</th>
+      <th class="r" style="width:84px">扩散</th><th style="width:150px">状态</th></tr></thead><tbody>`;
+  list.forEach(i=>{
+    const m=get(s.spu,i.opp_id), st=shown(m), off=isOff(m.status), rec=trend(s.spu,i.opp_id);
+    h+=`<tr class="${off?'muted':''} ${st==='待复议'?'flag':''}">
+      <td class="mark"><span class="mk ${mark(st)}"></span></td>
+      <td><div class="nm" style="cursor:pointer" data-voices="${esc(i.opp_id)}">${esc(i.title)}</div>
+        <div class="sub">${esc(i.d||'')} › ${esc(i.sub||'')}${i.leaf?' › '+esc(i.leaf):''}</div>`;
+    if(st==='待复议')h+=`<div class="flagbox">${esc(m.reason||'上市后仍有新反馈')}</div>`;
+    if(m.status==='已完成')h+=`<div class="flagbox ok">${esc(m.release||'')} 于 ${esc(m.date||'')} 上市 · 之后 0 条新反馈
+      <button style="text-decoration:underline;color:var(--ink-4);margin-left:6px" data-rev="${esc(i.opp_id)}">模拟收到新反馈</button></div>`;
+    h+=`<div class="ops"><span class="lbl">状态</span>`;
+    FLOW.forEach(f=>{const gr=(f==='不考虑'||f==='已完成');
+      h+=`<button class="act ${m.status===f?'on':''} ${gr&&m.status!==f?'grave':''}" data-set="${esc(i.opp_id)}|${f}">${f}</button>`;});
+    h+=`</div>`;
+    if(S.editing&&S.editing.opp===i.opp_id){
+      h+=`<div class="form">`;
+      if(S.err)h+=`<p class="err">${esc(S.err)}</p>`;
+      if(S.editing.want==='不考虑')
+        h+=`<label>不考虑的理由（必填）</label><textarea data-note placeholder="日后复议要靠它">${esc(S.editing.note||'')}</textarea>`;
+      else h+=`<div class="fr"><div><label>版本号</label><input data-rel value="${esc(S.editing.release||'')}" placeholder="v2.1"></div>
+        <div><label>上市日期 · 复活判定的分界</label><input data-date type="date" value="${esc(S.editing.date||'')}"></div></div>`;
+      h+=`<button class="act on" data-confirm="${esc(i.opp_id)}|${S.editing.want}">确认</button>
+        <button class="act" data-cancel style="margin-left:5px">取消</button></div>`;}
+    h+=`</td><td class="r"><span class="bar" style="--w:${(i.evi_count/maxE*100).toFixed(0)}"><span class="n">${i.evi_count}</span></span></td>
+      <td class="r n ${rec?'':'dim'}">${rec||'·'}</td>
+      <td class="r"><span class="n">${i.n_eff}</span><div class="sub">${esc(i.scope||'')}</div></td>
+      <td><span class="stat ${st==='待复议'?'rev':off?'off':''}">${esc(st)}</span></td></tr>`;});
+  return h+`</tbody></table></div>`;
+}
+
+function viewVoices(){
+  const s=DB.spus.find(x=>x.spu===S.spu), i=s.issues.find(x=>x.opp_id===S.opp);
+  const vs=VOICES[S.opp]||[], st=shown(get(s.spu,i.opp_id)), rec=trend(s.spu,i.opp_id);
+  const stars=vs.filter(v=>v.star!=null).map(v=>v.star);
+  const avg=stars.length?(stars.reduce((a,b)=>a+b,0)/stars.length).toFixed(1):'—';
+  let h=`<div class="head">${trail([{t:'老品迭代',go:'iter'},{t:s.name,go:'spu'},{t:i.leaf||'问题'}])}
+    <h1 style="font-size:15px;line-height:1.4">${esc(i.title)}</h1>
+    <p class="lede">${esc(i.d||'')} › ${esc(i.sub||'')}${i.leaf?' › '+esc(i.leaf):''} · ${esc(s.name)} · ${esc(st)}</p></div>
+    <div class="scroll"><div class="readout">
+      <div class="ro"><div class="v">${i.evi_count}</div><div class="k">条证据</div></div>
+      <div class="ro"><div class="v ${rec?'':'dim'}">${rec}</div><div class="k">近60天新增</div>
+        <div class="cmp">${rec?'仍在产出':'已沉寂'}</div></div>
+      <div class="ro"><div class="v">${avg}</div><div class="k">原声均星</div></div>
+      <div class="ro"><div class="v">${i.n_eff}</div><div class="k">有效产品数</div>
+        <div class="cmp">${esc(i.scope||'')}</div></div></div>
+    <div class="grp"><h2>原声</h2><span class="c">${vs.length} / ${i.evi_count}</span>
+      <span class="r">问题条目就是最小分析单位，其下不再分级</span></div>`;
+  if(!vs.length)h+=`<p style="font-size:12px;color:var(--ink-4);padding:12px 0">这条原型只装了主力产品前几个问题的真实原声。</p>`;
+  vs.forEach(v=>{h+=`<div class="voice"><p>${esc(v.text)}</p><div class="meta">
+    <span class="s">★${v.star??'—'}</span><span>${esc(v.plat||'')}</span>
+    <span>${esc(v.country||'')}</span><span class="s">${esc(v.date)}</span></div></div>`;});
+  return h+`</div>`;
+}
+
+function viewInno(){
+  let h=`<div class="head"><h1>新品创新</h1></div>
+    <div class="scroll"><div class="grp"><h2>共享池</h2><span class="c">${INNO.length}</span>
+      <span class="r">按热度排序</span></div>
+    <table><thead><tr><th style="width:3px"></th><th>诉求</th>
+      <th class="r" style="width:70px">证据</th><th class="r" style="width:74px">互动</th>
+      <th style="width:190px">对标品牌</th><th style="width:96px">状态</th></tr></thead><tbody>`;
+  INNO.forEach(it=>{
+    const st=shown(get('INNO',it.opp_id));
+    h+=`<tr data-inno="${esc(it.opp_id)}" tabindex="0"><td class="mark"><span class="mk ${mark(st)}"></span></td>
+      <td><div class="nm">${esc(it.title)}</div>
+        <div class="sub"><span class="code">${esc(it.opp_id)}</span> · ${esc(it.core_tag||'')}</div></td>
+      <td class="r n">${it.evi_total}</td><td class="r n dim">${fmt(it.interactions)}</td>
+      <td class="sub" style="font-size:11px">${esc((it.brands||[]).slice(0,4).join(' · ')||'—')}</td>
+      <td><span class="stat ${isOff(st)?'off':''}">${esc(st)}</span></td></tr>`;});
+  return h+`</tbody></table></div>`;
+}
+
+function viewInnoDetail(){
+  const it=INNO.find(x=>x.opp_id===S.opp), st=shown(get('INNO',it.opp_id));
+  let h=`<div class="head">${trail([{t:'新品创新',go:'inno'},{t:it.title.slice(0,18)}])}
+    <h1 style="font-size:15px;line-height:1.4">${esc(it.title)}</h1>
+    <p class="lede"><span class="code">${esc(it.opp_id)}</span> · ${esc(it.core_tag||'')} · ${esc(it.first_week)}–${esc(it.last_week)}</p></div>
+    <div class="scroll"><div class="readout">
+      <div class="ro"><div class="v">${it.evi_total}</div><div class="k">条证据</div><div class="cmp">全部来自社媒</div></div>
+      <div class="ro"><div class="v">${fmt(it.interactions)}</div><div class="k">互动合计</div><div class="cmp">证据聚合而来</div></div>
+      <div class="ro"><div class="v">${it.tagged}/${it.attached}</div><div class="k">标签覆盖</div></div>
+      <div class="ro"><div class="v">${(it.brands||[]).length}</div><div class="k">对标品牌</div></div></div>`;
+  [['现象','phenomenon'],['归因','attribution'],['建议 · 市面缺口','suggestion']].forEach(([k,f])=>{
+    if(it[f])h+=`<div class="grp"><h2>${k}</h2></div><p style="font-size:12.5px;line-height:1.7;color:var(--ink-2);margin:0;max-width:64em">${esc(it[f])}</p>`;});
+  if(it.quotes&&it.quotes.length){
+    h+=`<div class="grp"><h2>灵感来源</h2><span class="c">${it.quotes.length} / ${it.evi_total}</span></div>`;
+    it.quotes.forEach(q=>{h+=`<div class="voice"><p>${esc(q.text)}</p><div class="meta">
+      <span>${esc(q.plat||'')}</span><span class="s">互动 ${fmt(q.act)}</span><span class="s">${esc(q.date)}</span></div></div>`;});}
+  h+=`<div class="grp"><h2>对标品牌</h2></div>
+    <p style="font-size:12.5px;color:var(--ink-2);margin:0">${esc((it.brands||[]).join(' · ')||'—')}</p>
+    <div class="ops" style="margin-top:22px"><span class="lbl">状态</span>`;
+  FLOW.forEach(f=>{const m=get('INNO',it.opp_id),gr=(f==='不考虑'||f==='已完成');
+    h+=`<button class="act ${m.status===f?'on':''} ${gr&&m.status!==f?'grave':''}" data-iset="${esc(it.opp_id)}|${f}">${f}</button>`;});
+  return h+`</div></div>`;
+}
+
+function viewStrategy(){
+  const list=DB.strategy.filter(x=>S.scope==='全部'||x.scope===S.scope);
+  const maxS=Math.max(...DB.strategy.map(x=>x.spus||0),1);
+  let h=`<div class="head"><h1>战略视图</h1>
+    <div class="tabs">`;
+  ['品线级','多品','单品','全部'].forEach(x=>{const n=x==='全部'?DB.strategy.length:DB.strategy.filter(s=>s.scope===x).length;
+    h+=`<button class="tab ${S.scope===x?'on':''}" data-scope="${x}">${x} <span class="n">${n}</span></button>`;});
+  h+=`</div></div><div class="scroll"><table><thead><tr><th>共性问题</th>
+    <th class="r" style="width:150px">涉及 SPU</th><th class="r" style="width:78px">集中度</th>
+    <th class="r" style="width:70px">证据</th></tr></thead><tbody>`;
+  list.forEach(x=>{h+=`<tr><td><div class="nm">${esc(x.title)}</div>
+    <div class="sub">${esc(x.prod_line||'')} · ${esc(x.scope)}</div></td>
+    <td class="r"><span class="bar" style="--w:${((x.spus||0)/maxS*100).toFixed(0)}"><span class="n-lg">${x.spus}</span></span></td>
+    <td class="r n dim">${x.n_eff}</td><td class="r n dim">${x.evi_total}</td></tr>`;});
+  return h+`</tbody></table></div>`;
+}
+
+function viewSearch(){
+  let list=DB.spus.filter(s=>{
+    if(S.q&&!((s.spu+s.name+(s.skus||[]).join()).toLowerCase().includes(S.q.toLowerCase())))return false;
+    if(S.cat&&s.category!==S.cat)return false;return true;});
+  list=[...list].sort((a,b)=>ratio(b)-ratio(a));
+  const maxNeg=Math.max(...DB.spus.map(s=>s.negative_evi_count));
+  let h=`<div class="head"><h1>产品检索</h1></div>
+    <div class="scroll"><div class="search"><span class="dim">/</span>
+      <input id="q" placeholder="SPU 编号、品名、SKU" value="${esc(S.q)}"></div>
+    <div class="filters"><button class="f ${!S.cat?'on':''}" data-cat="">全部<span class="n2">${DB.facets.total}</span></button>`;
+  Object.entries(DB.facets.category).forEach(([k,v])=>{
+    h+=`<button class="f ${S.cat===k?'on':''}" data-cat="${esc(k)}">${esc(k)}<span class="n2">${v}</span></button>`;});
+  h+=`<span style="margin-left:auto;font-size:11px;color:var(--ink-4)">标签树筛选需接后端，原型内置 ${DB.spus.length} 个真实 SPU</span></div>
+    <table><thead><tr><th>产品</th><th style="width:44px">定级</th>
+      <th class="r" style="width:78px">负面占比</th><th class="r" style="width:84px">负面证据</th>
+      <th class="r" style="width:52px">均星</th><th class="r" style="width:62px">待办/总</th></tr></thead><tbody>`;
+  list.forEach(s=>{const r=ratio(s),hot=r>=20;
+    h+=`<tr data-spu="${esc(s.spu)}" tabindex="0"><td><div class="nm">${esc(s.name)}</div>
+      <div class="sub"><span class="code">${esc(s.spu)}</span> · ${esc(s.category||'')} · ${esc(s.launch_period||'—')}</div></td>
+      <td class="n dim">${esc((s.grade||'').replace('级',''))}</td>
+      <td class="r"><span class="n-lg" style="${hot?'color:var(--alarm)':''}">${r.toFixed(1)}</span></td>
+      <td class="r"><span class="bar ${hot?'hot':''}" style="--w:${(s.negative_evi_count/maxNeg*100).toFixed(0)}"><span class="n">${fmt(s.negative_evi_count)}</span></span></td>
+      <td class="r n dim">${s.avg_star}</td><td class="r n dim">${backlog(s)}</td></tr>`;});
+  if(!list.length)h+=`<tr><td colspan="6" style="padding:20px;text-align:center;color:var(--ink-4)">没有匹配的产品</td></tr>`;
+  return h+'</tbody></table></div>';
+}
+
+// ---------- 渲染 ----------
+function render(){
+  const v=document.getElementById('view');
+  v.innerHTML=S.view==='spu'?viewSpu():S.view==='voices'?viewVoices()
+    :S.view==='inno'?viewInno():S.view==='innod'?viewInnoDetail()
+    :S.view==='strategy'?viewStrategy():S.view==='search'?viewSearch():viewIter();
+  const revCount=DB.spus.reduce((n,s)=>n+s.issues.filter(i=>shown(get(s.spu,i.opp_id))==='待复议').length,0);
+  document.getElementById('c-iter').textContent=DB.spus.length;
+  document.getElementById('c-inno').textContent=INNO.length;
+  document.getElementById('c-str').textContent=DB.strategy.filter(s=>s.scope==='品线级').length;
+  document.getElementById('c-search').textContent=DB.facets.total;
+  const it=document.querySelector('[data-go="iter"]');
+  it.classList.toggle('alarm',revCount>0);
+  if(revCount>0)document.getElementById('c-iter').textContent=DB.spus.length+' · '+revCount+'⟳';
+  document.querySelectorAll('.nav[data-go]').forEach(b=>{
+    const grp=S.view==='spu'||S.view==='voices'?'iter':S.view==='innod'?'inno':S.view;
+    b.classList.toggle('on',b.dataset.go===grp);});
+  bind();
+}
+
+function bind(){
+  const v=document.getElementById('view');
+  const on=(sel,fn)=>v.querySelectorAll(sel).forEach(el=>el.onclick=e=>fn(el,e));
+  on('[data-spu]',el=>go('spu',el.dataset.spu));
+  on('[data-inno]',el=>go('innod',null,el.dataset.inno));
+  on('[data-voices]',(el,e)=>{e.stopPropagation();go('voices',S.spu,el.dataset.voices);});
+  on('[data-trail]',el=>go(el.dataset.trail,S.spu));
+  on('[data-scope]',el=>{S.scope=el.dataset.scope;render();});
+  on('[data-cat]',el=>{S.cat=el.dataset.cat||null;render();});
+  on('[data-rev]',(el,e)=>{e.stopPropagation();revive(S.spu,el.dataset.rev);});
+  on('[data-set]',(el,e)=>{e.stopPropagation();const [o,st]=el.dataset.set.split('|');
+    if((st==='不考虑'||st==='已完成')&&!(S.editing&&S.editing.opp===o&&S.editing.want===st)){
+      S.editing={spu:S.spu,opp:o,want:st};S.err=null;return render();}
+    setStatus(S.spu,o,st);});
+  on('[data-iset]',(el,e)=>{e.stopPropagation();const [o,st]=el.dataset.iset.split('|');
+    const m={...get('INNO',o)};m.status=st;manual[key('INNO',o)]=m;toast('→ '+st);render();});
+  on('[data-confirm]',(el,e)=>{e.stopPropagation();const f=el.closest('.form');
+    const n=f.querySelector('[data-note]'),r=f.querySelector('[data-rel]'),d=f.querySelector('[data-date]');
+    if(n)S.editing.note=n.value; if(r)S.editing.release=r.value; if(d)S.editing.date=d.value;
+    const [o,st]=el.dataset.confirm.split('|');setStatus(S.spu,o,st);});
+  on('[data-cancel]',(el,e)=>{e.stopPropagation();S.editing=null;S.err=null;render();});
+  const q=v.querySelector('#q');
+  if(q)q.oninput=()=>{const p=q.selectionStart;S.q=q.value;render();
+    const n=document.querySelector('#q');if(n){n.focus();n.setSelectionRange(p,p);}};
+}
+
+// 键盘：对每周重复使用的工具，这项的实际收益高于所有视觉改动之和
+document.addEventListener('keydown',e=>{
+  if(e.target.matches('input,textarea'))return;
+  const rows=[...document.querySelectorAll('tbody tr[tabindex]')];
+  if(e.key==='j'||e.key==='k'){
+    if(!rows.length)return; e.preventDefault();
+    S.cur=Math.max(0,Math.min(rows.length-1,S.cur+(e.key==='j'?1:-1)));
+    rows.forEach((r,i)=>r.classList.toggle('sel',i===S.cur));
+    rows[S.cur].scrollIntoView({block:'nearest'});
+  } else if(e.key==='Enter'){ if(rows[S.cur])rows[S.cur].click(); }
+  else if(e.key==='Escape'){
+    if(S.editing){S.editing=null;S.err=null;render();}
+    else if(S.view==='voices')go('spu',S.spu);
+    else if(S.view==='spu')go('iter');
+    else if(S.view==='innod')go('inno');}
+});
+document.querySelectorAll('.nav[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));
+render();
+</script>
+</body>
+</html>

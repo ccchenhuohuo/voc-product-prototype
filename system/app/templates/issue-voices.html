@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "macros.html" as M with context %}
+{% block title %}{{ issue.display_title }} · 原声{% endblock %}
+{% block body_class %}voices-page{% endblock %}
+{% block body_attrs %}data-back-url="/spu/{{ issue.spu }}"{% endblock %}
+{% block content %}
+{% set recent = issue.recent_evi_count|default(0, true) %}
+<header class="head">
+  <nav class="trail" aria-label="面包屑"><a href="/iter">老品迭代</a><i>/</i><a href="/spu/{{ issue.spu }}">{{ product_name(issue) }}</a><i>/</i><span>{{ issue.tax_leaf or '问题' }}</span></nav>
+  <h1 class="detail-title">{{ issue.display_title }}</h1>
+  <p class="lede">{{ M.taxonomy(issue) }} · {{ product_name(issue) }} · {{ issue.display_status or issue.status or '考虑中' }}{% if issue.historical %} · 历史条目{% endif %}</p>
+</header>
+<div class="scroll">
+  <div class="readout">
+    <div class="ro"><div class="v">{{ (issue.evi_count or 0)|num }}</div><div class="k">条证据</div></div>
+    <div class="ro"><div class="v{% if not recent %} dim{% endif %}">{{ recent if recent else '·' }}</div><div class="k">近60天新增</div><div class="cmp">{{ '仍在产出' if recent else '已沉寂' }}</div></div>
+    <div class="ro"><div class="v">{{ summary.avg_star|num }}</div><div class="k">原声均星</div></div>
+    <div class="ro"><div class="v">{{ issue.n_eff|num }}</div><div class="k">有效产品数</div><div class="cmp">{{ issue.scope or '—' }}</div></div>
+  </div>
+
+  <div class="grp"><h2>原声</h2><span class="c">{{ voices|length }} / {{ issue.evi_count or 0 }}</span><span class="r">问题条目就是最小分析单位，其下不再分级</span></div>
+  {% for voice in voices %}
+    <article class="voice">
+      <p>{{ voice.voice_text or voice.snippet or voice.content }}</p>
+      {% if voice.translation and voice.translation != voice.voice_text %}<p class="translation">{{ voice.translation }}</p>{% endif %}
+      <div class="meta">
+        <span class="s">星 {{ voice.star if voice.star is defined and voice.star is not none else '—' }}</span>
+        <span>{{ voice.platform or '平台未知' }}</span>
+        <span>{{ voice.country or '国别未知' }}</span>
+        <span class="s">{{ voice.publish_time.date() if voice.publish_time and voice.publish_time.date is defined else (voice.publish_time or '时间未知') }}</span>
+        {% if voice.url %}<a href="{{ voice.url }}" target="_blank" rel="noopener noreferrer">原评论</a>{% endif %}
+      </div>
+    </article>
+  {% else %}
+    <p class="empty">该问题在此 SPU 下暂无可展示原声。</p>
+  {% endfor %}
+</div>
+{% endblock %}

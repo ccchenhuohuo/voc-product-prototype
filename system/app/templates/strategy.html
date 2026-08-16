@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}战略视图 · VOC{% endblock %}
+{% block body_class %}strategy-page{% endblock %}
+{% block content %}
+<header class="head">
+  <h1>战略视图</h1>
+  <nav class="tabs" aria-label="扩散范围">
+    {% for value in ['品线级', '多品', '单品', '全部'] %}
+      {% set count = total_count if value == '全部' else (counts[value] or 0) %}
+      <a class="tab{% if (selected_scope or scope) == value %} on{% endif %}" href="/strategy?scope={{ value }}">{{ value }} <span class="n">{{ count }}</span></a>
+    {% endfor %}
+  </nav>
+</header>
+<div class="scroll">
+  <table>
+    <thead><tr><th>共性问题</th><th class="r" style="width:150px">涉及 SPU</th><th class="r" style="width:78px">集中度</th><th class="r" style="width:70px">证据</th></tr></thead>
+    <tbody>
+    {% for row in opportunities %}
+      <tr>
+        <td><div class="nm">{{ row.title }}</div><div class="sub">{{ row.prod_line or row.core_tag or '—' }} · {{ row.scope or '未分类' }}</div></td>
+        <td class="r"><span class="bar" style="--w:{{ row.spu_bar_pct or 0 }}"><span class="n-lg">{{ row.spu_count or 0 }}</span></span><div class="sub">个产品</div></td>
+        <td class="r n dim">{{ row.n_eff|num }}</td>
+        <td class="r n dim">{{ (row.evi_total or 0)|num }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="4">当前范围下没有战略机会。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

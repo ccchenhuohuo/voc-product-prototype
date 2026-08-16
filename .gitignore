@@ -1,0 +1,19 @@
+# Local credentials and environment overrides
+.mcp.json
+.env
+.env.*
+
+# Python environments, bytecode, and test caches
+*.venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Runtime logs and local integration artifacts
+*.log
+lark-im-resources/
+
+# macOS metadata
+.DS_Store

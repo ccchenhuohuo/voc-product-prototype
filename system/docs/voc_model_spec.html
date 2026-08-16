@@ -1,0 +1,463 @@
+<title>机会模型规格</title>
+<style>
+  :root{
+    --paper:#fff; --side:#f7f6f3; --ink:#37352f; --muted:#787774; --faint:#9b9a97;
+    --line:#e9e9e7; --accent:#2383e2; --accent-ink:#1b6ec2; --code-bg:#f7f6f3;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --paper:#191919; --side:#202020; --ink:#d3d3d1; --muted:#9b9998; --faint:#6f6d6b;
+    --line:#2f2f2f; --accent:#529cca; --accent-ink:#6cb0dc; --code-bg:#202020;}}
+  :root[data-theme="dark"]{--paper:#191919; --side:#202020; --ink:#d3d3d1; --muted:#9b9998;
+    --faint:#6f6d6b; --line:#2f2f2f; --accent:#529cca; --accent-ink:#6cb0dc; --code-bg:#202020;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-size:15.5px;line-height:1.78;
+    font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:980px;margin:0 auto;padding:0 32px}
+  header.doc{padding:60px 0 6px}
+  .ico{font-size:52px;line-height:1}
+  h1{font-size:31px;font-weight:700;line-height:1.25;margin:12px 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin:0;max-width:44em}
+  .meta{color:var(--faint);font-size:13px;margin-top:12px}
+  main{padding:26px 0 90px}
+  section{margin-bottom:58px}
+  h2{font-size:21px;font-weight:700;margin:0 0 6px;padding-top:20px;border-top:1px solid var(--line)}
+  h2 .no{color:var(--accent);margin-right:9px}
+  .lede{color:var(--muted);margin:0 0 18px;max-width:44em}
+  h3{font-size:16px;font-weight:600;margin:26px 0 8px}
+  p{margin:0 0 12px;max-width:44em}
+  ul,ol{margin:0 0 14px;padding-left:1.35em;max-width:42em}li{margin:5px 0}li::marker{color:var(--faint)}
+  code{font-family:var(--mono);font-size:.85em;background:var(--code-bg);border-radius:4px;padding:1.5px 6px;color:#c0455f}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) code{color:#e88}}
+  pre{background:var(--code-bg);border-radius:7px;padding:14px 17px;overflow-x:auto;font-size:13px;line-height:1.6}
+  pre code{background:none;padding:0;color:inherit}
+  .tablewrap{overflow-x:auto;margin:2px 0 18px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th{font-size:12.5px;color:var(--muted);text-align:left;font-weight:500;border-bottom:1px solid var(--line);padding:7px 14px 7px 0;white-space:nowrap}
+  td{border-bottom:1px solid var(--line);padding:9px 14px 9px 0;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .callout{display:flex;gap:11px;background:var(--side);border-radius:6px;padding:15px 18px;margin:0 0 18px;max-width:50em}
+  .callout .i{flex:0 0 auto;font-size:17px}.callout p{margin:0}
+  .anno{color:var(--muted);font-size:13.5px;max-width:46em;margin:12px 0 0}
+  .anno b{color:var(--ink);font-weight:600}
+  footer{border-top:1px solid var(--line);color:var(--faint);font-size:13px;padding:20px 0 56px}
+
+  /* mock 固定浅色 */
+  .mock{background:#fff;border:1px solid #e9e9e7;border-radius:10px;padding:20px;margin:14px 0 4px;
+    box-shadow:0 3px 10px rgba(15,15,15,.05);color:#37352f;font-size:13.5px;line-height:1.6;
+    font-family:ui-sans-serif,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif}
+  .nt{display:inline-block;font-size:12px;line-height:20px;padding:0 7px;border-radius:4px;font-weight:500;white-space:nowrap;vertical-align:1px}
+  .g{background:#e3e2e0;color:#32302c}.b{background:#d3e5ef;color:#183347}.gr{background:#dbeddb;color:#1c3829}
+  .y{background:#fdecc8;color:#402c1b}.r{background:#ffe2dd;color:#5d1715}.p{background:#e8deee;color:#412454}
+  .o{background:#fadec9;color:#49290e}.gh{background:transparent;color:#9b9a97;box-shadow:inset 0 0 0 1px #e9e9e7}
+  .ps{background:#37352f;color:#fff}
+
+  .spuhead{display:flex;gap:14px;align-items:flex-start;padding-bottom:13px;border-bottom:1px solid #f0efed;margin-bottom:12px}
+  .spuhead .pn{font-size:17px;font-weight:700;letter-spacing:-.01em;margin:0 0 4px}
+  .spuhead .pm{color:#787774;font-size:12.5px}
+  .spuhead .kpi{margin-left:auto;display:flex;gap:18px;text-align:right}
+  .spuhead .kpi .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+  .spuhead .kpi .l{font-size:11px;color:#9b9a97}
+  .neg{color:#cf3439}.pos{color:#2d7a45}
+
+  .issue{display:grid;grid-template-columns:1fr auto auto;gap:11px;align-items:center;
+    padding:9px 10px;border-radius:6px;font-size:13px;border-bottom:1px solid #f6f5f3}
+  .issue:hover{background:#faf9f7}
+  .issue.done{opacity:.42}
+  .issue.revived{background:#fff8ee}
+  .issue .t{font-weight:500}
+  .issue .sub{color:#9b9a97;font-size:11.5px;margin-top:1px}
+  .issue .n{color:#9b9a97;font-variant-numeric:tabular-nums;font-size:12.5px;white-space:nowrap}
+  .crumb{font-size:11.5px;color:#9b9a97;margin-top:2px}
+  .crumb .sep{color:#d3d1ce;margin:0 3px}
+
+  .flag{display:flex;gap:8px;align-items:flex-start;background:#fff8ee;border-radius:6px;padding:9px 12px;font-size:12.5px;color:#7a5418;margin-top:12px}
+  .flag.blue{background:#f0f6fd;color:#1b5a94}
+
+  .lc{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:13px;margin:10px 0 2px}
+  .lc .st{border:1px solid var(--line);border-radius:6px;padding:5px 12px;white-space:nowrap;background:var(--paper)}
+  .lc .a{color:var(--faint);font-size:12px}
+  .lc .st.tomb{opacity:.5}
+
+  .q{border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:10px;max-width:48em}
+  .q .qid{font-family:var(--mono);font-size:12px;color:var(--accent-ink);font-weight:600;margin-right:8px}
+</style>
+
+<header class="doc"><div class="wrap">
+  <div class="ico">🧭</div>
+  <h1>VOC 机会模型规格</h1>
+  <p class="sub">两层结构、两类卡片、一条生命周期。SPU 是长期挂载的容器，问题是有生死的条目；共性问题不进状态机，只作战略观察。本文是开发依据，所有数字取自库内实测。</p>
+  <div class="meta">规格 v1 · 2026-08-15 数据快照 · 代码基线为数据库迁移 001–012</div>
+</div></header>
+
+<div class="wrap"><main>
+
+<!-- ======================= 1 -->
+<section>
+  <h2><span class="no">1</span>两层结构</h2>
+  <div class="callout"><span class="i">ℹ️</span><p><b>历史口径说明</b>：管道代码中的「线A / 线B」是发现路径名称，<b>线A等价于电商，线B等价于社媒</b>。<code>voc_opportunity.src_line</code> 保留「线A / 线B」，原始消息的 <code>voc_message.src_line</code> 使用「电商 / 社媒」；线别表示发现方，不限制后续交叉供证。</p></div>
+  <p class="lede">核心判断：<b>状态机是项目生命周期</b>——「在跟进 → 项目中 → 已完成」隐含有人立项、有版本交付。用这把尺子量，跨 30 个型号的共性问题不可能有一个项目能"完成"它，强行入机只会变成看板上的僵尸。</p>
+  <div class="tablewrap"><table>
+    <tr><th>层</th><th>单位</th><th>进状态机</th><th>回答</th><th>实测量级</th></tr>
+    <tr><td>🧭 <b>战略层</b></td><td>共性问题（跨 SPU）</td><td>❌ 否</td><td>产品线有什么系统性毛病</td><td>~70 条（<code>n_eff ≥ 3</code>）</td></tr>
+    <tr><td>🎫 <b>执行层</b></td><td>老品迭代 = SPU 卡<br>新品创新 = 诉求卡</td><td>✅ 是</td><td>我这周要认领什么</td><td>51 张 SPU 卡 / 161 个问题条目</td></tr>
+  </table></div>
+  <div class="callout"><span class="i">🔗</span><p><b>战略层不是死胡同</b>：旧品机会会通过 <code>voc_spu_issue</code> 按 SPU 自动展开为执行条目。当前应用没有「从战略问题手动派生卡片」的写入口；新品创新由管道直接生成 <code>opp_type = '新品创新'</code> 的机会点。</p></div>
+
+  <h3>原生 VOC 不是一层</h3>
+  <p>原始 VOC 的浏览由数据服务商的 SaaS 承担，本系统<b>不复制这个能力</b>。14.8 万条证据单列成模块，只会制造巨大的信息量而没有实际用途——PM 不需要一个「所有 VOC 列表」页。</p>
+  <p>在本系统里，原生 VOC 只作为具体机会的支撑材料出现：问题条目详情列出该 SPU 下的<b>全部原声</b>（见 §4），新品创新详情按互动量与发布时间展示最多 3 条「灵感来源」。入口永远是某个具体问题或诉求，而不是一个 VOC 库。</p>
+  <div class="callout"><span class="i">🚫</span><p><b>明确的非目标</b>：不做 VOC 检索页、不做全量证据浏览、不做原始数据导出。这些是 SaaS 的活，重复建设只会让 PM 在两个系统里看同样的东西。</p></div>
+</section>
+
+<!-- ======================= 2 -->
+<section>
+  <h2><span class="no">2</span>SPU 卡：容器 + 条目</h2>
+  <p class="lede">SPU 是<b>长期挂载对象，本身无状态</b>——「MT-44 已完成」是句没有意义的话。状态落在它下属的问题条目上。</p>
+
+  <div class="mock">
+    <div class="spuhead">
+      <div>
+        <div class="pn">maglock 小小吸盘支架 <span class="nt ps">PS级</span></div>
+        <div class="pm">SPU <span style="font-family:var(--mono)">G00A16</span> · SKU A053 / A054 · S支架类 · 2023及以前上市 ·
+          负责人 <b>陈羽</b></div>
+      </div>
+      <div class="kpi">
+        <div><div class="v">1,276</div><div class="l">消息</div></div>
+        <div><div class="v neg">603</div><div class="l">负面证据</div></div>
+        <div><div class="v pos">2,080</div><div class="l">正面证据</div></div>
+        <div><div class="v">4.01</div><div class="l">均星</div></div>
+      </div>
+    </div>
+
+    <div style="font-size:11.5px;letter-spacing:.05em;color:#9b9a97;font-weight:600;margin-bottom:5px">
+      问题条目 · 30 个 · 按证据数排序</div>
+
+    <div class="issue revived">
+      <div><div class="t">表面涂层剥落 <span class="nt o">复活</span></div>
+    <div class="issue">
+      <div><div class="t">吸盘在光面与磨砂面上无法建立初始吸附</div>
+        <div class="crumb">支撑<span class="sep">›</span>产品体验<span class="sep">›</span>产品部件<span class="sep">›</span>吸盘</div></div>
+      <span class="n">124 条</span><span class="nt y">在跟进</span></div>
+
+    <div class="issue">
+      <div><div class="t">磁吸部件吸附力不足（手机侧）</div>
+        <div class="crumb">支撑<span class="sep">›</span>产品体验<span class="sep">›</span>产品部件<span class="sep">›</span>磁吸</div></div>
+      <span class="n">49 条</span><span class="nt b">项目中</span></div>
+
+    <div class="issue">
+      <div><div class="t">整体重量过大影响便携</div>
+        <div class="crumb">支撑<span class="sep">›</span>产品体验<span class="sep">›</span>产品性能<span class="sep">›</span>重量
+          <span class="nt p" style="margin-left:6px">品线级</span></div></div>
+      <span class="n">31 条</span><span class="nt g">考虑中</span></div>
+
+        <div class="crumb">v2.1 于 2026-06-20 上市后仍有 6 条新反馈 —— 改动未生效</div></div>
+      <span class="n">8 条</span><span class="nt r">待复议</span></div>
+
+    <div class="issue done">
+      <div><div class="t">包装缺少防摔缓冲</div>
+        <div class="crumb">已完成 · v2.0 · 2026-03-15 上市 · 之后 0 条新反馈</div></div>
+      <span class="n">5 条</span><span class="nt gr">已完成</span></div>
+
+    <div class="flag blue">📊 <span><b>吸盘</b>相关负面 124 条，占该产品负面总量 21%，是最集中的单一问题面；但产品体验整体正面 1,610 : 417，属<b>局部短板而非整体失败</b>。</span></div>
+  </div>
+
+  <p class="anno"><b>为什么正负都给</b>：只看 603 条负面会误判。这产品均星 4.01、正面 2,080——它卖得好、评价好、有一个明确短板。PM 要这个比例才能决定"修短板"还是"重做"。</p>
+  <p class="anno"><b>实测密度</b>：51 张 SPU 卡承载 161 个问题条目，平均 3.2 个/卡。主力产品那张有 30 个条目——它消息量 1,737 条，问题多是正常的，也正是 PM 最需要盯的。</p>
+  <p class="anno"><b>看板只放这 51 张</b>：<span class="mono">voc_spu</span> 里有 328 个 SPU 容器，其余 277 个当前没有任何达阈值的问题条目——它们是<b>产品检索视图</b>的对象，不是待办卡片。把空容器混进看板会让 PM 每周翻 328 张卡去找那 51 张有事的。</p>
+  <p class="anno"><b>示例边界</b>：上方卡片是定稿概念稿，保留了具体负责人和自动洞察文案；当前页面固定显示「负责人 未分配」，也不自动生成洞察结论。示例 DOM 与数字不作为运行时契约。</p>
+</section>
+
+<!-- ======================= 3 -->
+<section>
+  <h2><span class="no">3</span>问题条目的生命周期</h2>
+  <p class="lede">五态 = <b>考虑中 · 不考虑 · 在跟进 · 项目中 · 已完成</b>，与一期一致。「灰化」是「已完成」的展示形态，「复活」是状态转移（回到<b>考虑中</b>并带 <code>revived_at</code> 标记，界面上呈现为「待复议」）——都不是新增状态。<b>复活有两种触发</b>，第二种是整套设计里最有价值的一环。</p>
+
+  <div class="lc">
+    <span class="st">考虑中</span><span class="a">→</span>
+    <span class="st">在跟进</span><span class="a">→</span>
+    <span class="st">项目中</span><span class="a">→</span>
+    <span class="st">已完成</span><span class="a">+ 上市日期</span>
+    <span class="st tomb">灰化</span><span class="a">⟳ 新反馈 →</span>
+    <span class="st">复活</span>
+  </div>
+  <p class="anno">上图是常见业务路径。数据库只校验状态值，当前页面也允许直接选择任一状态，并不强制只能相邻转移。</p>
+
+  <h3>触发一 · 不考虑 → 证据涨到 3 倍</h3>
+  <p>当初判「证据不足」，现在够了。迁移 <code>009_spu_layer.sql</code> 建立该规则，<code>011_audit_after_trigger.sql</code> 保留校验与赋值并把审计记账移到 AFTER 触发器：条目转为「不考虑」时，把当时的证据数写入 <code>voc_spu_issue_manual.baseline_evi_count</code>。<code>system/scripts/check_revive.py</code> 在当前证据数达到该基准的 3 倍时将条目复活；若操作者再次选择「不考虑」，触发器会用当时的证据数重置基准。</p>
+
+  <h3>触发二 · 已完成 → 上市后仍有新反馈</h3>
+  <p><b>改了但没改好。</b>不需要 3 倍阈值——改动上市后<b>任何一条</b>同类抱怨都是信号。</p>
+  <div class="callout"><span class="i">⚠️</span><p><b>分界线必须是上市日期，不是标记「已完成」的日期。</b>改动要过一段时间才上市，中间收到的都是存量反馈，拿标记时间当界会产生大量假复活。SPU 问题使用 <code>voc_spu_issue_manual.target_release</code> 与 <code>release_date</code>。新品创新的 <code>voc_opportunity_manual</code> 也有同名字段，但当前复活脚本不处理新品创新，不能视为已具备同样闭环。</p></div>
+  <pre><code>问题条目 → 已完成 → PM 填「v2.1 / 2026-10-15 上市」
+                              ↓
+        publish_time > 2026-10-15 的同类 VOC → 复活 →「改动未生效」</code></pre>
+  <p class="anno">这一步把系统从<b>发现问题</b>升级成<b>验证改动有效性</b>：PM 能拿到自己那次迭代到底管不管用的实证。这是别的 VOC 工具给不了的东西。</p>
+
+  <h3>判定权</h3>
+  <p>当前 Web 页面要求操作者手动选择「已完成」并填写上市日期；系统尚未接入认证，数据库触发器本身也没有为该状态强制 <code>release_date</code> 非空。机器不做自动闭环——它不知道改动是否真的上线。复活检测目前是独立脚本，应用与仓库都没有内置周期调度；在 <code>system/</code> 目录可运行 <code>python scripts/check_revive.py --dry-run</code> 只读预演。</p>
+</section>
+
+<!-- ======================= 3.5 下钻 -->
+<section>
+  <h2><span class="no">4</span>下钻：问题条目的原声</h2>
+  <p class="lede">点开问题条目，直接呈现该问题的<b>全部原声</b>。问题条目本身就是一个具体问题，<b>不再往下分二级</b>——再切成"失效表现"是多余的抽象，PM 已经知道自己在看什么。</p>
+
+  <div class="mock">
+    <div style="font-size:15px;font-weight:600;margin-bottom:3px">吸盘在光面与磨砂面上无法建立初始吸附</div>
+    <div class="crumb" style="margin-bottom:11px">支撑<span class="sep">›</span>产品体验<span class="sep">›</span>产品部件<span class="sep">›</span>吸盘
+      &nbsp;·&nbsp; maglock 小小吸盘支架 &nbsp;·&nbsp; <span class="nt y">在跟进</span></div>
+
+    <div style="display:flex;gap:16px;align-items:center;background:#faf9f7;border-radius:6px;
+                padding:8px 13px;font-size:12px;color:#787774;margin-bottom:11px;flex-wrap:wrap">
+      <span><b style="color:#37352f;font-size:13px">124</b> 条原声</span>
+      <span>均星 <b style="color:#cf3439">★1.4</b></span>
+      <span>US 62 · DE 18 · JP 14 · MX 11 · 其他 19</span>
+      <span>2026-02 ~ 2026-08</span>
+      <span style="margin-left:auto">排序 时间 ⌄ &nbsp; 筛选 星级 / 平台 / 国别 ⌄</span>
+    </div>
+
+    <div style="border-left:3px solid #37352f;padding:2px 0 2px 12px;margin-bottom:11px">
+      <div style="font-size:13.5px">磨砂壳上根本吸不住，试了三次都掉</div>
+      <div style="color:#9b9a97;font-size:11.5px;margin-top:2px">★1 · 抖音小店 · CN · 2026-07-13 · <span style="color:#1b6ec2">原评论 ↗</span></div>
+    </div>
+    <div style="border-left:3px solid #37352f;padding:2px 0 2px 12px;margin-bottom:11px">
+      <div style="font-size:13.5px">doesn't stick to textured surfaces at all</div>
+      <div style="color:#9b9a97;font-size:12px">吸不住任何有纹理的表面</div>
+      <div style="color:#9b9a97;font-size:11.5px;margin-top:2px">★1 · Amazon · US · 2026-06-28 · <span style="color:#1b6ec2">原评论 ↗</span></div>
+    </div>
+    <div style="border-left:3px solid #37352f;padding:2px 0 2px 12px;margin-bottom:11px">
+      <div style="font-size:13.5px">车里中控是弧面，吸一会儿就掉</div>
+      <div style="color:#9b9a97;font-size:11.5px;margin-top:2px">★2 · 天猫 · CN · 2026-07-02 · <span style="color:#1b6ec2">原评论 ↗</span></div>
+    </div>
+    <div style="border-left:3px solid #37352f;padding:2px 0 2px 12px;margin-bottom:11px">
+      <div style="font-size:13.5px">se despega del salpicadero con el calor</div>
+      <div style="color:#9b9a97;font-size:12px">一热就从中控台上脱落</div>
+      <div style="color:#9b9a97;font-size:11.5px;margin-top:2px">★1 · Amazon · MX · 2026-06-11 · <span style="color:#1b6ec2">原评论 ↗</span></div>
+    </div>
+
+    <div style="color:#9b9a97;font-size:12.5px;padding:7px 0 0;border-top:1px solid #f0efed">
+      继续加载其余 120 条 …</div>
+
+    <div class="flag blue" style="margin-top:12px">📈 <span><b>时间分布</b>：124 条中有 78 条集中在 2026-05 之后，早期占比明显偏低——可能与某批次吸盘材质变更有关，建议核对生产批次。</span></div>
+  </div>
+
+  <p class="anno"><b>示例边界</b>：上方概念稿保留了筛选、继续加载与自动时间归因；当前 <code>ISSUE_VOICES</code> 一次返回全部匹配原声并按发布时间倒序，无筛选或分页，只计算「近 60 天新增」，不自动推断批次或供应商。</p>
+  <h3>三条约束</h3>
+  <ol>
+    <li><b>不分二级。</b>问题条目就是最小的分析单位，其下只有原声。</li>
+    <li><b>原文在上、译文在下。</b>外语原声保留原文——它是最有说服力的素材；译文弱化显示供快速理解。</li>
+    <li><b>读数是元信息，不是分类。</b>当前页面展示证据数、近 60 天新增、原声均星、有效产品数；每条原声附平台、星级、国别与发布时间，不构成分组结构。</li>
+  </ol>
+  <div class="callout"><span class="i">⏱️</span><p><b>当前时间信号</b>：证据带 <code>voc_message.publish_time</code>，页面按该字段倒序并汇总近 60 天新增。按月份聚集、批次或供应商归因尚未在应用中自动计算，不能把它写成现有能力。</p></div>
+</section>
+
+<!-- ======================= 4 -->
+<section>
+  <h2><span class="no">5</span>新品创新卡</h2>
+  <p class="lede">没有 SPU 可挂，因此是<b>单层结构</b>——诉求本身就是最小单位，它自己就具备战略层的性质。不与老品迭代强行对称。</p>
+
+  <div class="mock">
+    <div style="border-left:3px solid #448361;padding-left:15px">
+      <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <span class="nt gr">新品创新</span>
+        <span class="nt p">竞品对标</span>
+        <span class="nt gh">社交媒体</span>
+        <span style="margin-left:auto;color:#b7b5b1;font-size:12px">互动 2.4k · 共享池 · W33</span>
+      </div>
+      <div class="crumb" style="margin-bottom:7px">支撑<span class="sep">›</span>产品体验<span class="sep">›</span>产品部件<span class="sep">›</span>快装系统
+        &nbsp;<span class="nt gh">3/9 条无标签路径</span></div>
+
+      <div style="font-size:16px;font-weight:600;line-height:1.42;margin-bottom:3px">快装系统：填补跨品牌兼容与一键切换能力</div>
+      <div style="color:#37352f;font-size:13.5px;padding-left:11px;border-left:2px solid #e9e9e7;margin:8px 0 13px">
+        创作者在多套快装标准之间被迫携带转接件，希望有一个原生兼容主流标准的方案。</div>
+
+      <div style="font-size:11.5px;letter-spacing:.05em;color:#9b9a97;font-weight:600;margin-bottom:5px">灵感来源 · 9 条社媒讨论</div>
+      <div style="background:#faf9f7;border-radius:6px;padding:10px 13px;font-size:13px;margin-bottom:13px">
+        讨论集中在<b>长焦镜头脚架环</b>场景：Arca-Swiss 与 F38 两套标准互不通用，现有小矩形快装板压不住重镜头，转接件成为固定负担。
+        <div style="border-left:3px solid #37352f;padding:1px 0 1px 11px;margin-top:8px;font-size:12.5px">
+          换个云台就要换一套快装板，包里永远躺着三块铁
+          <div style="color:#9b9a97;font-size:11.5px">抖音 · 赞 856 · 2026-07-19</div></div>
+        <div style="border-left:3px solid #37352f;padding:1px 0 1px 11px;margin-top:6px;font-size:12.5px">
+          F38 只有小矩形板，从未有更长版本卡住 70-200、100-400 的长镜头脚
+          <div style="color:#9b9a97;font-size:11.5px">小红书 · 赞 612 · 2026-06-30</div></div>
+        <div style="color:#9b9a97;font-size:11.5px;margin-top:7px">▸ 展开其余 7 条</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:13px">
+        <div>
+          <div style="font-size:11.5px;letter-spacing:.05em;color:#9b9a97;font-weight:600;margin-bottom:5px">诉求场景</div>
+          <div><span class="nt gh">多设备切换</span> <span class="nt gh">长焦拍摄</span> <span class="nt gh">户外便携</span></div>
+        </div>
+        <div>
+          <div style="font-size:11.5px;letter-spacing:.05em;color:#9b9a97;font-weight:600;margin-bottom:5px">对标竞品 · 从 品牌_ 抽取</div>
+          <div style="font-size:12.5px;color:#787774">Arca-Swiss <b style="color:#37352f">5</b> &nbsp; Feiyu SCORP <b style="color:#37352f">3</b> &nbsp; Sirui K-40 <b style="color:#37352f">2</b></div>
+        </div>
+      </div>
+
+      <div style="font-size:11.5px;letter-spacing:.05em;color:#9b9a97;font-weight:600;margin-bottom:4px">市面缺口</div>
+      <div style="font-size:13px;margin-bottom:14px">现有方案各解决一半：Arca-Swiss 生态广但无长板规格，F38 快拆快但封闭。缺一个<b>物理兼容双标准并提供长镜头脚架环规格</b>的产品。</div>
+
+      <div style="display:flex;gap:5px;align-items:center;border-top:1px solid rgba(55,53,47,.08);padding-top:11px">
+        <span style="font-size:13px;line-height:28px;padding:0 11px;border-radius:4px;color:#5f5e5b">不考虑</span>
+        <span style="font-size:13px;line-height:28px;padding:0 11px;border-radius:4px;color:#5f5e5b">考虑中</span>
+        <span style="font-size:13px;line-height:28px;padding:0 13px;border-radius:4px;background:#2383e2;color:#fff;font-weight:500">跟进（认领）</span>
+        <span style="margin-left:auto;color:#b7b5b1;font-size:12.5px">🗓️ 待本周战略会研讨</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="anno"><b>示例边界</b>：上方概念稿中的「展开其余证据」、诉求场景标签和品牌频次尚未实现。当前详情固定取互动量最高、发布时间最新的 3 条证据，品牌只做去重列表；标签覆盖显示在详情读数条，不在面包屑。</p>
+  <p class="anno"><b>与 SPU 卡的三处刻意差异</b>：① 左边框绿色而非蓝色，一眼区分类型；② 没有「迭代对象」表——它无产品可挂，取而代之的是<b>对标品牌</b>与<b>市面缺口</b>；③ 列表是共享池。当前应用没有周会提醒或个人催办逻辑，详情页仅提供与问题条目相同的五态人工状态控件。</p>
+  <p class="anno"><b>「3/9 条无标签路径」是必要的诚实标注</b>：社媒证据只有 71% 带标签树，不该为剩下的伪造路径。当前页面以「已标注数 / 挂靠数」在详情读数条展示标签覆盖度。</p>
+
+  <div class="tablewrap"><table>
+    <tr><th></th><th>老品迭代（SPU 卡）</th><th>新品创新（诉求卡）</th></tr>
+    <tr><td>结构</td><td>两层：容器 + 条目</td><td>单层：卡即条目</td></tr>
+    <tr><td>主要来源</td><td>电商评论（100% → 老品迭代；SPU_ 覆盖 91.6%）</td><td>社交媒体（90.2% 无产品挂靠）</td></tr>
+    <tr><td>归属</td><td>当前未接认证或负责人路由；页面显示「未分配」</td><td><b>共享池</b></td></tr>
+    <tr><td>处置节奏</td><td>应用未实现截止或催办</td><td>应用未实现周会提醒</td></tr>
+    <tr><td>排序</td><td>卡默认按 Wilson 负面占比置信下界，条目按状态组与证据数</td><td><code>rank_score</code> 降序，再按互动量降序</td></tr>
+  </table></div>
+  <div class="callout"><span class="i">🗓️</span><p><b>后续节奏设计不能混为一谈</b>：SPU 卡适合产品负责人日常处理，新品创新适合共享池研讨；但截止、周会提醒、个人催办与负责人自动路由都尚未进入当前代码，不能当作现有流程。</p></div>
+</section>
+
+<!-- ======================= 5 -->
+<section>
+  <h2><span class="no">6</span>战略视图与知会</h2>
+  <p class="lede">当前实现是独立的 <code>/strategy</code> 战略视图，默认展示「品线级」，也可切换「多品 / 单品 / 全部」。页面按 <code>n_eff</code> 降序、再按证据数降序；批阅流提醒与定期知会尚未实现。</p>
+
+  <div class="mock">
+    <div style="border-left:3px solid #2383e2;padding:14px 18px;background:#fbfcfe;border-radius:0 8px 8px 0">
+      <div style="font-weight:600;margin-bottom:9px">📊 战略动态 · 本月新增 3 个品线级问题</div>
+      <div class="issue" style="border:none;padding:5px 0">
+        <div><div class="t">S支架类整体偏重</div>
+          <div class="crumb">30 个型号 · 头部占比仅 14% · 含 2024 后新品 6 款</div></div>
+        <span class="n">93 条</span><span class="nt p">N_eff 12.4</span></div>
+      <div class="issue" style="border:none;padding:5px 0">
+        <div><div class="t">T脚架类寿命显著低于 6 个月</div>
+          <div class="crumb">28 个型号 · 头部占比 18%</div></div>
+        <span class="n">44 条</span><span class="nt p">N_eff 9.8</span></div>
+      <div class="issue" style="border:none;padding:5px 0">
+        <div><div class="t">灯光类供电后无法启动照明</div>
+          <div class="crumb">21 个型号 · 头部占比 16% · 主控电路/电源管理</div></div>
+        <span class="n">31 条</span><span class="nt p">N_eff 7.1</span></div>
+      <div style="text-align:right;margin-top:8px;color:#1b6ec2;font-size:12.5px">查看战略视图 →</div>
+    </div>
+  </div>
+
+  <p class="anno"><b>示例边界</b>：上方「本月新增」知会卡是概念稿。当前代码只有独立的 <code>/strategy</code> 表格页，没有新增月份判定、批阅流提醒或自动知会。</p>
+  <h3>共性度：有效产品数 N_eff</h3>
+  <p>用 Simpson 倒数，比"涉及产品数"准——能识别"名义 10 个产品、实际 90% 集中在一个"的伪扩散：</p>
+  <pre><code>N_eff = 1 / Σ(pᵢ²)      pᵢ = 第 i 个产品在该问题上的证据占比</code></pre>
+  <div class="tablewrap"><table>
+    <tr><th>标签</th><th>判据</th><th>行动层级</th></tr>
+    <tr><td>单品问题</td><td>N_eff &lt; 1.5</td><td>改这个产品</td></tr>
+    <tr><td>多品问题</td><td>1.5 ≤ N_eff &lt; 3</td><td>改这批产品</td></tr>
+    <tr><td><b>品线级问题</b></td><td>N_eff ≥ 3</td><td><b>改设计基线 / 平台件</b></td></tr>
+  </table></div>
+  <p class="anno"><b>实现口径</b>：迁移 <code>009_spu_layer.sql</code> 的 <code>voc_refresh_spu_layer()</code> 使用全部已挂靠 SPU 证据计算 <code>n_eff</code> 与 <code>scope</code>，不会套用「每个 SPU/问题至少 2 条证据」的成卡阈值；页面上的「涉及 SPU」则来自当前 <code>voc_spu_issue</code>，因此是已达成卡阈值的 SPU 数。两项读数含义不同。</p>
+</section>
+
+<!-- ======================= 6 -->
+<section>
+  <h2><span class="no">7</span>排序与归属</h2>
+  <div class="tablewrap"><table>
+    <tr><th>对象</th><th>排序 / 规则</th></tr>
+    <tr><td>SPU 卡</td><td>默认按<b>负面占比的 95% Wilson 置信下界</b>降序；页面可切换定级、负面占比、负面证据、均星、待办数的升降序。定级顺序为 PS › S › A › B › C › D › 其他</td></tr>
+    <tr><td>SPU 卡内的问题条目</td><td>待复议置顶；一般条目按证据数降序；已完成与不考虑沉底</td></tr>
+    <tr><td>新品创新卡</td><td><code>rank_score</code> 降序，再按聚合互动量降序</td></tr>
+    <tr><td>SPU 卡归属</td><td><code>voc_spu_issue_manual.owner</code> 可存负责人，但当前路由不写该字段，页面显示「未分配」</td></tr>
+    <tr><td>新品创新归属</td><td><b>共享池</b>；<code>voc_opportunity_manual.owner</code> 当前同样不由应用写入</td></tr>
+  </table></div>
+  <h3>成卡阈值</h3>
+  <p>问题条目要求<b>该 SPU 在该问题上 ≥2 条证据</b>。不设阈值会产生 747 个条目，多数是"某产品在某问题上仅 1 条"，不值得立项。</p>
+  <div class="tablewrap"><table>
+    <tr><th>阈值</th><th>条目数</th><th>覆盖 SPU</th></tr>
+    <tr><td>无</td><td>747</td><td>162</td></tr>
+    <tr><td><b>≥2 条 ← 采用</b></td><td><b>161</b></td><td><b>51</b></td></tr>
+    <tr><td>≥3 条</td><td>69</td><td>23</td></tr>
+    <tr><td>≥5 条</td><td>26</td><td>14</td></tr>
+  </table></div>
+  <p class="anno">上表为 2026-08-15 迁移落库后在全量数据上实测。此前版本记录的 676 / 126 是部署前估算，且「无阈值」一行的覆盖数误填成了电商共性问题数（现为 215），非 SPU 数。</p>
+  <div class="callout"><span class="i">✅</span><p><b>阈值不会删除底层证据</b>：被挡掉的 586 对仍存在于 <code>voc_message / voc_evidence / voc_opp_evidence</code>，并参与不套成卡阈值的 <code>n_eff</code> 计算；但它们不会进入 <code>voc_spu_issue</code>，所以当前 SPU 卡与原声入口不可见，也没有全量 (SPU, opportunity) 对的浏览页面。</p></div>
+</section>
+
+<!-- ======================= 7 -->
+<section>
+  <h2><span class="no">8</span>抽取与 SPU 层：已落地基线</h2>
+  <p class="lede">本节原列出的三项阻塞已经落地：产品与标签字段由迁移 <code>008_product_fields.sql</code> 补齐，SPU 容器、问题条目与共性度由 <code>009_spu_layer.sql</code> 建立；抽取映射以当前 <code>pipeline/voc_analytics/clean.py</code> 为准。</p>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>原问题</th><th>当前实现</th></tr>
+    <tr><td>1</td><td><b>产品定级是多值导出</b></td>
+        <td><code>clean.highest_grade()</code> 按 PS › S › A › B › C › D › 其他取最高级写入既有 <code>voc_message.product_grade</code>；<code>voc_spu.grade</code> 聚合时再次按同一顺序取值</td></tr>
+    <tr><td>2</td><td><b>SPU / SKU / 型号未入库</b></td>
+        <td><code>voc_message.spu</code>、<code>sku</code>、<code>model</code> 已是数组字段；<code>voc_spu</code> 以拆开的 SPU 为主键并聚合品名与 SKU。当前物化视图不暴露 <code>model</code></td></tr>
+    <tr><td>3</td><td><b><code>tax_l1</code> 是树名而非业务层级</b></td>
+        <td><code>voc_evidence.tax_stage / tax_domain / tax_sub / tax_leaf</code> 已按 <code>tax_path</code> 固定位置提取；<code>tax_l1</code> 明确标为 deprecated，应用筛选与面包屑读取新字段</td></tr>
+  </table></div>
+  <h3>迁移 008 增加的字段</h3>
+  <pre><code>voc_message
+  spu text[] · sku text[] · model text[]
+  launch_period text · prod_line text · is_own_brand boolean
+
+voc_evidence
+  tax_stage text · tax_domain text · tax_sub text · tax_leaf text</code></pre>
+  <div class="callout"><span class="i">💡</span><p><b>SPU 派生层不调用 LLM</b>：Dagster 的 <code>spu_layer</code> 资产调用 <code>voc_refresh_spu_layer()</code>，刷新 <code>voc_spu</code> 与 <code>voc_spu_issue</code>，再回填 <code>n_eff / scope</code>。问题语义来自已有 <code>voc_opportunity</code>，原声来自既有证据挂靠。</p></div>
+</section>
+
+<!-- ======================= 8 -->
+<section>
+  <h2><span class="no">9</span>数据模型</h2>
+  <pre><code>voc_spu                     -- 物化视图；容器无状态，唯一索引为 spu
+  spu · product_names[] · skus[] · category · prod_line
+  grade · launch_period · message_count
+  negative_evi_count · positive_evi_count · avg_star
+  first_publish_week · last_publish_week
+
+voc_spu_issue               -- 物化视图；达到 >=2 证据的条目计算层
+  (spu, opp_id) UNIQUE      -- opp_id 指向 voc_opportunity
+  evi_count · tax_path · first_attach_week · last_attach_week
+
+voc_spu_issue_manual        -- 普通表；重算永不覆盖
+  (spu, opp_id) PK          -- 状态机作用于此
+  status · owner · decision_note · baseline_evi_count
+  target_release · release_date · closed_at
+  revived_at · revive_reason · updated_by · updated_at
+
+voc_opportunity             -- 共性问题 / 新品创新共用的机器表
+  opp_type                  -- 老品迭代 / 新品创新
+  src_line                  -- 线A / 线B（等价于电商 / 社媒的发现路径）
+  channel                   -- 线B子类型：需求缺口 / 竞品对标；不是消息来源
+  n_eff · scope             -- 迁移 009 新增；无 SPU 挂靠时同时为 NULL
+  merged_into · released_at -- 分别由迁移 006 / 007 新增
+
+voc_opportunity_manual      -- 新品创新卡的人工状态层
+  opp_id PK · status · owner · note · decision_note
+  target_release · release_date · improved_product_ids[]
+  updated_at · updated_by
+
+voc_spu_issue_log / voc_status_log
+  -- 分别记录 SPU 问题与机会点状态变更；011 / 012 将记账移至 AFTER 触发器</code></pre>
+  <p class="anno"><code>voc_spu</code> 与 <code>voc_spu_issue</code> 已是物化视图，由 <code>voc_refresh_spu_layer()</code> 刷新；人工状态分表保存。新品创新不另建卡表：管道把它写入 <code>voc_opportunity</code> 并以 <code>opp_type = '新品创新'</code> 标识，应用再把人工状态写入 <code>voc_opportunity_manual</code>。交叉供证不改变 <code>src_line / opp_type</code>，但会改变证据统计、<code>dual_source / rank_score</code> 等派生指标，并可能影响 <code>n_eff / scope</code>。</p>
+</section>
+
+<!-- ======================= 9 -->
+<section>
+  <h2><span class="no">10</span>开放问题</h2>
+  <h3>已决（原开放问题，此处留档）</h3>
+  <div class="tablewrap"><table>
+    <tr><th>原问题</th><th>结论</th></tr>
+    <tr><td>容器身份用 <code>SPU_</code> 还是 <code>品名_</code></td><td>主键用 <b>SPU_</b>（91.6% 覆盖），展示用品名_；<code>型号_</code> 仅 23.2% 覆盖，不可当主键</td></tr>
+    <tr><td>一 SPU 多品名是否拆卡</td><td><b>合并一张</b>，多品名与 SKU 以数组列在卡内——PM 立项按 SPU</td></tr>
+    <tr><td>社媒老品迭代（挂不到 SPU）怎么处置</td><td>目标方向是<b>归入战略层</b>作为无产品挂靠的共性问题，但当前尚未落地：线B固定生成「新品创新」，当前遍历的 <code>DEWATER_GAP / DEWATER_COMP</code> 通道集合也不包含「用户使用体验」；是否捡回及如何挂靠留待后续实现</td></tr>
+  </table></div>
+
+  <h3>仍未决</h3>
+  <div class="q"><span class="qid">Q1</span>战略动态的知会节奏是<b>每月</b>还是<b>每周</b>？品线级问题形成较慢，每周推大概率经常是空的，每月又可能太迟。</div>
+  <div class="q"><span class="qid">Q2</span><code>rank_score</code> 是否纳入<b>扩散因子</b>？当前公式为「证据数 × (1 + 低星率) × 双源系数（双源为 1.5，否则 1）+ 安全项（安全类 +1000）」，没有纳入 <code>n_eff</code>。相同证据与低星结构下，跨 30 型号与集中在 1 个产品的排序分相同；加入扩散因子会改变 PM 看到的顺序。</div>
+</section>
+
+<footer>VOC 机会模型规格 v1 · 2026-08-15 数据快照 · SPU/SKU 与标签层级已由迁移 008、抽取映射及迁移 009 派生层落地</footer>
+</main></div>

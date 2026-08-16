@@ -1,0 +1,192 @@
+<title>管道改造计划</title>
+<style>
+  :root{
+    --paper:#fff; --side:#f7f6f3; --ink:#37352f; --muted:#787774; --faint:#9b9a97;
+    --line:#e9e9e7; --accent:#2383e2; --accent-ink:#1b6ec2; --code-bg:#f7f6f3;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --ok:#448361; --ok-bg:#dbeddb; --warn:#b06400; --warn-bg:#fdecc8;
+    --hot:#a1272b; --hot-bg:#ffe2dd; --new:#1b6ec2; --new-bg:#d3e5ef;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --paper:#191919; --side:#202020; --ink:#d3d3d1; --muted:#9b9998; --faint:#6f6d6b;
+    --line:#2f2f2f; --accent:#529cca; --accent-ink:#6cb0dc; --code-bg:#202020;
+    --ok-bg:#243d30; --warn-bg:#4a3a1c; --hot-bg:#3d2422; --new-bg:#25384a;}}
+  :root[data-theme="dark"]{
+    --paper:#191919; --side:#202020; --ink:#d3d3d1; --muted:#9b9998; --faint:#6f6d6b;
+    --line:#2f2f2f; --accent:#529cca; --accent-ink:#6cb0dc; --code-bg:#202020;
+    --ok-bg:#243d30; --warn-bg:#4a3a1c; --hot-bg:#3d2422; --new-bg:#25384a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-size:15.5px;line-height:1.78;
+    font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 32px}
+  header.doc{padding:58px 0 6px}
+  .ico{font-size:50px;line-height:1}
+  h1{font-size:30px;font-weight:700;line-height:1.25;margin:12px 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin:0;max-width:44em}
+  .meta{color:var(--faint);font-size:13px;margin-top:12px}
+  main{padding:26px 0 90px}
+  section{margin-bottom:52px}
+  h2{font-size:21px;font-weight:700;margin:0 0 6px;padding-top:20px;border-top:1px solid var(--line)}
+  h2 .no{color:var(--accent);margin-right:9px}
+  .lede{color:var(--muted);margin:0 0 18px;max-width:44em}
+  h3{font-size:16px;font-weight:600;margin:26px 0 8px}
+  p{margin:0 0 12px;max-width:44em}
+  ul,ol{margin:0 0 14px;padding-left:1.35em;max-width:44em}li{margin:5px 0}li::marker{color:var(--faint)}
+  code{font-family:var(--mono);font-size:.85em;background:var(--code-bg);border-radius:4px;padding:1.5px 6px;color:#c0455f}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) code{color:#e88}}
+  :root[data-theme="dark"] code{color:#e88}
+  .tablewrap{overflow-x:auto;margin:2px 0 18px}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th{font-size:12.5px;color:var(--muted);text-align:left;font-weight:500;border-bottom:1px solid var(--line);padding:7px 14px 7px 0;white-space:nowrap}
+  td{border-bottom:1px solid var(--line);padding:9px 14px 9px 0;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .callout{display:flex;gap:11px;background:var(--side);border-radius:6px;padding:15px 18px;margin:0 0 18px;max-width:52em}
+  .callout .i{flex:0 0 auto;font-size:17px}.callout p{margin:0}
+  .anno{color:var(--muted);font-size:13.5px;max-width:46em;margin:12px 0 0}
+  .anno b{color:var(--ink);font-weight:600}
+  footer{border-top:1px solid var(--line);color:var(--faint);font-size:13px;padding:20px 0 56px}
+  .tag{display:inline-block;font-size:11.5px;line-height:19px;padding:0 7px;border-radius:4px;font-weight:600;white-space:nowrap}
+  .t-sql{background:var(--ok-bg);color:#1c3829}
+  .t-llm{background:var(--hot-bg);color:#5d1715}
+  .t-code{background:var(--new-bg);color:#183347}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .t-sql{color:#c8e6d0}
+    :root:not([data-theme="light"]) .t-llm{color:#f3ccc7} :root:not([data-theme="light"]) .t-code{color:#cfe3f0}}
+  :root[data-theme="dark"] .t-sql{color:#c8e6d0}
+  :root[data-theme="dark"] .t-llm{color:#f3ccc7}
+  :root[data-theme="dark"] .t-code{color:#cfe3f0}
+
+  .phase{border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:14px}
+  .ph{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--side);border-bottom:1px solid var(--line)}
+  .ph .num{font-family:var(--mono);color:var(--accent);font-size:13px}
+  .ph .nm{font-size:14.5px;font-weight:600}
+  .ph .cost{margin-left:auto;font-size:12px;color:var(--faint);white-space:nowrap}
+  .pb{padding:14px 16px}
+  .pb>p:last-child{margin-bottom:0}
+  .gate{background:var(--warn-bg);color:#402c1b;border-radius:6px;padding:11px 14px;margin:10px 0 0;font-size:13.5px;line-height:1.7}
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .gate{color:#f7e2b5}}
+  :root[data-theme="dark"] .gate{color:#f7e2b5}
+  .gate b{font-weight:600}
+</style>
+
+<div class="wrap">
+<header class="doc">
+  <div class="ico">🔧</div>
+  <h1>管道改造计划</h1>
+  <p class="sub">七项改动，三个阶段。核心是把「分类由渠道决定」这个结构性错误改掉，同时把被过度过滤掉的数据放回来。</p>
+  <p class="meta">2026-08-16 · 全部量级为库内实测 · 配套〈数据管道重构〉与〈VOC 数据架构〉</p>
+</header>
+
+<main>
+
+<section>
+  <h2><span class="no">1</span>要改什么</h2>
+  <p class="lede">按对数据的影响排序。标签表示改动性质：<span class="tag t-sql">纯 SQL</span> 秒级生效，<span class="tag t-code">改代码 + 重跑抽取</span> 分钟级，<span class="tag t-llm">需重跑生成</span> 小时级。</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>改动</th><th>现状 → 目标</th><th>性质</th></tr>
+    <tr><td class="n">1</td><td><b>分类改由内容判定</b></td>
+      <td><code>opp_type</code> 由渠道写死 → 由证据内容三分类</td><td><span class="tag t-llm">重跑生成</span></td></tr>
+    <tr><td class="n">2</td><td><b>去掉星级过滤</b></td>
+      <td>生成池 <span class="n">4,232</span> → <span class="n">6,500</span>（放回 2,268 条）</td><td><span class="tag t-llm">重跑生成</span></td></tr>
+    <tr><td class="n">3</td><td><b>社媒接入老品迭代</b></td>
+      <td>接入 <span class="n">1,373</span> 消息 / <span class="n">12,478</span> 证据（含 658 负面）</td><td><span class="tag t-sql">纯 SQL</span></td></tr>
+    <tr><td class="n">4</td><td><b>条目阈值维持 ≥2</b></td>
+      <td>不改。降到 1 会让条目涨到 747、多数是单条抱怨，队列被淹没的代价大于覆盖收益</td><td><span class="tag t-sql">不改动</span></td></tr>
+    <tr><td class="n">5</td><td><b>SPU 编码规范化</b></td>
+      <td>社媒匹配 <span class="n">27 → 31</span>（<code>MT-79</code> ↔ <code>MT79</code>）</td><td><span class="tag t-code">重跑抽取</span></td></tr>
+    <tr><td class="n">6</td><td><b>排除第三方型号</b></td>
+      <td>剔除 <code>NP-FZ100</code> <code>EN-EL15</code> 等相机电池型号</td><td><span class="tag t-code">重跑抽取</span></td></tr>
+    <tr><td class="n">7</td><td><b>线A/线B 口径替换</b></td>
+      <td>代码与文档全量替换为 电商 / 社媒</td><td><span class="tag t-code">纯改代码</span></td></tr>
+  </table></div>
+
+  <div class="callout"><span class="i">💡</span><p><b>只有 #1 和 #2 需要重跑 LLM</b>，但它们必须一起跑——都改的是生成池与生成逻辑，分两次跑等于白跑一次。其余五项加起来几分钟。</p></div>
+</section>
+
+<section>
+  <h2><span class="no">2</span>为什么必须打包做</h2>
+  <p class="lede">这七项不是七件独立的事，它们咬在同一条链路上。分开做会互相推翻。</p>
+
+  <ul>
+    <li><b>#5 #6 必须在 #3 之前</b>——社媒接入老品迭代靠 SPU 匹配，编码没规范化、第三方型号没剔除，接进来的就是脏数据。</li>
+    <li><b>#7 必须在最前或最后</b>——它碰所有文件。夹在中间做，会和 #1 的改动在同一批文件上冲突。<b>决定放最前</b>：后续所有改动都在新口径上写，避免刚改完又要再改一遍。</li>
+    <li><b>#1 #2 必须同批重跑</b>——池子扩大 54% 和分类规则改变都只在生成时生效，跑两次是纯浪费 3 小时。</li>
+    <li><b>#4 放最后</b>——阈值是展示层口径，等新数据落库后再调，才能看到真实效果。先调的话，验收时分不清覆盖率变化是来自阈值还是来自新数据。</li>
+  </ul>
+
+  <div class="callout"><span class="i">🎁</span><p><b>顺带清掉一笔旧债</b>：库里有 20 条不可精确回退的融合（12 个机会点被融合、115 条证据打了 <code>match_by='merge'</code>）。全量重跑会重新生成整个机会点层，这批历史包袱自动消失——这是之前判断"不值得单独重跑"而搁置的事。</p></div>
+</section>
+
+<section>
+  <h2><span class="no">3</span>三个阶段</h2>
+  <p class="lede">每个阶段结束都有一道验收闸门，<b>不过闸门不进下一阶段</b>。验收口径全部在动手之前定死，不允许跑完再补。</p>
+
+  <div class="phase">
+    <div class="ph"><span class="num">阶段一</span><span class="nm">口径替换 + 抽取层修正</span>
+      <span class="cost">改代码 + 重跑抽取 · 约 20 分钟</span></div>
+    <div class="pb">
+      <p>做 <b>#7 线A/线B 替换</b>、<b>#5 SPU 规范化</b>、<b>#6 排除第三方型号</b>。全部是确定性改动，不碰 LLM。</p>
+      <p>SPU 规范化要落在<b>抽取层</b>（<code>clean.py</code>），不是在查询里临时 <code>regexp_replace</code>——否则每处查询都要重复一遍，迟早漏一处。第三方型号用白名单反向剔除：只保留能在电商 SPU 集合里找到的编码，其余进单独字段留痕，不静默丢弃。</p>
+      <div class="gate"><b>闸门 A</b>：① 全仓 <code>grep -c "线A\|线B"</code> 为 0（代码与文档）；② <code>voc_message.spu</code> 规范化后，社媒可匹配 SPU 种类 ≥31；③ 第三方型号被剔除且可在留痕字段查到；④ <b>电商消息数、证据总数、挂靠数三个基线不变</b>（26,407 / 63,972 / 1,638）——抽取重跑不得改变既有事实层。</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="ph"><span class="num">阶段二</span><span class="nm">分类改造 + 全量重跑生成</span>
+      <span class="cost">改代码 + 重跑 LLM · 约 3.5 小时</span></div>
+    <div class="pb">
+      <p>做 <b>#1 分类改由内容判定</b>、<b>#2 去掉星级过滤</b>，然后<b>清空机会点层全量重跑</b>。</p>
+      <p><b>分类规则</b>：LLM 依据证据内容三选一——证据主要在讲<b>我们某个在售产品</b>的问题 → 老品迭代；讲<b>竞品</b>的问题或<b>没有对应在售产品的需求</b> → 新品创新；判不准 → 新品创新 + 打「待人工判定」。渠道不再参与判定。</p>
+      <p><b>星级过滤</b>：<code>low_conf</code> 标记<b>保留但不再用于过滤</b>。证据照进生成池，界面上给弱提示，判断权交给 PM。用满意度否定具体抱怨，逻辑本身站不住。</p>
+      <div class="gate"><b>闸门 B</b>：① 生成池实际规模 ≥6,500（证明星级过滤已解除）；② 新的 <code>opp_type</code> 分布中，<b>老品迭代不再等于电商机会点数</b>（证明分类已脱离渠道）；③ 抽样 30 条新品创新人工核对，<b>误分类率 &lt;10%</b>；④ <code>voc_opp_lineage</code> 归零（融合债已清）；⑤ 引文溯源率与重跑前持平或更好（不低于 96%）。</div>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="ph"><span class="num">阶段三</span><span class="nm">展开层口径调整</span>
+      <span class="cost">纯 SQL · 分钟级</span></div>
+    <div class="pb">
+      <p>做 <b>#3 社媒接入老品迭代</b>、<b>#4 阈值降到 ≥1</b>。改的是 <code>voc_spu</code> 与 <code>voc_spu_issue</code> 两个物化视图的口径。</p>
+      <p>两个视图现在都硬编码 <code>WHERE src_line='电商'</code>，要改成按 SPU 归属而非按渠道收录。<b>社媒证据只有能匹配到在售 SPU 的才进</b>，匹配不上的仍归战略层，不凭空造产品卡。</p>
+      <div class="gate"><b>闸门 C</b>：① SPU 卡覆盖 ≥162 个；② 每张卡的证据数 = 电商证据 + 社媒可匹配证据，抽 3 个 SPU 独立复算比对；③ 阈值为 1 时条目数与无阈值口径一致；④ <b>人工表零污染</b>——<code>voc_spu_issue_manual</code> 与审计日志在整个改造期间保持为 0。</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">4</span>验收方法</h2>
+  <p class="lede">不采信任何自报结果。每道闸门的口径都用独立于实现的方式复算。</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>验收动作</th><th>怎么做</th></tr>
+    <tr><td><b>SQL 体检</b></td><td>每次改完 <code>queries.py</code> 跑 <code>check_sql.py</code>，把每条 SQL 拿到真库 EXPLAIN，一条不漏</td></tr>
+    <tr><td><b>口径独立复算</b></td><td>关键数字（覆盖数、证据数、分类分布）全部绕开实现，用手写 SQL 重算一遍比对</td></tr>
+    <tr><td><b>最小探针先行</b></td><td>重跑生成前先跑单周探针验证新分类逻辑，通过再上全量——不用全量重跑当探针</td></tr>
+    <tr><td><b>人工抽样</b></td><td>分类改造后抽 30 条新品创新逐条核对，这是唯一能验证「分类是否真的对」的方法</td></tr>
+    <tr><td><b>零残留检查</b></td><td>每阶段结束确认人工表、审计表、哨兵周产出全部为 0</td></tr>
+  </table></div>
+
+  <div class="callout"><span class="i">⚠️</span><p><b>阶段二开始前必须先备份。</b>全量重跑会清空机会点层，这是本次唯一不可逆的操作。现在的备份是手动打的、落在容器内 <code>/tmp</code>，<b>异地备份至今没配</b>——这是我的运维债，阶段二动手前先补上。</p></div>
+</section>
+
+<section>
+  <h2><span class="no">5</span>预期结果</h2>
+
+  <div class="tablewrap"><table>
+    <tr><th>指标</th><th>现在</th><th>改造后</th></tr>
+    <tr><td>生成池（电商负面证据）</td><td class="n">4,232</td><td class="n">6,500</td></tr>
+    <tr><td>老品迭代 SPU 卡</td><td class="n">51</td><td class="n">≥162</td></tr>
+    <tr><td>问题条目</td><td class="n">161</td><td class="n">千级</td></tr>
+    <tr><td>社媒进入老品迭代的证据</td><td class="n">0</td><td class="n">12,478</td></tr>
+    <tr><td>新品创新中的误分类</td><td class="n">≥26–50 / 436</td><td class="n">抽样 &lt;10%</td></tr>
+    <tr><td>不可回退的融合债</td><td class="n">20 条</td><td class="n">0</td></tr>
+  </table></div>
+
+  <p class="anno"><b>一个必须说清的代价</b>：条目从 161 涨到千级，PM 一次看到的东西多了近十倍。这个量级下，Wilson 排序、四列可排、标签树筛选这三个已经做好的机制会从「锦上添花」变成「必需品」——沉底机制是否可靠，要在阶段三验收时专门确认，不能只看覆盖数上去了就算完。</p>
+</section>
+
+</main>
+<footer>管道改造计划 · 2026-08-16 · 待确认后执行</footer>
+</div>
