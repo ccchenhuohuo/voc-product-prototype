@@ -51,11 +51,24 @@ docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc \
        -c "CREATE DATABASE voc_dagster OWNER voc_admin;"
 
 echo "== 5. 扩展可用性检查 =="
-docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc \
-  "SELECT name FROM pg_available_extensions WHERE name IN ('vector','pg_bigm','pgroonga')"
+# 查的必须是本项目实际使用的扩展。原来写的是 pg_bigm/pgroonga——那是别的项目的
+# 中文分词方案，本项目用 pg_trgm，检查恒为「缺失」却没人看，等于没检查。
+MISSING=$(docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc \
+  "SELECT string_agg(x, ',') FROM unnest(ARRAY['vector','pg_trgm']) x
+    WHERE x NOT IN (SELECT name FROM pg_available_extensions)")
+[ -z "$MISSING" ] || { echo "!! 缺少必需扩展: $MISSING" >&2; exit 6; }
+echo "   vector / pg_trgm 均可用"
 
 echo "== 6. 执行 DDL =="
-for f in 001_schema 002_triggers 003_views 004_roles; do
+# 只跑空库可安全执行的结构性迁移。排除的三类及原因：
+#   · 011 / 012 —— 自检要插 __selftest__ 行，而人工表对 voc_opportunity 有外键，
+#     空库无机会点可引用，必然失败。它们的触发器定义本身是需要的。
+#   · 013 / 015 —— 断言写死 645 行存量分布，只适用于已核实的存量库升级。
+# 因此本脚本**建立的不是一个可直接上线的完整库**，见收尾提示。
+EMPTY_DB_SAFE="001_schema 002_triggers 003_views 004_roles 005_pm 006_execute \
+               007_rebuild 008_product_fields 009_spu_layer 010_app_read_grants \
+               014_spu_clean_fields 016_lifecycle_isolation"
+for f in $EMPTY_DB_SAFE; do
   echo "   -> $f.sql"
   docker exec -i "$CONTAINER" psql -U voc_admin -d voc -v ON_ERROR_STOP=1 < "sql/${f}.sql"
 done
@@ -75,4 +88,20 @@ docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc "
 docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc "
   SELECT 'triggers=' || count(*) FROM information_schema.triggers
    WHERE trigger_schema='public';"
-echo "M0 建库完成"
+
+cat <<'REMAIN'
+
+== 9. 本脚本【未】应用的迁移，上线前必须另行处理 ==
+   011_audit_after_trigger.sql       人工层 AFTER 审计（自检需已有机会点可引用）
+   012_audit_after_trigger_opp.sql   机会点人工层 AFTER 审计（同上）
+   013_src_line_rename.sql           仅存量库升级：断言写死 645 行，空库不适用
+   015_classification_contract.sql   仅存量库升级：断言写死 645 行，空库不适用
+
+   011/012 的触发器定义是当前最终审计行为，缺了它们人工操作不会留审计日志；
+   015 的 classification_state / classify_rule 两列与看板视图口径也缺失，
+   应用会因缺列而报错。灌入基础数据后请逐个受控应用并核对各自的自检。
+
+!! 因此这个库【还不能直接上线】。要真正做到一键空库建库，需要把上述四个迁移
+   拆成「结构」与「基于存量数据的校验」两部分——那是独立的一项工作，尚未做。
+REMAIN
+echo "M0 建库完成（结构部分）"
