@@ -12,7 +12,8 @@ import time
 from datetime import datetime
 
 sys.path.insert(0, "/home/sdy/voc-analytics")
-from voc_analytics import config as C, db, ingest, lifecycle, llm, pipeline, resolve  # noqa: E402
+from voc_analytics import (  # noqa: E402
+    config as C, db, explode, ingest, lifecycle, llm, pipeline, resolve)
 
 
 LIFECYCLE_ARGS = {
@@ -119,12 +120,24 @@ def _finalize(args, ctx) -> dict:
             title=EXCLUDED.title, desc_suggestion=EXCLUDED.desc_suggestion
         """, [args.week, args.week])
         release = lifecycle.release_to_pm()
+
+        # 派生层必须在证据挂靠、跨源合并完成之后刷新，否则 SPU 卡片层与
+        # 战略视图读到的还是上一轮（甚至指向已删 opp_id）的物化视图。
+        # 这一步过去只挂在 Dagster 资产上（definitions.py 的 spu_layer），
+        # 手工重建路径 rerun_both.sh 完全绕过它——全量重跑后「老品迭代」和
+        # 「战略视图」两页空白就是这么来的。2026-08-17 排查确认后补上。
+        spu_stat = explode.refresh(args.week)
+        print(f"[派生层] SPU {spu_stat['spu_count']} 个 / "
+              f"SPU-问题 {spu_stat['issue_count']} 条 / "
+              f"n_eff 覆盖 {spu_stat['n_eff_count']} 个机会点")
+
         ctx.metric_update(
             ("finalize",), status="completed", opportunities=len(created),
             attached_evidence=attached_total, split_proposals=split_total,
-            release=release)
+            release=release, spu_layer=spu_stat)
         return {"opportunities": len(created), "attached": attached_total,
-                "splits": split_total, "release": release}
+                "splits": split_total, "release": release,
+                "spu_layer": spu_stat}
     except BaseException:
         ledger = ctx.metrics.get("finalize", {})
         ctx.metric_update(
