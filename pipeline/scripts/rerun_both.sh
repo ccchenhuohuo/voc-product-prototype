@@ -1,24 +1,3 @@
-# bash 的 wait 没有 -t 选项（用法只有 [-fn] [-p var] [id ...]），
-# 2026-08-17 实测报 "wait: -t: invalid option" 并使整段监督失效。
-# 这里用轮询实现有上限的等待：进程退出则 wait 收退出码，超时则留空
-# finished_pid 让调用方走 KILL 分支。
-wait_with_timeout() {
-  local pid="$1" limit="$2" pid_var="$3" rc_var="$4"
-  local waited=0 rc=0
-  while kill -0 "$pid" 2>/dev/null && (( waited < limit )); do
-    sleep 1
-    (( waited++ )) || true
-  done
-  if kill -0 "$pid" 2>/dev/null; then
-    printf -v "$pid_var" '%s' ""      # 超时未退出
-    printf -v "$rc_var"  '%s' "124"
-  else
-    if wait "$pid"; then rc=0; else rc=$?; fi
-    printf -v "$pid_var" '%s' "$pid"
-    printf -v "$rc_var"  '%s' "$rc"
-  fi
-}
-
 #!/usr/bin/env bash
 # 清库 + 两个生命周期并行重跑 + 统一收尾。
 # 用法：bash ~/voc-analytics/scripts/rerun_both.sh
@@ -41,6 +20,29 @@ if (( BASH_VERSINFO[0] < 5 ||
   exit 2
 fi
 cd ~/voc-analytics
+
+# bash 的 wait 没有 -t 选项（用法只有 [-fn] [-p var] [id ...]），
+# 2026-08-17 实测报 "wait: -t: invalid option" 并使整段监督失效。
+# 这里用轮询实现有上限的等待：进程退出则 wait 收退出码，超时则留空
+# finished_pid 让调用方走 KILL 分支。
+# 定义必须在 shebang 与版本守卫之后——否则 shebang 沦为普通注释，
+# 直接 ./rerun_both.sh 会落到调用方的默认 shell 上。
+wait_with_timeout() {
+  local pid="$1" limit="$2" pid_var="$3" rc_var="$4"
+  local waited=0 rc=0
+  while kill -0 "$pid" 2>/dev/null && (( waited < limit )); do
+    sleep 1
+    (( waited++ )) || true
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    printf -v "$pid_var" '%s' ""      # 超时未退出
+    printf -v "$rc_var"  '%s' "124"
+  else
+    if wait "$pid"; then rc=0; else rc=$?; fi
+    printf -v "$pid_var" '%s' "$pid"
+    printf -v "$rc_var"  '%s' "$rc"
+  fi
+}
 
 # 所有应用环境变量都在任何停止/清库动作前加载；后续监督契约据最终值校验。
 set -a; . ./.env; set +a
