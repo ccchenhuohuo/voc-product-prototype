@@ -89,22 +89,37 @@ def _rep_snips(items: list[dict], members: Sequence[int], k: int = 5) -> list[st
 
 
 # ---------------------------------------------------------------- 诉求门
+def _intent_text(r: dict) -> str:
+    """诉求判定的取文口径：片段、正文、中译三者能拿到哪个就都给。
+
+    片段是云听按标签切出来的短句，诉求语气常常落在片段之外的正文里；
+    中译则是低资源语种唯一可靠的语义载体。三者拼接后再截断，
+    比只看片段多召回一个数量级（实测 0.62% -> 9.06%）。
+    """
+    seen: list[str] = []
+    for key in ("evidence_text", "snippet", "content", "content_zh"):
+        value = (r.get(key) or "").strip()
+        if value and value not in seen:
+            seen.append(value)
+    return "\n".join(seen)[:800]
+
+
 def intent_gate(rows: list[dict], ctx) -> tuple[list[dict], dict]:
-    """规则门之后的 LLM 二分类。低置信也放行（R11：宁可多看不可漏）。"""
-    RULE = re.compile(
-        r"能不能|能否|可不可以|可以出|出个|出一个|出一款|什么时候出|什麼時候|啥时候|"
-        r"希望|建议|求个|求一个|多研发|单独(出|做|购买|卖|买)|考虑.*出|意向.*出|"
-        r"为什么不能|為什麼不能|设想|可行性|衍生产品|"
-        r"is there any (option|plan|way)|will there be|any plan|hope.*(add|make)|"
-        r"wish.*(had|would)|could you (add|make)|should (make|add)|improvement would be",
-        re.I)
-    pre = [r for r in rows
-           if RULE.search(r.get("evidence_text") or r.get("content") or "")]
-    stats = {"total": len(rows), "rule_pass": len(pre), "intent": defaultdict(int)}
+    """需求缺口渠道的 LLM 四分类闸门。低置信也放行（R11：宁可多看不可漏）。
+
+    这里曾有一道中文关键词正则做预筛，只有命中的行才送 LLM。它有两个
+    致命面：其一与 R11 直接冲突——把「宁可多看」做成了「只看关键词」；
+    其二它是一份中文词表，而本渠道 7,914 行里 4,082 行（52%）不是中文，
+    德文/法文/俄文/越南语/意大利语/印尼语的实测命中率是 0.00%，
+    整个语种的诉求信号被静默清零。2026-08-17 实测通过率 0.62%。
+    去掉预筛后全量送判，代价约 2.5M tokens——相对单轮全量重跑是零头，
+    而召回口径由提示词的四分类与置信阈值决定，不再由词表决定。
+    """
+    stats = {"total": len(rows), "intent": defaultdict(int)}
 
     def classify(r: dict) -> dict:
         obj, meta = llm.chat_json(prompts.INTENT_GATE.format(
-            content=(r.get("evidence_text") or r.get("content") or "")[:800],
+            content=_intent_text(r),
             platform=r.get("platform"), interactions=r.get("interactions") or 0,
             brands=",".join(r.get("brands") or []) or "-"),
             max_tokens=250, required=["intent"])
@@ -112,8 +127,11 @@ def intent_gate(rows: list[dict], ctx) -> tuple[list[dict], dict]:
         return {**r, "_intent": obj.get("intent"),
                 "_conf": float(obj.get("confidence") or 0)}
 
+    judged = [r for r in rows if _intent_text(r)]
+    stats["no_text"] = len(rows) - len(judged)
+
     out = []
-    for res in llm.parallel_map(classify, pre):
+    for res in llm.parallel_map(classify, judged):
         stats["intent"][res["_intent"]] += 1
         if res["_intent"] == "需求缺口" and res["_conf"] >= C.INTENT_REVIEW:
             res["_needs_review"] = res["_conf"] < C.INTENT_PASS

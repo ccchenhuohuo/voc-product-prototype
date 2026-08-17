@@ -1,9 +1,11 @@
 """清洗与证据炸开（PRD v8 §4.2）。
 
-两个云听侧的已知数据缺陷在此修复：
+三个云听侧的已知数据缺陷在此修复：
   · 原声片段尾部字符重复（悪い悪い / 消えるえる / ましたした）—— 按语种分支，
     早期只处理非 ASCII 导致英德西完全不生效
   · 标签错标（5星"发货很快"被打成"磁吸/负面"）—— 高星+负面交叉校验为 low_conf
+  · 原声片段数组里的 JSON 空值哨兵（`[null, 支架松动, null]`）—— 按逗号切开后
+    是字符串 "null"，会被当成片段正文一路带进提示词
 """
 from __future__ import annotations
 import re
@@ -18,6 +20,29 @@ _SPU_SEPARATORS = re.compile(
 
 def _is_cjk_text(s: str) -> bool:
     return bool(CJK.search(s))
+
+
+# 云听把 JSON 空值原样打进平行数组：`[null, 支架松动, null]`。parse_array 按逗号
+# 切开后得到字符串 "null"，非空、非空白，于是 NULLIF(btrim(...), '') 挡不住、
+# COALESCE(snippet, content) 也不会回落到正文——LLM 收到的证据正文就是四个字母
+# 的 "null"。2026-08-17 实测 148,934 条证据里有 23,608 条（15.9%）中招，
+# 「需求缺口」渠道 64% 的入池行受影响，而其中 99.9% 的消息正文原本就在。
+# 只出现在原声片段一列；情感、标签、tax_path、brands、content_type、spu 均干净。
+_NULL_TOKENS = frozenset({"null", "none", "nil", "nan", "undefined"})
+
+
+def null_token(v: Any) -> str | None:
+    """把 JSON 空值哨兵还原成真正的空值，保留位置语义。
+
+    平行数组按下标一一对应，所以只能就地置空，绝不能把元素删掉——
+    删一个元素会让其后所有标签的情感与片段整体错位一格。
+    """
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s.lower() in _NULL_TOKENS:
+        return None
+    return s
 
 
 def fix_tail_repeat(s: str | None) -> str | None:
@@ -187,8 +212,10 @@ def explode(row: dict, tax, src_line: str) -> tuple[list[dict], int]:
         info = tax.info(raw_tag)
         # 固定按路径位置拆层，不能过滤空段，否则缺层时后续层级会整体左移。
         tax_stage, tax_domain, tax_sub, tax_leaf = split_tax(info["tax_path"])
-        sent = sents[i] if i < len(sents) else None
-        snip_raw = snips[i] if i < len(snips) else None
+        sent = null_token(sents[i] if i < len(sents) else None)
+        # 哨兵要在留痕之前还原：把 "null" 存进 snippet_raw 不是留痕，
+        # 是把「这条标签没有原声片段」记成了「原声片段的内容是 null」。
+        snip_raw = null_token(snips[i] if i < len(snips) else None)
         # 交叉校验：负面标签 + 4-5 星 => 疑似误标
         low_conf = bool(sent == "负面" and star_f is not None and star_f >= 4)
         out.append({
