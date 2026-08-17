@@ -31,12 +31,15 @@
 {% set revived_count = shell.revived if shell.revived is defined else 0 %}
 {% set sidebar_user_name = current_user.name if current_user is defined and current_user.name is defined else '当前用户' %}
 {% set current_path = request.url.path %}
-{% set iter_on = current_path == '/' or current_path == '/iter' or current_path.startswith('/spu/') or current_path.startswith('/issue/') %}
+{% set iter_on = current_path == '/iter' or current_path.startswith('/spu/') or current_path.startswith('/issue/') %}
 {% set inno_on = current_path == '/inno' or current_path.startswith('/inno/') %}
 <body class="{% block body_class %}{% endblock %}" {% block body_attrs %}{% endblock %}>
   <div class="shell">
     <aside class="sb">
       <div class="brand">VOC 机会看板</div>
+      <a class="nav{% if current_path == '/' %} on{% endif %}" href="/">
+        <span>首页</span>
+      </a>
       <a class="nav{% if iter_on %} on{% endif %}{% if revived_count %} alarm{% endif %}" href="/iter">
         <span>老品迭代</span><span class="nc">{{ iter_count }}{% if revived_count %} · {{ revived_count }}⟳{% endif %}</span>
       </a>

@@ -24,6 +24,9 @@ T, D = "__probe__", None
 # 每条查询的占位符实参。类型必须对：布尔位用在 (%s OR ...) 里，给字符串会报错。
 PARAMS = {
     "SHELL_COUNTS": (),
+    "HOME_EVIDENCE_FUNNEL": (), "HOME_EVIDENCE_PER_OPP": (),
+    "HOME_SIMILARITY": (), "HOME_ISSUE_STATUS": (),
+    "HOME_COVERAGE": (), "HOME_FRESHNESS": (),
     "BOARD_SPUS": ("", ""), "BOARD_SPUS_REVIVED": ("", ""),
     "BOARD_ISSUES": (), "BOARD_INNOVATIONS": (),
     "SEARCH_SPUS": ("", "%%", "%%", "%%", "", "", "", ""),

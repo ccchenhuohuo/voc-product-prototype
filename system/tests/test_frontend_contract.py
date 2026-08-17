@@ -5,21 +5,18 @@ import shutil
 import subprocess
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from app.routes import board
+from app.routes import board, home
 
 
 SYSTEM_DIR = Path(__file__).resolve().parents[1]
 
 
-def test_root_redirects_to_iteration_queue():
-    app = FastAPI()
-    app.include_router(board.router)
-    response = TestClient(app).get("/", follow_redirects=False)
-    assert response.status_code in (302, 307, 308)
-    assert response.headers["location"] == "/iter"
+def test_root_is_owned_by_home_router_not_iteration_router():
+    board_paths = {route.path for route in board.router.routes}
+    home_paths = {route.path for route in home.router.routes}
+    assert "/" not in board_paths
+    assert "/" in home_paths
 
 
 def test_old_notion_tokens_and_card_css_are_removed():

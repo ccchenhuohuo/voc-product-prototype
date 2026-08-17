@@ -31,6 +31,417 @@ SELECT
 """
 
 
+# 首页证据漏斗同时返回主漏斗与「未进入产品负面原料」的 Top 8 标签。
+# 内容标签分支与 pipeline.voc_analytics.db.generation_pool 保持同一组标签及
+# 文本/品牌门槛；它和产品负面分支是两个业务入口，因此这里只比较规模，
+# 不把两者误写成集合包含关系。
+HOME_EVIDENCE_FUNNEL = """
+WITH stage_counts AS (
+  SELECT
+    (SELECT count(*)::bigint FROM voc_evidence) AS fact_total,
+    (SELECT count(*)::bigint
+       FROM voc_evidence e
+      WHERE e.is_product
+        AND e.sentiment = '负面'
+        AND NULLIF(btrim(e.snippet), '') IS NOT NULL) AS product_negative,
+    (SELECT count(*)::bigint
+       FROM voc_evidence e
+       JOIN voc_message m ON m.message_id = e.message_id
+       JOIN voc_source_policy p ON p.src_line = m.src_line
+      WHERE NOT p.requires_spu
+        AND COALESCE(cardinality(m.spu), 0) = 0
+        AND (
+          (COALESCE(m.content_type, ARRAY[]::text[])
+             && ARRAY['用户咨询', '其他']::text[]
+           AND COALESCE(NULLIF(btrim(e.snippet), ''),
+                        NULLIF(btrim(m.content), '')) IS NOT NULL)
+          OR
+          (COALESCE(m.content_type, ARRAY[]::text[])
+             && ARRAY['产品评测', '竞品拉踩']::text[]
+           AND COALESCE(NULLIF(btrim(e.snippet), ''),
+                        NULLIF(btrim(m.content), '')) IS NOT NULL
+           AND COALESCE(cardinality(m.brands), 0) >= 2)
+        )) AS innovation_material,
+    (SELECT count(*)::bigint
+       FROM (
+         SELECT DISTINCT oe.message_id, oe.seq
+           FROM voc_opp_evidence oe
+       ) attached_evidence) AS attached,
+    (SELECT count(*)::bigint
+       FROM (
+         SELECT DISTINCT oe.message_id, oe.seq
+           FROM voc_spu_issue i
+           JOIN voc_opp_evidence oe ON oe.opp_id = i.opp_id
+           JOIN voc_message m ON m.message_id = oe.message_id
+          WHERE i.spu = ANY(COALESCE(m.spu, ARRAY[]::text[]))
+       ) card_evidence) AS in_spu_cards
+), stages AS (
+  SELECT v.stage_order, v.stage_key, v.label, v.item_count
+    FROM stage_counts s
+   CROSS JOIN LATERAL (
+     VALUES
+       (1, 'fact_total'::text, '事实层证据总数'::text, s.fact_total),
+       (2, 'product_negative', '产品负面且有原声片段', s.product_negative),
+       (3, 'innovation_material', '需求缺口 / 竞品对标原料', s.innovation_material),
+       (4, 'attached', '已挂靠到机会点', s.attached),
+       (5, 'spu_cards', '进入 SPU 卡片层', s.in_spu_cards)
+   ) v(stage_order, stage_key, label, item_count)
+), stage_rates AS (
+  SELECT s.*,
+         lag(s.item_count) OVER (ORDER BY s.stage_order) AS previous_count
+    FROM stages s
+), loss_tags AS (
+  SELECT COALESCE(NULLIF(btrim(e.tag), ''), '未标注') AS loss_tag,
+         count(*)::bigint AS item_count
+    FROM voc_evidence e
+   WHERE e.sentiment = '负面'
+     AND e.is_product IS NOT TRUE
+   GROUP BY COALESCE(NULLIF(btrim(e.tag), ''), '未标注')
+   ORDER BY item_count DESC, loss_tag
+   LIMIT 8
+)
+SELECT 'stage'::text AS row_type,
+       s.stage_order, s.stage_key, s.label,
+       s.item_count, s.previous_count,
+       round(s.item_count::numeric / NULLIF(s.previous_count, 0) * 100, 1)
+         AS retention_pct,
+       NULL::text AS loss_tag
+  FROM stage_rates s
+UNION ALL
+SELECT 'loss_tag'::text, NULL::int, NULL::text, NULL::text,
+       l.item_count, NULL::bigint, NULL::numeric, l.loss_tag
+  FROM loss_tags l
+ORDER BY row_type DESC, stage_order NULLS LAST, item_count DESC, loss_tag
+"""
+
+
+# 机会点证据分布使用关系层实际行数，不信任可能漂移的 evi_total。
+# 任务书的「6-10 / 10 条以上」在 10 上重叠；这里采用互斥分档并把末档
+# 明确为 11 条以上。
+HOME_EVIDENCE_PER_OPP = """
+WITH lifecycles(lifecycle_order, lifecycle) AS (
+  VALUES (1, '老品迭代'::text), (2, '新品创新'::text)
+), bins(bucket_order, bucket_key, bucket_label) AS (
+  VALUES (1, 'one'::text, '1 条'::text),
+         (2, 'two'::text, '2 条'::text),
+         (3, 'three_five'::text, '3–5 条'::text),
+         (4, 'six_ten'::text, '6–10 条'::text),
+         (5, 'eleven_plus'::text, '11 条以上'::text)
+), evidence_counts AS (
+  SELECT oe.opp_id, count(*)::bigint AS evidence_count
+    FROM voc_opp_evidence oe
+   GROUP BY oe.opp_id
+), active AS (
+  SELECT o.opp_type AS lifecycle,
+         COALESCE(e.evidence_count, 0)::bigint AS evidence_count
+    FROM voc_opportunity o
+    LEFT JOIN evidence_counts e ON e.opp_id = o.opp_id
+   WHERE o.classification_state = '确定'
+     AND o.merged_into IS NULL
+     AND o.opp_type IN ('老品迭代', '新品创新')
+), bucketed AS (
+  SELECT a.lifecycle, a.evidence_count,
+         CASE
+           WHEN a.evidence_count = 1 THEN 'one'
+           WHEN a.evidence_count = 2 THEN 'two'
+           WHEN a.evidence_count BETWEEN 3 AND 5 THEN 'three_five'
+           WHEN a.evidence_count BETWEEN 6 AND 10 THEN 'six_ten'
+           WHEN a.evidence_count > 10 THEN 'eleven_plus'
+         END AS bucket_key
+    FROM active a
+), aggregated AS (
+  SELECT b.lifecycle, b.bucket_key,
+         count(*)::int AS opportunity_count,
+         COALESCE(sum(b.evidence_count), 0)::bigint AS evidence_count
+    FROM bucketed b
+   WHERE b.bucket_key IS NOT NULL
+   GROUP BY b.lifecycle, b.bucket_key
+), result AS (
+  SELECT l.lifecycle_order, l.lifecycle,
+         b.bucket_order, b.bucket_key, b.bucket_label,
+         COALESCE(a.opportunity_count, 0)::int AS opportunity_count,
+         COALESCE(a.evidence_count, 0)::bigint AS evidence_count
+    FROM lifecycles l
+   CROSS JOIN bins b
+    LEFT JOIN aggregated a
+      ON a.lifecycle = l.lifecycle AND a.bucket_key = b.bucket_key
+)
+SELECT r.*,
+       sum(r.opportunity_count) OVER (PARTITION BY r.lifecycle)::int
+         AS lifecycle_total,
+       round(r.opportunity_count::numeric
+             / NULLIF(sum(r.opportunity_count) OVER (
+                 PARTITION BY r.lifecycle
+               ), 0) * 100, 1) AS opportunity_pct
+  FROM result r
+ ORDER BY r.lifecycle_order, r.bucket_order
+"""
+
+
+# 001_schema.sql 已提供 ix_opp_vec HNSW(vector_cosine_ops)。两个生命周期拆成
+# 带字面量过滤的 LATERAL KNN 分支，让 PostgreSQL 能以该索引逐点取 LIMIT 1，
+# 避免 4,000 x 4,000 的两两比较。最相似对在 KNN 结果上去重后全局取 10。
+HOME_SIMILARITY = """
+-- 最近邻从 voc_opp_nn 缓存表读取（021 迁移），由收尾调用 voc_refresh_opp_nn()
+-- 刷新。原实现是请求时逐机会点 LATERAL KNN：EXPLAIN 计划合法，但过滤条件让
+-- HNSW 索引失效，真库实测 103 秒（预算 200ms）。缓存为空 = 尚未计算过，
+-- bucket 行的 opportunity_count 全为 0，模板按空状态渲染。
+WITH active AS NOT MATERIALIZED (
+  SELECT o.opp_id, o.opp_type AS lifecycle
+    FROM voc_opportunity o
+   WHERE o.classification_state = '确定'
+     AND o.merged_into IS NULL
+     AND o.mode_vec IS NOT NULL
+     AND o.opp_type IN ('老品迭代', '新品创新')
+), nearest AS (
+  SELECT nn.lifecycle, nn.opp_id, nn.title,
+         nn.neighbor_id, nn.neighbor_title, nn.distance
+    FROM voc_opp_nn nn
+    -- 只保留双方仍有效的行：缓存刷新落后于机会点层重建时，
+    -- 指向已删/已合并机会点的过期行不得进入统计。
+    JOIN active a ON a.opp_id = nn.opp_id
+    JOIN active b ON b.opp_id = nn.neighbor_id
+), bucket_defs(bucket_order, bucket_key, bucket_label) AS (
+  VALUES (1, 'near_synonym'::text, '< 0.05 · 近乎同义'::text),
+         (2, 'highly_similar'::text, '0.05–0.10 · 高度相似'::text),
+         (3, 'similar'::text, '0.10–0.15 · 相似'::text),
+         (4, 'related'::text, '0.15–0.30 · 相关'::text),
+         (5, 'unrelated'::text, '≥ 0.30 · 基本无关'::text)
+), lifecycle_defs(lifecycle_order, lifecycle) AS (
+  VALUES (1, '老品迭代'::text), (2, '新品创新'::text)
+), bucketed AS (
+  SELECT n.*,
+         CASE
+           WHEN n.distance < 0.05 THEN 'near_synonym'
+           WHEN n.distance < 0.10 THEN 'highly_similar'
+           WHEN n.distance < 0.15 THEN 'similar'
+           WHEN n.distance < 0.30 THEN 'related'
+           ELSE 'unrelated'
+         END AS bucket_key
+    FROM nearest n
+), bucket_counts AS (
+  SELECT b.lifecycle, b.bucket_key, count(*)::int AS opportunity_count
+    FROM bucketed b
+   GROUP BY b.lifecycle, b.bucket_key
+), vector_counts AS (
+  SELECT a.lifecycle, count(*)::int AS vector_count
+    FROM active a
+   GROUP BY a.lifecycle
+), normalized_pairs AS (
+  SELECT n.lifecycle,
+         LEAST(n.opp_id, n.neighbor_id) AS opp_id_a,
+         CASE WHEN n.opp_id <= n.neighbor_id
+              THEN n.title ELSE n.neighbor_title END AS title_a,
+         GREATEST(n.opp_id, n.neighbor_id) AS opp_id_b,
+         CASE WHEN n.opp_id <= n.neighbor_id
+              THEN n.neighbor_title ELSE n.title END AS title_b,
+         n.distance
+    FROM nearest n
+), unique_pairs AS (
+  SELECT DISTINCT ON (p.lifecycle, p.opp_id_a, p.opp_id_b)
+         p.lifecycle, p.opp_id_a, p.title_a,
+         p.opp_id_b, p.title_b, p.distance
+    FROM normalized_pairs p
+   ORDER BY p.lifecycle, p.opp_id_a, p.opp_id_b, p.distance
+), top_pairs AS (
+  SELECT p.*,
+         row_number() OVER (
+           ORDER BY p.distance, p.lifecycle, p.opp_id_a, p.opp_id_b
+         )::int AS pair_order
+    FROM unique_pairs p
+   ORDER BY p.distance, p.lifecycle, p.opp_id_a, p.opp_id_b
+   LIMIT 10
+), output AS (
+  SELECT 'bucket'::text AS row_type,
+         l.lifecycle_order, l.lifecycle,
+         d.bucket_order, d.bucket_key, d.bucket_label,
+         COALESCE(c.opportunity_count, 0)::int AS opportunity_count,
+         COALESCE(v.vector_count, 0)::int AS vector_count,
+         NULL::text AS opp_id_a, NULL::text AS title_a, NULL::text AS spu_a,
+         NULL::text AS opp_id_b, NULL::text AS title_b, NULL::text AS spu_b,
+         NULL::double precision AS distance, NULL::int AS pair_order
+    FROM lifecycle_defs l
+   CROSS JOIN bucket_defs d
+    LEFT JOIN bucket_counts c
+      ON c.lifecycle = l.lifecycle AND c.bucket_key = d.bucket_key
+    LEFT JOIN vector_counts v ON v.lifecycle = l.lifecycle
+  UNION ALL
+  SELECT 'pair'::text, NULL::int, p.lifecycle,
+         NULL::int, NULL::text, NULL::text,
+         NULL::int, NULL::int,
+         p.opp_id_a, p.title_a, ia.spu,
+         p.opp_id_b, p.title_b, ib.spu,
+         p.distance, p.pair_order
+    FROM top_pairs p
+    LEFT JOIN LATERAL (
+      SELECT i.spu
+        FROM voc_spu_issue i
+       WHERE i.opp_id = p.opp_id_a
+       ORDER BY i.evi_count DESC, i.spu
+       LIMIT 1
+    ) ia ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT i.spu
+        FROM voc_spu_issue i
+       WHERE i.opp_id = p.opp_id_b
+       ORDER BY i.evi_count DESC, i.spu
+       LIMIT 1
+    ) ib ON TRUE
+)
+SELECT *
+  FROM output
+ ORDER BY CASE row_type WHEN 'bucket' THEN 1 ELSE 2 END,
+          lifecycle_order NULLS LAST, bucket_order NULLS LAST,
+          pair_order NULLS LAST
+"""
+
+
+HOME_ISSUE_STATUS = """
+WITH statuses(status_order, status) AS (
+  VALUES (1, '考虑中'::text),
+         (2, '在跟进'::text),
+         (3, '项目中'::text),
+         (4, '已完成'::text),
+         (5, '不考虑'::text),
+         (6, '未表态'::text)
+), status_counts AS (
+  SELECT CASE WHEN m.opp_id IS NULL THEN '未表态' ELSE m.status END AS status,
+         count(*)::int AS issue_count
+    FROM voc_spu_issue i
+    LEFT JOIN voc_spu_issue_manual m
+      ON m.spu = i.spu AND m.opp_id = i.opp_id
+   GROUP BY CASE WHEN m.opp_id IS NULL THEN '未表态' ELSE m.status END
+), result AS (
+  SELECT s.status_order, s.status,
+         COALESCE(c.issue_count, 0)::int AS issue_count
+    FROM statuses s
+    LEFT JOIN status_counts c ON c.status = s.status
+)
+SELECT r.*,
+       sum(r.issue_count) OVER ()::int AS issue_total,
+       round(r.issue_count::numeric
+             / NULLIF(sum(r.issue_count) OVER (), 0) * 100, 1) AS issue_pct
+  FROM result r
+ ORDER BY r.status_order
+"""
+
+
+# 生成池条件与 pipeline.voc_analytics.db.generation_pool 保持一致；最终机会点
+# 只按生成池证据的真实关系归因到来源/语种，避免拿消息量冒充机会产出。
+HOME_COVERAGE = """
+WITH message_counts AS (
+  SELECT m.src_line,
+         COALESCE(NULLIF(btrim(m.lang), ''), '未标注') AS lang,
+         count(*)::bigint AS message_count
+    FROM voc_message m
+   GROUP BY m.src_line, COALESCE(NULLIF(btrim(m.lang), ''), '未标注')
+), pool_evidence AS MATERIALIZED (
+  SELECT e.message_id, e.seq, m.src_line,
+         COALESCE(NULLIF(btrim(m.lang), ''), '未标注') AS lang
+    FROM voc_evidence e
+    JOIN voc_message m ON m.message_id = e.message_id
+    JOIN voc_source_policy p ON p.src_line = m.src_line
+   WHERE (
+       (e.is_product
+        AND e.sentiment = '负面'
+        AND NULLIF(btrim(e.snippet), '') IS NOT NULL)
+       OR
+       (COALESCE(m.content_type, ARRAY[]::text[])
+          && ARRAY['用户使用体验']::text[]
+        AND e.sentiment = '负面'
+        AND NULLIF(btrim(e.snippet), '') IS NOT NULL)
+       OR
+       (COALESCE(m.content_type, ARRAY[]::text[])
+          && ARRAY['产品评测', '竞品拉踩']::text[]
+        AND COALESCE(NULLIF(btrim(e.snippet), ''),
+                     NULLIF(btrim(m.content), '')) IS NOT NULL
+        AND COALESCE(cardinality(m.brands), 0) >= 2)
+       OR
+       (COALESCE(m.content_type, ARRAY[]::text[])
+          && ARRAY['用户咨询', '其他']::text[]
+        AND COALESCE(NULLIF(btrim(e.snippet), ''),
+                     NULLIF(btrim(m.content), '')) IS NOT NULL)
+     )
+     AND (NOT p.requires_spu OR COALESCE(cardinality(m.spu), 0) > 0)
+), pool_counts AS (
+  SELECT p.src_line, p.lang, count(*)::bigint AS evidence_count
+    FROM pool_evidence p
+   GROUP BY p.src_line, p.lang
+), opportunity_counts AS (
+  SELECT p.src_line, p.lang,
+         count(DISTINCT o.opp_id)::int AS opportunity_count
+    FROM pool_evidence p
+    JOIN voc_opp_evidence oe
+      ON oe.message_id = p.message_id AND oe.seq = p.seq
+    JOIN voc_opportunity o ON o.opp_id = oe.opp_id
+   WHERE o.classification_state = '确定'
+     AND o.merged_into IS NULL
+   GROUP BY p.src_line, p.lang
+)
+SELECT m.src_line, m.lang, m.message_count,
+       COALESCE(p.evidence_count, 0)::bigint AS evidence_count,
+       COALESCE(o.opportunity_count, 0)::int AS opportunity_count,
+       round(COALESCE(o.opportunity_count, 0)::numeric
+             / NULLIF(COALESCE(p.evidence_count, 0), 0) * 100, 2)
+         AS conversion_pct
+  FROM message_counts m
+  LEFT JOIN pool_counts p
+    ON p.src_line = m.src_line AND p.lang = m.lang
+  LEFT JOIN opportunity_counts o
+    ON o.src_line = m.src_line AND o.lang = m.lang
+ ORDER BY m.src_line, COALESCE(p.evidence_count, 0) DESC, m.lang
+"""
+
+
+HOME_FRESHNESS = """
+WITH freshness AS (
+  SELECT
+    (SELECT max(m.publish_time) FROM voc_message m) AS latest_publish_time,
+    (SELECT count(DISTINCT date_trunc('week', m.publish_time))::int
+       FROM voc_message m
+      WHERE m.publish_time IS NOT NULL) AS coverage_weeks,
+    (SELECT count(*)::int FROM voc_spu_issue) AS spu_issue_total,
+    (SELECT count(*)::int
+       FROM voc_spu_issue i
+       LEFT JOIN voc_opportunity o ON o.opp_id = i.opp_id
+      WHERE o.opp_id IS NULL OR o.merged_into IS NOT NULL) AS dangling_count
+), recent_runs AS (
+  SELECT r.run_id, r.stage, r.status, r.started_at, r.finished_at,
+         r.llm_calls, r.llm_tokens,
+         r.metrics -> 'cost' ->> 'cny' AS cost_cny,
+         row_number() OVER (
+           ORDER BY r.started_at DESC NULLS LAST,
+                    r.finished_at DESC NULLS LAST, r.run_id DESC
+         )::int AS run_order
+    FROM voc_run_log r
+   ORDER BY r.started_at DESC NULLS LAST,
+            r.finished_at DESC NULLS LAST, r.run_id DESC
+   LIMIT 5
+), output AS (
+  SELECT 'freshness'::text AS row_type,
+         f.latest_publish_time, f.coverage_weeks,
+         f.spu_issue_total, f.dangling_count,
+         round(f.dangling_count::numeric
+               / NULLIF(f.spu_issue_total, 0) * 100, 1) AS dangling_pct,
+         NULL::text AS run_id, NULL::text AS stage, NULL::text AS status,
+         NULL::timestamptz AS started_at, NULL::timestamptz AS finished_at,
+         NULL::int AS llm_calls, NULL::bigint AS llm_tokens,
+         NULL::text AS cost_cny, NULL::int AS run_order
+    FROM freshness f
+  UNION ALL
+  SELECT 'run'::text, NULL::timestamptz, NULL::int,
+         NULL::int, NULL::int, NULL::numeric,
+         r.run_id, r.stage, r.status, r.started_at, r.finished_at,
+         r.llm_calls, r.llm_tokens, r.cost_cny, r.run_order
+    FROM recent_runs r
+)
+SELECT *
+  FROM output
+ ORDER BY CASE row_type WHEN 'freshness' THEN 1 ELSE 2 END,
+          run_order NULLS FIRST
+"""
+
+
 # 两张 SPU 表共用同一套业务排序。定级先去掉可选的「级」后缀，
 # 再按 PS › S › A › B › C › D › 其他排序，不能依赖字母序。
 def _spu_order(alias: str) -> str:

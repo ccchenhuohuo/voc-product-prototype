@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+{% block title %}首页 · VOC 机会看板{% endblock %}
+{% block body_class %}home-page{% endblock %}
+
+{% block content %}
+<header class="head">
+  <h1>全库数据健康</h1>
+  <p class="lede">先看证据如何进入机会点、哪些信号没有产出，以及派生层是否仍然可信，再进入具体业务页面。</p>
+</header>
+
+<div class="scroll home-scroll">
+  <section class="home-section" id="evidence-funnel" data-dashboard-section="evidence-funnel">
+    <div class="home-section-head">
+      <h2>1. 证据漏斗</h2>
+      <p>头部负面证据和卡片问题不是同一分母；这里把事实、两类生成原料、挂靠与成卡口径同时摊开，避免把设计性流失误判成丢数。</p>
+    </div>
+    <div class="home-card">
+      {% if funnel.empty %}
+        <div class="empty">暂无事实层证据，漏斗各层均为 0。</div>
+      {% endif %}
+      {% if funnel.stages %}
+        <div class="home-context">产品负面与需求缺口 / 竞品对标是并行原料入口；“较上一行”只比较规模，不表示同一批证据被连续过滤。</div>
+        <div class="home-overflow">
+          <div class="home-chart home-funnel">
+            {% for stage in funnel.stages %}
+              <div class="home-chart-row">
+                <div class="home-chart-label">{{ stage.label }}</div>
+                <div class="home-track" aria-hidden="true">
+                  <span class="home-fill{% if stage.stage_key == 'spu_cards' %} home-fill-strong{% endif %}" style="--w: {{ stage.bar_pct }}"></span>
+                </div>
+                <strong class="n-lg">{{ stage.item_count|num }}</strong>
+                <span class="home-rate">{{ stage.retention_label }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% else %}
+        <div class="empty">暂无漏斗统计。</div>
+      {% endif %}
+
+      <div class="home-subhead">
+        <h3>未进入产品负面原料的负面标签 · Top 8</h3>
+        <span>商业与服务反馈会留在事实层，但按设计不进入老品迭代。</span>
+      </div>
+      {% if funnel.loss_tags %}
+        <div class="home-overflow">
+          <div class="home-chart home-loss-chart">
+            {% for row in funnel.loss_tags %}
+              <div class="home-chart-row home-chart-row-compact">
+                <div class="home-chart-label">{{ row.loss_tag }}</div>
+                <div class="home-track" aria-hidden="true"><span class="home-fill home-fill-muted" style="--w: {{ row.bar_pct }}"></span></div>
+                <strong class="n">{{ row.item_count|num }}</strong>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% else %}
+        <div class="empty">暂无被排除的负面标签。</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="home-section" id="evidence-per-opportunity" data-dashboard-section="evidence-per-opportunity">
+    <div class="home-section-head">
+      <h2>2. 机会点证据数分布</h2>
+      <p>新品数量骤增不一定是聚类拆碎；单证据机会点占比会直接暴露“增长来自薄证据”还是来自真实新增信号。</p>
+    </div>
+    <div class="home-card">
+      {% if evidence_distribution.empty %}
+        <div class="empty">暂无有效机会点，两个生命周期的分档均为 0。</div>
+      {% endif %}
+      <div class="home-split">
+        {% for panel in evidence_distribution.panels %}
+          <div class="home-panel">
+            <div class="home-panel-title">
+              <h3>{{ panel.lifecycle }}</h3>
+              <span><b class="n-lg{% if panel.single_pct >= 50 %} alarm-text{% endif %}">{{ panel.single_pct_label }}</b> 为单证据</span>
+            </div>
+            {% if panel.total %}
+              <div class="home-overflow">
+                <div class="home-chart">
+                  {% for row in panel.bins %}
+                    <div class="home-chart-row home-chart-row-compact">
+                      <div class="home-chart-label">{{ row.bucket_label }}</div>
+                      <div class="home-track" aria-hidden="true"><span class="home-fill{% if row.bucket_key == 'one' %} home-fill-alarm{% endif %}" style="--w: {{ row.bar_pct }}"></span></div>
+                      <strong class="n">{{ row.opportunity_count|num }}</strong>
+                      <span class="home-rate">{{ row.evidence_count|num }} 条证据</span>
+                    </div>
+                  {% endfor %}
+                </div>
+              </div>
+              <div class="home-summary-line">共 <b class="n">{{ panel.total|num }}</b> 个机会点 · <b class="n">{{ panel.evidence_total|num }}</b> 条挂靠证据</div>
+            {% else %}
+              <div class="empty">{{ panel.lifecycle }}暂无机会点。</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="home-section" id="similarity" data-dashboard-section="similarity">
+    <div class="home-section-head">
+      <h2>3. 语义相似度分布</h2>
+      <p>如果近乎同义和高度相似档异常堆积，才需要怀疑同一问题被拆成多个机会点；只看机会点总数无法判断。</p>
+    </div>
+    <div class="home-card">
+      {% if similarity.empty %}
+        <div class="empty">暂无带语义向量的有效机会点，无法计算最近邻。</div>
+      {% endif %}
+      <div class="home-split">
+        {% for panel in similarity.panels %}
+          <div class="home-panel">
+            <div class="home-panel-title">
+              <h3>{{ panel.lifecycle }}</h3>
+              <span><b class="n">{{ panel.vector_count|num }}</b> 个向量</span>
+            </div>
+            {% if panel.vector_count %}
+              <div class="home-overflow">
+                <div class="home-chart">
+                  {% for row in panel.bins %}
+                    <div class="home-chart-row home-chart-row-compact">
+                      <div class="home-chart-label home-sim-label">{{ row.bucket_label }}</div>
+                      <div class="home-track" aria-hidden="true"><span class="home-fill{% if row.bucket_key in ('near_synonym', 'highly_similar') %} home-fill-alarm{% endif %}" style="--w: {{ row.bar_pct }}"></span></div>
+                      <strong class="n">{{ row.opportunity_count|num }}</strong>
+                    </div>
+                  {% endfor %}
+                </div>
+              </div>
+            {% else %}
+              <div class="empty">{{ panel.lifecycle }}暂无可比较向量。</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="home-subhead">
+        <h3>最相似的 10 对</h3>
+        <span>距离越接近 0，语义越接近；可点击已有详情入口的标题抽查。</span>
+      </div>
+      {% if similarity.pairs %}
+        <div class="home-table-wrap">
+          <table class="home-table">
+            <thead><tr><th>生命周期</th><th>标题 A</th><th>标题 B</th><th class="r">余弦距离</th></tr></thead>
+            <tbody>
+              {% for pair in similarity.pairs %}
+                <tr>
+                  <td class="stat">{{ pair.lifecycle }}</td>
+                  <td>{% if pair.url_a %}<a class="home-link" href="{{ pair.url_a }}">{{ pair.title_a }}</a>{% else %}<span title="该老品机会点尚未进入 SPU 卡片层">{{ pair.title_a }}</span>{% endif %}</td>
+                  <td>{% if pair.url_b %}<a class="home-link" href="{{ pair.url_b }}">{{ pair.title_b }}</a>{% else %}<span title="该老品机会点尚未进入 SPU 卡片层">{{ pair.title_b }}</span>{% endif %}</td>
+                  <td class="r n">{{ pair.distance_label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty">不足两个同生命周期向量，暂无相似机会点对。</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="home-section" id="issue-status" data-dashboard-section="issue-status">
+    <div class="home-section-head">
+      <h2>4. 卡片状态分布</h2>
+      <p>机器成卡不等于团队已作判断；“未表态”单列，避免人工表为空时把所有问题误算成“考虑中”。</p>
+    </div>
+    <div class="home-card">
+      {% if issue_status.empty %}
+        <div class="empty">暂无 SPU 问题条目，所有状态均为 0。</div>
+      {% else %}
+        <div class="home-overflow">
+          <div class="home-chart">
+            {% for row in issue_status.statuses %}
+              <div class="home-chart-row home-chart-row-compact">
+                <div class="home-chart-label">{{ row.status }}</div>
+                <div class="home-track" aria-hidden="true"><span class="home-fill{% if row.status == '未表态' %} home-fill-alarm{% endif %}" style="--w: {{ row.bar_pct }}"></span></div>
+                <strong class="n">{{ row.issue_count|num }}</strong>
+                <span class="home-rate">{{ row.issue_pct_label }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="home-summary-line">当前卡片层共 <b class="n">{{ issue_status.total|num }}</b> 个问题条目</div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="home-section" id="coverage" data-dashboard-section="coverage">
+    <div class="home-section-head">
+      <h2>5. 来源与语种覆盖</h2>
+      <p>某个语种有大量可生成证据却颗粒无收时，召回问题应在首页出现，而不是等德文、法文等信号长期为 0 才被偶然发现。</p>
+    </div>
+    <div class="home-card">
+      {% if coverage.empty %}
+        <div class="empty">暂无来源与语种数据。</div>
+      {% else %}
+        <div class="home-table-wrap">
+          <table class="home-table">
+            <thead><tr><th>来源</th><th>语种</th><th class="r">消息</th><th class="r">生成池证据</th><th class="r">机会点</th><th class="r">证据 → 机会点</th></tr></thead>
+            <tbody>
+              {% for row in coverage.rows %}
+                <tr{% if row.zero_alert %} class="flag"{% endif %}>
+                  <td>{{ row.src_line }}</td>
+                  <td>{{ row.lang }}{% if row.zero_alert %}<span class="home-alert-tag">颗粒无收</span>{% endif %}</td>
+                  <td class="r n">{{ row.message_count|num }}</td>
+                  <td class="r n">{{ row.evidence_count|num }}</td>
+                  <td class="r n">{{ row.opportunity_count|num }}</td>
+                  <td class="r n{% if row.zero_alert %} alarm-text{% endif %}">{{ row.conversion_label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="home-section" id="freshness" data-dashboard-section="freshness">
+    <div class="home-section-head">
+      <h2>6. 数据新鲜度与运行健康</h2>
+      <p>曾有 87% 的 SPU 条目指向已删除机会点，造成“只有新品有数”的假象；悬空占比超过 5% 会在这里直接告警。</p>
+    </div>
+    <div class="home-card">
+      <div class="readout home-readout">
+        <div class="ro"><div class="v">{{ freshness.summary.latest_publish_label }}</div><div class="k">最新发布时间</div></div>
+        <div class="ro"><div class="v">{{ freshness.summary.coverage_weeks|num }}</div><div class="k">覆盖周数</div></div>
+        <div class="ro"><div class="v">{{ freshness.summary.spu_issue_total|num }}</div><div class="k">SPU 条目</div></div>
+        <div class="ro"><div class="v{% if freshness.summary.dangling_alert %} bad{% endif %}">{{ freshness.summary.dangling_count|num }} · {{ freshness.summary.dangling_pct_label }}</div><div class="k">悬空条目 · 占比</div></div>
+      </div>
+      {% if freshness.summary.dangling_alert %}
+        <div class="flagbox" role="alert">派生层悬空占比超过 5%，物化视图可能陈旧；请先刷新并核对管道运行，再解读各业务页数量。</div>
+      {% elif freshness.summary.spu_issue_total == 0 %}
+        <div class="empty">暂无派生层 SPU 条目，悬空占比按 0% 展示。</div>
+      {% endif %}
+
+      <div class="home-subhead">
+        <h3>最近 5 次运行</h3>
+        <span>费用缺失时明确显示“未记录”，不把未知成本当成 0。</span>
+      </div>
+      {% if freshness.runs_empty %}
+        <div class="empty">暂无运行记录。</div>
+      {% else %}
+        <div class="home-table-wrap">
+          <table class="home-table">
+            <thead><tr><th>阶段</th><th>状态</th><th>开始</th><th>结束</th><th class="r">调用</th><th class="r">Tokens</th><th class="r">费用 CNY</th></tr></thead>
+            <tbody>
+              {% for run in freshness.runs %}
+                <tr>
+                  <td>{{ run.stage }}</td><td>{{ run.status }}</td>
+                  <td class="stat">{{ run.started_label }}</td><td class="stat">{{ run.finished_label }}</td>
+                  <td class="r n">{{ run.llm_calls_label }}</td><td class="r n">{{ run.llm_tokens_label }}</td><td class="r n">{{ run.cost_label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

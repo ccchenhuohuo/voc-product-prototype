@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import RedirectResponse
 
 from .. import queries as Q
 from ..db import db
@@ -16,11 +15,6 @@ def _sort_state(sort: str, direction: str) -> tuple[str, str]:
     key = sort.strip()
     value = direction.strip().lower()
     return (key, value) if key in SORT_KEYS and value in ("asc", "desc") else ("", "")
-
-
-@router.get("/", include_in_schema=False)
-def home() -> RedirectResponse:
-    return RedirectResponse(url="/iter", status_code=307)
 
 
 @router.get("/iter")
