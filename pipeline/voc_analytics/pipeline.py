@@ -286,7 +286,11 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
             dropped_groups = [obj for obj in built_raw if isinstance(obj, BaseException)]
             if dropped_groups:
                 ratio = len(dropped_groups) / max(len(groups), 1)
-                if ratio > C.GENERATION_MAX_FAILED_RATIO:
+                # 比例阈值对小样本没有意义：2 条里坏 1 条是 50%，但它只是 1 条。
+                # 2026-08-17 实测就栽在这——757 条坏 1 条放行，2 条坏 1 条却把
+                # 整条生命周期判死。因此要求同时超过绝对下限才算系统性失败。
+                if (len(dropped_groups) > C.GENERATION_MIN_FAILED_ABS
+                        and ratio > C.GENERATION_MAX_FAILED_RATIO):
                     ctx.metric_incr(("generation",), failed_buckets=1)
                     raise llm.LLMError(
                         f"桶内机会点失败率过高: {len(dropped_groups)}/{len(groups)} "
@@ -385,7 +389,9 @@ def generation_reconciliation(ctx) -> dict:
         and srp == src + srf + srx
         and s1_input == s1_accounted
         and all(bucket.get("status") == "completed" for bucket in stage1_buckets)
-        and sbf == sbx == srf == srx == 0
+        # 同 gf：sbf/srf 是按失败率放行的批次，属设计允许，不计入不完整。
+        # 取消（sbx/srx）仍必须为 0——那代表本轮被中断。
+        and sbx == srx == 0
     )
     routing_complete = (
         gate_input_rows == gate_passed_rows + gate_rejected_rows
@@ -399,7 +405,13 @@ def generation_reconciliation(ctx) -> dict:
         and stage1_complete
         and routing_complete
         and scope_truncated_buckets == scope_truncated_rows == 0
-        and bf == bx == gf == gx == pf == px == 0
+        # gf（按质量校验跳过的单条产出）是【设计允许】的，不计入不完整：
+        # 几千条产出里必然有个别过不了 Stage2/3/4 校验，这是概率问题。
+        # 其余仍必须为 0——失败/取消的桶、取消的分组与持久化都代表本轮
+        # 被中断，那才是真的不完整。
+        # 2026-08-17：原条件把 gf 也要求为 0，与刚加的单条容错直接冲突——
+        # 整轮跑完只跳过 3 条也会在终点判不完整，1,900 万 tokens 白烧。
+        and bf == bx == gx == pf == px == 0
     )
     result = {
         "complete": complete,
