@@ -204,6 +204,37 @@ trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 trap handle_exit EXIT
 
+# ---- 开跑前先把量级摆出来 ----
+# 2026-08-17 教训：连续五次全量重启把百炼余额跑干，而这把 Key 与智能客服
+# 项目共用，欠费同时打挂了两个项目。运维文档 §3.1 早就写了「跑大批量前先查
+# 余额」，但没有任何地方把预计消耗算给人看，于是每次都是跑到断才知道。
+# 这里做两件事：① 连通性/欠费前置探针，已欠费就别清库；② 按池子规模估算消耗。
+echo "== 0. 前置检查：额度与规模 =="
+PREFLIGHT=$(.venv/bin/python - <<'PYEOF'
+import sys
+sys.path.insert(0, "/home/sdy/voc-analytics")
+from voc_analytics import db, llm
+try:
+    llm.embed(["preflight"])
+except Exception as error:
+    print(f"FAIL|{type(error).__name__}: {str(error)[:160]}")
+    raise SystemExit(0)
+rows = db.generation_pool(None, None)
+# 实测基准：单周探针 920 次调用 / 1.05M tokens，池约 900 条证据
+# => 每条证据约 1,170 tokens。非线性（桶会合并），给区间。
+low = int(len(rows) * 900 / 1000)
+high = int(len(rows) * 1400 / 1000)
+print(f"OK|{len(rows)}|{low}|{high}")
+PYEOF
+)
+if [[ "$PREFLIGHT" == FAIL* ]]; then
+  echo "!! 前置探针失败，不清库、不启动：${PREFLIGHT#FAIL|}" >&2
+  exit 7
+fi
+IFS='|' read -r _ POOL_ROWS EST_LOW EST_HIGH <<< "$PREFLIGHT"
+echo "   生成池 ${POOL_ROWS} 条证据；预计消耗约 ${EST_LOW}k–${EST_HIGH}k tokens"
+echo "   （这把 Key 与智能客服项目共用，余额不足会同时打挂两个项目）"
+
 echo "== 停止旧进程 =="
 RC_STOP=0
 pkill -f run_generate.py 2>/dev/null || RC_STOP=$?
