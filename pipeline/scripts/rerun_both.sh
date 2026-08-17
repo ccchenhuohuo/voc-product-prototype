@@ -215,7 +215,7 @@ echo "== 0. 前置检查：额度与规模 =="
 PREFLIGHT=$(.venv/bin/python - <<'PYEOF'
 import sys
 sys.path.insert(0, "/home/sdy/voc-analytics")
-from voc_analytics import db, llm
+from voc_analytics import config as C, db, llm
 try:
     llm.embed(["preflight"])
 except Exception as error:
@@ -226,15 +226,24 @@ rows = db.generation_pool(None, None)
 # => 每条证据约 1,170 tokens。非线性（桶会合并），给区间。
 low = int(len(rows) * 900 / 1000)
 high = int(len(rows) * 1400 / 1000)
-print(f"OK|{len(rows)}|{low}|{high}")
+# 折成钱。生成阶段几乎全是 chat；这里只有 total token 的估算，拆不出
+# 输入/输出，故按一个假定的输出占比取混合单价。跑完之后 run_generate 会
+# 按响应里真实的 prompt_tokens / completion_tokens 分账，打印准数。
+OUTPUT_SHARE = 0.2
+price = C.PRICE_PER_MTOK["qwen-plus"]
+blended = (1 - OUTPUT_SHARE) * price["input"] + OUTPUT_SHARE * price["output"]
+print(f"OK|{len(rows)}|{low}|{high}"
+      f"|{low * 1000 / 1e6 * blended:.0f}|{high * 1000 / 1e6 * blended:.0f}")
 PYEOF
 )
 if [[ "$PREFLIGHT" == FAIL* ]]; then
   echo "!! 前置探针失败，不清库、不启动：${PREFLIGHT#FAIL|}" >&2
   exit 7
 fi
-IFS='|' read -r _ POOL_ROWS EST_LOW EST_HIGH <<< "$PREFLIGHT"
+IFS='|' read -r _ POOL_ROWS EST_LOW EST_HIGH COST_LOW COST_HIGH <<< "$PREFLIGHT"
 echo "   生成池 ${POOL_ROWS} 条证据；预计消耗约 ${EST_LOW}k–${EST_HIGH}k tokens"
+echo "   预计费用约 ¥${COST_LOW}–${COST_HIGH}（按 config.PRICE_PER_MTOK 估算，"
+echo "   仅生成阶段，不含收尾；真实账单以百炼控制台为准）"
 echo "   （这把 Key 与智能客服项目共用，余额不足会同时打挂两个项目）"
 
 echo "== 停止旧进程 =="

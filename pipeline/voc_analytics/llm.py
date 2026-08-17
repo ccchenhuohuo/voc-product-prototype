@@ -20,7 +20,14 @@ from . import config as C
 # 信号处理器会在主线程任意字节码边界发布取消；若恰好打断本线程持锁区，
 # 普通 Lock 会自锁。RLock 保持跨线程互斥，同时允许同一主线程安全重入。
 _LOCK = threading.RLock()
-_USAGE = {"calls": 0, "tokens": 0}
+# calls/tokens 是全局合计，保持既有消费方（run_log、ctx）不变；
+# by_model 按模型分账，且区分输入与输出——两者单价差 2.5 倍，
+# 只记 total_tokens 就没法算钱，也分不出 embedding 与 chat 各花了多少。
+_USAGE: dict = {"calls": 0, "tokens": 0, "by_model": {}}
+
+
+def _blank_model_usage() -> dict:
+    return {"calls": 0, "input": 0, "output": 0, "tokens": 0}
 
 # 记录首个致命错误。只保存文本而不复用异常对象，避免多线程同时抛出
 # 同一对象时互相改写 traceback。
@@ -81,7 +88,10 @@ class FatalLLMError(LLMError):
 
 def usage() -> dict:
     with _LOCK:
-        return dict(_USAGE)
+        # by_model 必须深拷贝：调用方拿去算钱、写日志时可能仍有线程在记账，
+        # 浅拷贝会让快照在读的过程中被改写。
+        return {**_USAGE,
+                "by_model": {m: dict(v) for m, v in _USAGE["by_model"].items()}}
 
 
 def reset_usage() -> None:
@@ -93,7 +103,7 @@ def reset_usage() -> None:
     """
     global _CIRCUIT_REASON
     with _LOCK:
-        _USAGE.update(calls=0, tokens=0)
+        _USAGE.update(calls=0, tokens=0, by_model={})
         _CIRCUIT_REASON = None
 
 
@@ -213,10 +223,70 @@ def ensure_available() -> None:
     _raise_if_circuit_open()
 
 
-def _account(tokens: int) -> None:
+def _account(model: str, usage_obj: Any) -> int:
+    """记一次调用的用量，返回本次 total_tokens。
+
+    百炼在 usage 里给 prompt_tokens / completion_tokens；embedding 只有前者。
+    个别响应可能缺字段或给了非整数，一律降级为 0——计费统计绝不能反过来
+    把一次成功的业务调用打挂。
+    """
+    usage_obj = usage_obj if isinstance(usage_obj, dict) else {}
+
+    def _int(key: str) -> int:
+        value = usage_obj.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    prompt = _int("prompt_tokens")
+    completion = _int("completion_tokens")
+    total = _int("total_tokens") or (prompt + completion)
+    # total 缺失时用两者相加兜底；反过来若只有 total，就全算进输入——
+    # 宁可低估输出（单价高的那一侧），也不要凭比例猜。
+    if not prompt and not completion:
+        prompt = total
+
     with _LOCK:
         _USAGE["calls"] += 1
-        _USAGE["tokens"] += tokens
+        _USAGE["tokens"] += total
+        entry = _USAGE["by_model"].setdefault(model, _blank_model_usage())
+        entry["calls"] += 1
+        entry["input"] += prompt
+        entry["output"] += completion
+        entry["tokens"] += total
+    return total
+
+
+def cost(usage_snapshot: dict | None = None) -> dict:
+    """按 config.PRICE_PER_MTOK 估算费用（元）。纯计算，不发请求。"""
+    snapshot = usage_snapshot if usage_snapshot is not None else usage()
+    by_model = snapshot.get("by_model") or {}
+    detail: dict[str, dict] = {}
+    total = 0.0
+    unpriced: list[str] = []
+    for model, entry in sorted(by_model.items()):
+        price = C.PRICE_PER_MTOK.get(model)
+        if price is None:
+            price = C.PRICE_FALLBACK
+            unpriced.append(model)
+        amount = (entry["input"] * price["input"]
+                  + entry["output"] * price["output"]) / 1_000_000
+        detail[model] = {**entry, "cny": round(amount, 4),
+                         "priced": model in C.PRICE_PER_MTOK}
+        total += amount
+    return {"cny": round(total, 2), "by_model": detail, "unpriced": unpriced}
+
+
+def format_cost(usage_snapshot: dict | None = None) -> str:
+    """一行式费用摘要，供日志与前置检查复用。"""
+    snapshot = usage_snapshot if usage_snapshot is not None else usage()
+    breakdown = cost(snapshot)
+    parts = []
+    for model, entry in breakdown["by_model"].items():
+        mark = "" if entry["priced"] else "(未登记单价，按兜底估)"
+        parts.append(
+            f"{model} {entry['calls']} 次 / 入 {entry['input']:,} 出 "
+            f"{entry['output']:,} = ¥{entry['cny']:.2f}{mark}")
+    body = "；".join(parts) if parts else "无调用"
+    return f"费用估算 ¥{breakdown['cny']:.2f}（{body}）"
 
 
 # 全局在飞调用闸门。并发是【嵌套】的——桶级线程池里每个桶又各开一个批次级
@@ -336,7 +406,7 @@ def embed(texts: Sequence[str], dim: int = C.EMBED_DIM) -> list[list[float]]:
     for i in range(0, len(texts), C.EMBED_BATCH):
         chunk = list(texts[i:i + C.EMBED_BATCH])
         r = _post("/embeddings", {"model": C.EMBED_MODEL, "input": chunk, "dimensions": dim})
-        _account(r.get("usage", {}).get("total_tokens", 0))
+        _account(r.get("model") or C.EMBED_MODEL, r.get("usage"))
         data = r.get("data")
         if not isinstance(data, list):
             raise LLMError("Embedding 响应缺少 data 数组")
@@ -380,11 +450,10 @@ def chat(prompt: str, *, max_tokens: int = 1600, model: str | None = None,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0, "top_p": 0.01, "seed": seed, "max_tokens": max_tokens,
     })
-    _account(r.get("usage", {}).get("total_tokens", 0))
+    model_id = r.get("model") or model or C.CHAT_MODEL
+    tokens = _account(model_id, r.get("usage"))
     text = r["choices"][0]["message"]["content"]
-    meta = {"model_id": r.get("model", C.CHAT_MODEL),
-            "model_ver": r.get("model", C.CHAT_MODEL),
-            "tokens": r.get("usage", {}).get("total_tokens", 0)}
+    meta = {"model_id": model_id, "model_ver": model_id, "tokens": tokens}
     return text, meta
 
 

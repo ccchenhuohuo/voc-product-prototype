@@ -180,10 +180,11 @@ class LLMFailStopTest(unittest.TestCase):
         with mock.patch.object(llm.urllib.request, "urlopen", failing):
             with self.assertRaises(llm.FatalLLMError):
                 llm._post("/test", {})
-        llm._account(17)
+        llm._account("qwen-plus", {"prompt_tokens": 12, "completion_tokens": 5,
+                                   "total_tokens": 17})
 
         llm.reset_usage()
-        self.assertEqual(llm.usage(), {"calls": 0, "tokens": 0})
+        self.assertEqual(llm.usage(), {"calls": 0, "tokens": 0, "by_model": {}})
 
         succeeding = mock.Mock(return_value=_JsonResponse({"ok": True}))
         with mock.patch.object(llm.urllib.request, "urlopen", succeeding):

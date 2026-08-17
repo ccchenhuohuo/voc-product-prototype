@@ -40,6 +40,8 @@ def _raise_on_termination(signum, _frame) -> None:
 def _save_log(ctx, stage: str, status: str, started: float,
               error: BaseException | None = None) -> None:
     usage = pipeline.sync_llm_usage(ctx)
+    # 费用进 metrics 才能事后按 run 复盘；只留一行 print 的话，日志一转就没了。
+    ctx.metric_update(("cost",), **llm.cost(usage))
     generation = ctx.metrics.get("generation", {})
     finalize = ctx.metrics.get("finalize", {})
     reconciliation = (pipeline.generation_reconciliation(ctx)
@@ -56,6 +58,8 @@ def _save_log(ctx, stage: str, status: str, started: float,
         error_message=(f"{type(error).__name__}: {error}"[:1000] if error else None),
         started_at=datetime.fromtimestamp(started), finished_at=datetime.now())
     print(f"LLM: {usage['calls']} 次 / {usage['tokens']} tokens", flush=True)
+    # 费用按 config.PRICE_PER_MTOK 估算，真实账单以百炼控制台为准。
+    print(llm.format_cost(usage), flush=True)
 
 
 def _finalize(args, ctx) -> dict:
