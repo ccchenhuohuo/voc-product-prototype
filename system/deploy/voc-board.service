@@ -1,0 +1,67 @@
+# VOC 机会看板 systemd unit
+#
+# 装法（在 ulanzicloud 上，需要 root）：
+#   sudo install -m 0644 voc-board.service /etc/systemd/system/voc-board.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now voc-board
+#
+# 为什么要有它：在此之前应用是 scripts/start.sh 用 setsid 起的裸进程，
+# 进程一挂没有任何东西会把它拉回来，服务器一重启就彻底没了——2026-08-18
+# 那次内存升级重启就得手动补一条命令。公网化之后不能再这样。
+#
+# 与 ipms-api.service 保持同样的形态（User=sdy、WorkingDirectory、Restart=always），
+# 运维看两个服务时心智负担一致。
+
+[Unit]
+Description=VOC Opportunity Board (FastAPI)
+Documentation=file:///home/sdy/voc-system/README.md
+# 数据库在本机 Docker 里，docker 没起来时启动必然失败
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=exec
+User=sdy
+Group=sdy
+WorkingDirectory=/home/sdy/voc-system
+
+# 数据库连接与管道共用同一份 .env，避免口令再多一处副本。
+# 缺了就要启动失败（不加 - 前缀），不能让它带着半套配置跑起来。
+EnvironmentFile=/home/sdy/voc-analytics/.env
+
+# 飞书 App Secret、会话密钥与名单不走 EnvironmentFile：应用自己会加载
+# /home/sdy/voc-system/.env（app/main.py 的 load_dotenv）。再开一个
+# /etc/voc-board/secrets.env 等于让同一批密钥在机器上多躺一份副本，
+# 而这个项目已经吃过「口令散落三处」的亏，不再增加第四处。
+# load_dotenv 默认不覆盖已有环境变量，所以上面的 VOC_PG_* 仍然优先。
+
+# --proxy-headers + --forwarded-allow-ips 缺一不可：
+# 隧道和 nginx 都在本机回环上，不声明信任的话 uvicorn 会忽略 X-Forwarded-Proto，
+# 于是 base.html 里的 url_for('static', ...) 生成 http:// 链接，
+# 在 https 页面上被浏览器按混合内容拦掉，样式和 htmx 全部加载失败。
+ExecStart=/home/sdy/voc-system/.venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 --port 8090 \
+    --proxy-headers --forwarded-allow-ips=127.0.0.1
+
+Restart=always
+RestartSec=5s
+# 起不来时别无限快速重试刷日志：5 分钟内失败 5 次就停下等人
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# 收紧权限。应用只读自己的目录、连本机数据库、出网调飞书，不需要别的。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/sdy/voc-system
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voc-board
+
+[Install]
+WantedBy=multi-user.target
