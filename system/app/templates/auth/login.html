@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · VOC 机会看板</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/_tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sb">
+      <div class="brand">VOC 机会看板</div>
+    </aside>
+    <div class="body">
+      <main class="view">
+        <header class="head">
+          <h1>登录</h1>
+          <p class="lede">使用公司飞书账号确认你的身份。</p>
+        </header>
+        <section class="scroll">
+          <div class="form">
+            <p class="prose">登录只用于识别账号；看板的查看和写入权限由系统名单单独控制。</p>
+            <div class="ops">
+              <a class="act on" href="{{ login_url }}">用飞书登录</a>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

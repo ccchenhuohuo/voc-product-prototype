@@ -12,7 +12,7 @@ from app.routes import spu
 class SpuDatabase:
     def query_one(self, sql, params=None):
         if sql == Q.SHELL_COUNTS:
-            return {"iter": 1, "inno": 0, "strategy": 0, "search": 1, "revived": 0}
+            return {"products": 1, "iter": 1, "inno": 0, "strategy": 0, "revived": 0}
         assert sql == Q.SPU_DETAIL
         assert params == ("SPU-1",)
         return {
@@ -25,9 +25,13 @@ class SpuDatabase:
         }
 
     def query(self, sql, params=None):
-        assert sql == Q.SPU_ISSUES
-        assert params == ("SPU-1", "SPU-1")
-        return []
+        if sql == Q.SPU_ISSUES:
+            assert params == ("SPU-1", "SPU-1")
+            return []
+        if sql == Q.SPU_RAW_VOICES:
+            assert params == ("SPU-1",)
+            return []
+        raise AssertionError("unexpected query")
 
 
 def test_spu_page_renders_live_medians(monkeypatch):

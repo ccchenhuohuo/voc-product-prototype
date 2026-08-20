@@ -14,6 +14,18 @@
   --alarm-wash: #fdf2f0;
   --alarm-dim: #e8b4ab;
   --focus: #2b6cb0;
+  --iter: #3f8f8a;
+  --iter-wash: #e6f1f0;
+  --inno: #b5802b;
+  --inno-wash: #f8f0df;
+  --idle: #71717a;
+  --s1: #8fa6bf;
+  --s2: #6b8fb5;
+  --s3: #4a7aa8;
+  --s4: #3f8f8a;
+  --s5: #a8a8ae;
+  --shadow-soft: rgba(0, 0, 0, .08);
+  --shadow-tip: rgba(0, 0, 0, .22);
   --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: ui-monospace, Menlo, 'SF Mono', Consolas, monospace;
@@ -36,6 +48,18 @@
     --alarm-wash: #2a1815;
     --alarm-dim: #7a3a30;
     --focus: #63a4dd;
+    --iter: #5cb8b0;
+    --iter-wash: #16302e;
+    --inno: #d9a84a;
+    --inno-wash: #332813;
+    --idle: #6b6b73;
+    --s1: #5d7d9e;
+    --s2: #7a9ec0;
+    --s3: #9dbdd8;
+    --s4: #5cb8b0;
+    --s5: #55555c;
+    --shadow-soft: rgba(0, 0, 0, .08);
+    --shadow-tip: rgba(0, 0, 0, .22);
   }
 }
 
@@ -55,4 +79,16 @@
   --alarm-wash: #2a1815;
   --alarm-dim: #7a3a30;
   --focus: #63a4dd;
+  --iter: #5cb8b0;
+  --iter-wash: #16302e;
+  --inno: #d9a84a;
+  --inno-wash: #332813;
+  --idle: #6b6b73;
+  --s1: #5d7d9e;
+  --s2: #7a9ec0;
+  --s3: #9dbdd8;
+  --s4: #5cb8b0;
+  --s5: #55555c;
+  --shadow-soft: rgba(0, 0, 0, .08);
+  --shadow-tip: rgba(0, 0, 0, .22);
 }

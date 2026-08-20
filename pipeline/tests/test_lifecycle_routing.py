@@ -1,152 +1,143 @@
 #!/usr/bin/env python3
-"""分类前移与生命周期路由的纯函数测试；不连库、不联网。"""
+"""G5 2×2 与统一生命周期分桶的纯函数测试。"""
 from __future__ import annotations
 
 import pathlib
 import sys
-import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from voc_analytics.classification import Classification, classify_evidence  # noqa: E402
 from voc_analytics.routing import (  # noqa: E402
     LifecycleBucket,
-    route_evidence_by_lifecycle,
+    route_classified_evidence,
+    route_social_value_evidence,
 )
 
 
-class LifecycleRoutingTest(unittest.TestCase):
-    def test_same_old_product_topic_across_sources_shares_one_bucket(self) -> None:
-        ecommerce = {
-            "src_line": "电商",
-            "source_requires_spu": True,
-            "spu": ["SPU-A"],
-            "tag": "  MAGNETIC   Mount ",
-        }
-        social = {
-            "src_line": "社媒",
-            "source_requires_spu": False,
-            "spu": ["SPU-A"],
-            "topic": "ＭＡＧＮＥＴＩＣ mount",
-        }
-
-        result = route_evidence_by_lifecycle([ecommerce, social])
-
-        expected_bucket = LifecycleBucket("老品迭代", "magnetic mount", None)
-        self.assertEqual(list(result.buckets), [expected_bucket])
-        self.assertEqual(len(result.buckets[expected_bucket]), 2)
-        self.assertEqual(result.invalid, [])
-        self.assertNotIn("电商", repr(expected_bucket))
-        self.assertNotIn("社媒", repr(expected_bucket))
-        self.assertTrue(
-            all(
-                row["_classification"]
-                == Classification("老品迭代", "确定", "R1")
-                for row in result.buckets[expected_bucket]
-            )
-        )
-        self.assertTrue(
-            all(row["_opp_type"] == "老品迭代"
-                for row in result.buckets[expected_bucket])
-        )
-        self.assertTrue(
-            all(row["_classification_state"] == "确定"
-                for row in result.buckets[expected_bucket])
-        )
-        self.assertTrue(
-            all(row["_classify_rule"] == "R1"
-                for row in result.buckets[expected_bucket])
-        )
-        self.assertNotIn("_classification", ecommerce)
-        self.assertNotIn("_classification", social)
-
-    def test_ecommerce_request_is_old_with_spu_and_invalid_without_spu(self) -> None:
-        with_spu = {
-            "src_line": "电商",
-            "source_requires_spu": True,
-            "spu": ["SPU-A"],
-            "tag": "电量显示",
-        }
-        without_spu = {
-            "src_line": "电商",
-            "source_requires_spu": True,
-            "spu": [],
-            "tag": "电量显示",
-        }
-
-        result = route_evidence_by_lifecycle([with_spu, without_spu])
-
-        self.assertIn(LifecycleBucket("老品迭代", "电量显示", None), result.buckets)
-        self.assertEqual(len(result.invalid), 1)
-        self.assertEqual(result.invalid[0]["_classification"].classify_rule, "R3")
-        # 固定规则下不存在「电商新品」：有 SPU 是 R1，无 SPU 是 R3。
-        self.assertNotIn("新品创新", {b.opp_type for b in result.buckets})
-
-    def test_social_user_experience_routes_by_spu_mount(self) -> None:
-        common = {
-            "src_line": "社媒",
-            "source_requires_spu": False,
-            "content_branch": "用户使用体验",
-            "channel": "产品体验",
-        }
-        with_spu = {**common, "spu": ["SPU-A"], "topic": "按键卡滞"}
-        without_spu = {**common, "spu": [], "topic": "按键卡滞"}
-
-        result = route_evidence_by_lifecycle([with_spu, without_spu])
-
-        self.assertIn(LifecycleBucket("老品迭代", "按键卡滞", None), result.buckets)
-        self.assertIn(
-            LifecycleBucket("新品创新", "用户使用体验", "产品体验"),
-            result.buckets,
-        )
-        self.assertEqual(result.invalid, [])
-
-    def test_same_text_without_spu_social_stays_innovation_by_fixed_r2(self) -> None:
-        """显式固化需求书的规则冲突：语义相同不能跨生命周期。"""
-        ecommerce = {
-            "src_line": "电商", "source_requires_spu": True,
-            "spu": ["SPU-A"], "tag": "按键卡滞",
-        }
-        social = {
-            "src_line": "社媒", "source_requires_spu": False,
-            "spu": [], "topic": "按键卡滞",
-            "content_branch": "用户使用体验", "channel": "产品体验",
-        }
-
-        result = route_evidence_by_lifecycle([ecommerce, social])
-
-        self.assertIn(LifecycleBucket("老品迭代", "按键卡滞", None), result.buckets)
-        self.assertIn(
-            LifecycleBucket("新品创新", "用户使用体验", "产品体验"),
-            result.buckets,
-        )
-        self.assertEqual(
-            {bucket.opp_type for bucket in result.buckets},
-            {"老品迭代", "新品创新"},
-        )
-
-    def test_survey_without_spu_is_innovation_without_source_name_branching(self) -> None:
-        survey = {
-            "src_line": "问卷调研",
-            "source_requires_spu": False,
-            "spu": None,
-            "channel": "开放题",
-            "content_branch": "新品需求",
-        }
-
-        result = route_evidence_by_lifecycle([survey])
-
-        bucket = LifecycleBucket("新品创新", "新品需求", "开放题")
-        self.assertEqual(list(result.buckets), [bucket])
-        self.assertEqual(result.buckets[bucket][0]["_classification"].classify_rule, "R2")
-        self.assertEqual(result.invalid, [])
-
-    def test_zero_evidence_has_no_generation_or_invalid_rows(self) -> None:
-        self.assertEqual(classify_evidence([]), Classification(None, "无效", "R0"))
-        result = route_evidence_by_lifecycle([])
-        self.assertEqual(result.buckets, {})
-        self.assertEqual(result.invalid, [])
+def _social(value_cls: str, *, spu=None, inherited=None, **values: object) -> dict:
+    return {
+        "message_id": values.pop("message_id", "m1"),
+        "seq": values.pop("seq", 0),
+        "src_line": "社媒",
+        "source_requires_spu": False,
+        "spu": [] if spu is None else spu,
+        "spu_inherited": [] if inherited is None else inherited,
+        "_value_cls": value_cls,
+        "tag": "按键卡滞",
+        "_claim": "需要可俯拍的自拍杆",
+        **values,
+    }
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def test_request_with_spu_enters_existing_product_pool() -> None:
+    routed = route_social_value_evidence([
+        _social("诉求缺口", spu=["SPU-A"]),
+    ])
+
+    assert routed.unassigned_defects == []
+    assert routed.eligible[0]["_classification"] == Classification(
+        "老品迭代", "确定", "R1")
+    buckets = route_classified_evidence(routed.eligible).buckets
+    assert list(buckets) == [LifecycleBucket("老品迭代", "按键卡滞")]
+
+
+def test_request_without_spu_enters_innovation_precluster_pool() -> None:
+    routed = route_social_value_evidence([
+        _social("诉求缺口", _precluster_id="PCL-ABC123"),
+    ])
+
+    assert routed.unassigned_defects == []
+    assert routed.eligible[0]["_classification"] == Classification(
+        "新品创新", "确定", "R2")
+    buckets = route_classified_evidence(routed.eligible).buckets
+    assert list(buckets) == [LifecycleBucket("新品创新", "pcl-abc123")]
+
+
+def test_product_defect_with_inherited_spu_enters_existing_product_pool() -> None:
+    routed = route_social_value_evidence([
+        _social("产品缺陷", inherited=["SPU-INHERITED"]),
+    ])
+
+    assert routed.unassigned_defects == []
+    assert routed.eligible[0]["_opp_type"] == "老品迭代"
+    assert routed.eligible[0]["_classify_rule"] == "R1"
+
+
+def test_product_defect_without_spu_is_terminal_unassigned() -> None:
+    routed = route_social_value_evidence([_social("产品缺陷")])
+
+    assert routed.eligible == []
+    assert len(routed.unassigned_defects) == 1
+    assert routed.unassigned_defects[0]["_terminal"] == "缺陷不可归属"
+
+
+def test_same_old_product_tag_across_sources_shares_one_bucket() -> None:
+    ecommerce = {
+        "src_line": "电商", "source_requires_spu": True,
+        "spu": ["SPU-A"], "spu_inherited": None,
+        "tag": "  MAGNETIC   Mount ",
+    }
+    social = _social(
+        "产品缺陷", inherited=["SPU-A"], tag="ＭＡＧＮＥＴＩＣ mount",
+    )
+    social_routed = route_social_value_evidence([social]).eligible
+    ecommerce_classification = classify_evidence((ecommerce,))
+    ecommerce["_classification"] = ecommerce_classification
+    ecommerce["_opp_type"] = ecommerce_classification.opp_type
+
+    result = route_classified_evidence([ecommerce, *social_routed])
+
+    expected = LifecycleBucket("老品迭代", "magnetic mount")
+    assert list(result.buckets) == [expected]
+    assert len(result.buckets[expected]) == 2
+
+
+def test_zero_evidence_classification_remains_r0() -> None:
+    assert classify_evidence([]) == Classification(None, "无效", "R0")
+    assert route_classified_evidence([]).buckets == {}
+
+
+def test_claim_with_inherited_only_spu_is_demoted_to_innovation() -> None:
+    """诉求 + SPU 仅来自组继承 → 降级为无 SPU，走新品创新。
+
+    继承的语义是「这条评论所在的帖子在讲哪个产品」，不是「这条评论在讲
+    哪个产品」。实测抖音组 douyin-7622225804197856241 共 50 条评论、
+    只有 1 条被识别出 A200，其余 49 条继承后把「能不能出个小卡收纳盒」
+    这类新品诉求灌进了 A200 的老品问题池。
+    """
+    routed = route_social_value_evidence([
+        _social("诉求缺口", inherited=["SPU-A"], _precluster_id="PCL-ABC123"),
+    ])
+
+    assert routed.unassigned_defects == []
+    assert routed.eligible[0]["_classification"] == Classification(
+        "新品创新", "确定", "R2")
+    assert routed.eligible[0]["_inherit_demoted"] is True
+    assert routed.eligible[0]["spu_inherited"] == []
+
+
+def test_claim_with_fact_spu_still_enters_existing_product_pool() -> None:
+    """只降级继承来的。云听从正文直接识别出 SPU 的诉求仍进老品——
+    用户明确对着某个产品提要求，归属没有疑问。"""
+    routed = route_social_value_evidence([
+        _social("诉求缺口", spu=["SPU-A"], inherited=["SPU-B"]),
+    ])
+
+    assert routed.eligible[0]["_classification"] == Classification(
+        "老品迭代", "确定", "R1")
+    assert "_inherit_demoted" not in routed.eligible[0]
+
+
+def test_defect_with_inherited_spu_is_not_demoted() -> None:
+    """降级只作用于诉求。缺陷继承 SPU 仍进老品——它在报某个产品的故障，
+    而组继承给出的产品归属是当前唯一线索；砍掉会让它落进「缺陷不可归属」
+    终态被丢弃，那是净损失。"""
+    routed = route_social_value_evidence([
+        _social("产品缺陷", inherited=["SPU-A"]),
+    ])
+
+    assert routed.unassigned_defects == []
+    assert routed.eligible[0]["_classification"] == Classification(
+        "老品迭代", "确定", "R1")
+    assert "_inherit_demoted" not in routed.eligible[0]

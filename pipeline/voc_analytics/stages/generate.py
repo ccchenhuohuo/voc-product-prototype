@@ -4,19 +4,19 @@ import hashlib
 import re
 from typing import Any, Sequence
 
-from .. import llm, prompts
+from .. import config, llm, prompts
 from . import validate
-
-
-def _evidence_text(item: dict, limit: int = 400) -> str:
-    text = (item.get("evidence_text") or item.get("snippet")
-            or item.get("content") or "")
-    return str(text).replace("\n", " ")[:limit]
+from .stage1 import _evidence_body
 
 
 def _fmt_items(items: list[dict], idx: Sequence[int]) -> str:
-    """逐条格式化混合来源证据，不用整组来源猜测字段。"""
+    """逐条格式化混合来源证据，不用整组来源猜测字段。
+
+    元数据（含品名）由本函数负责；证据 body 统一走 stage1._evidence_body
+    ——此处曾有一份不带【完整原文】的旧副本，导致 Stage2 标题生成
+    没吃到全文改造（2026-08-19 评审抓出）。禁止再复制该逻辑。"""
     out = []
+    seen_full: set = set()
     for n, i in enumerate(idx, 1):
         it = items[i]
         meta: list[str] = []
@@ -35,7 +35,7 @@ def _fmt_items(items: list[dict], idx: Sequence[int]) -> str:
             meta.append(f"品牌:{brands}")
         if it.get("product_name"):
             meta.append(f'品名:{it["product_name"]}')
-        out.append(f'[{n}] {" | ".join(meta) or "无可用元数据"} | {_evidence_text(it)}')
+        out.append(f'[{n}] {" | ".join(meta) or "无可用元数据"} | {_evidence_body(it, seen_full)}')
     return "\n".join(out)
 
 
@@ -57,7 +57,7 @@ def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
     unit = unit_by_type[opp_type]
     context_parts = [f"生命周期 {opp_type}", f"{unit} {mode_name}"]
     for label, key in (("品类", "category"), ("标签", "tag"),
-                       ("语义路径", "tax_path"), ("内容通道", "channel")):
+                       ("语义路径", "tax_path")):
         if ctx_info.get(key):
             context_parts.append(f"{label} {ctx_info[key]}")
     if ctx_info.get("low_star_rate") is not None:
@@ -75,6 +75,7 @@ def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
         items=_fmt_items(items, idx), opp_type=opp_type)
 
     last_err: list[str] = []
+    last_grounding_err: list[str] = []
     last_obj: dict | None = None
     last_meta: dict = {}
     for _ in range(3):                            # 首次 + 2 次带约束重试
@@ -91,17 +92,25 @@ def write_prototype(items: list[dict], members: Sequence[int], mode_name: str,
             ctx.bump(failed=1)
             raise
         last_obj, last_meta = obj, meta
-        errs = validate.validate_stage2(obj, items, idx)
+        grounding_err: list[str] = []
+        errs = validate.validate_stage2(obj, items, idx, ctx, grounding_err)
+        last_grounding_err = grounding_err
         if not errs:
             obj["_meta"] = meta
             obj["_needs_review"] = False
             return obj
         last_err = errs
 
-    # 三次仍不过：落库并标记 needs_review，不阻断整批（§5.9）
+    # 三次仍不过：既有错误落库并标记 needs_review；强制 grounding 则作废该组。
     if last_obj is None:
         ctx.bump(failed=1)
         raise llm.LLMError("Stage2 三次尝试均未取得可解析响应")
+    if config.GROUNDING_ENFORCE and last_grounding_err:
+        # 强制模式下，三次仍有 grounding 问题就进入外层既有 failed_groups
+        # 作废路径；报告模式永远不会走这里。
+        ctx.metric_incr(("generation",), grounding_rejected_groups=1)
+        detail = "; ".join(last_grounding_err)[:500]
+        raise llm.LLMError(f"Stage2 grounding 三次校验仍失败: {detail}")
     last_obj["_meta"] = last_meta
     last_obj["_needs_review"] = True
     last_obj["_errors"] = last_err

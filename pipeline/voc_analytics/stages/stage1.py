@@ -105,9 +105,33 @@ def _evidence_text(item: dict, limit: int = 400) -> str:
     return str(text).replace("\n", " ")[:limit]
 
 
+def _evidence_body(item: dict, seen_full: set, limit: int = 400) -> str:
+    """片段 +【完整原文】的统一 body 构造——Stage1/Stage2/Stage4 共用。
+
+    片段是云听按标签切出的单句，单独喂给模型时信息常不足以判断诉求主体
+    （52 例 A/B 实测：只喂片段硬伤率 17%，补全文后 0%）。同一条消息被切成
+    多个片段时全文只随首个片段出现一次（seen_full 由调用方持有，作用域是
+    一次提示词渲染；跨 batch/跨投票轮会重复带全文，是已知的 token 代价，
+    不是正确性问题）。曾因 Stage2 的 generate.py 里存在一份同名旧实现而
+    让全文改造只生效一半——2026-08-19 评审抓出，故收敛为单一实现。"""
+    body = _evidence_text(item, limit)
+    full = str(item.get("full_text") or "").replace("\n", " ").strip()[:limit]
+    mid = item.get("message_id")
+    if full and full != body.strip():
+        if mid in seen_full:
+            body = f"{body}　【完整原文：同上条消息】"
+        else:
+            seen_full.add(mid)
+            body = f"{body}　【完整原文】{full}"
+    elif mid is not None:
+        seen_full.add(mid)
+    return body
+
+
 def _fmt_items(items: list[dict], idx: list[int]) -> str:
     """逐条展示可用元数据，允许一个生命周期桶包含多个来源。"""
     out = []
+    seen_full: set = set()
     for n, i in enumerate(idx, 1):
         it = items[i]
         meta: list[str] = []
@@ -124,14 +148,14 @@ def _fmt_items(items: list[dict], idx: list[int]) -> str:
             if isinstance(brands, (list, tuple, set)):
                 brands = ",".join(str(x) for x in brands if x)
             meta.append(f"品牌:{brands}")
-        out.append(f'[{n}] {" | ".join(meta) or "无可用元数据"} | {_evidence_text(it)}')
+        body = _evidence_body(it, seen_full)
+        out.append(f'[{n}] {" | ".join(meta) or "无可用元数据"} | {body}')
     return "\n".join(out)
 
 
 def _context_line(ctx_info: dict) -> str:
     fields = (
         ("品类", "category"), ("标签", "tag"), ("语义路径", "tax_path"),
-        ("内容通道", "channel"),
     )
     parts = [f"{label}:{ctx_info[key]}" for label, key in fields if ctx_info.get(key)]
     return " | ".join(parts) or "未提供额外桶上下文"
@@ -220,7 +244,7 @@ def split_bucket(items: list[dict], opp_type: str, ctx_info: dict, ctx,
     all_batches = len(jobs)
 
     bucket_label = str(ctx_info.get("bucket_key") or ctx_info.get("bucket") or ctx_info.get("tag")
-                       or ctx_info.get("channel") or ctx_info.get("category") or "未命名桶")
+                       or ctx_info.get("category") or "未命名桶")
     bucket_fingerprint = hashlib.sha256(repr(sorted(
         (str(key), repr(value)) for key, value in ctx_info.items())).encode()).hexdigest()[:10]
     metric_path = ("stage1", opp_type, "buckets", f"{bucket_label}:{bucket_fingerprint}")

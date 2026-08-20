@@ -43,6 +43,12 @@ def test_local_htmx_honors_full_refresh_for_live_counts():
     assert "window.location.reload()" in runtime
 
 
+def test_local_htmx_honors_login_redirect_without_swapping_error_body():
+    runtime = (SYSTEM_DIR / "app/static/htmx.min.js").read_text()
+    assert "HX-Redirect" in runtime
+    assert "window.location.assign(redirect)" in runtime
+
+
 def test_synchronous_theme_bootstrap_outputs_all_three_modes():
     node = shutil.which("node")
     if not node:
@@ -82,9 +88,48 @@ def test_theme_tokens_support_explicit_and_system_modes_without_new_colors():
     assert tokens.count("--field: #0f0f11") == 2
 
 
-def test_user_menu_keeps_logout_as_disabled_placeholder():
+def test_user_menu_shows_authenticated_user_and_real_logout_link():
     template = (SYSTEM_DIR / "app/templates/base.html").read_text()
     assert "data-user-popover" in template
-    assert "角色 / 邮箱待接入" in template
-    assert re.search(r'<button class="logout-placeholder"[^>]* disabled>', template)
-    assert "退出登录 <span>待接入</span>" in template
+    assert "飞书已登录" in template
+    assert re.search(r'<a class="logout-link" href="/auth/logout">', template)
+    assert "退出登录" in template
+
+
+def test_navigation_has_four_business_items_and_no_product_search():
+    template = (SYSTEM_DIR / "app/templates/base.html").read_text()
+    sidebar = template.split('<aside class="sb">', 1)[1].split(
+        '<div class="sb-footer">', 1
+    )[0]
+    # 两个一级分区（首页、数据架构），首页下挂三个二级业务页。
+    assert sidebar.count("nav-lv1") == 2
+    assert sidebar.count("nav-lv2") == 3
+    assert sidebar.count('class="nav') == 5
+    assert "产品检索" not in sidebar
+    # 二级业务页各只挂一个读数，口径统一。
+    assert "{{ iter_count }}" in sidebar and "product_count" not in sidebar
+
+
+def test_removed_search_template_and_channel_ui_do_not_return():
+    templates = SYSTEM_DIR / "app/templates"
+    assert not (templates / "product-search.html").exists()
+    innovation = "\n".join(
+        (templates / name).read_text()
+        for name in ("inno-list.html", "innovation-card.html")
+    )
+    home = (templates / "home.html").read_text()
+    for text in (innovation, home):
+        assert "channel" not in text.lower()
+        assert "竞品对标" not in text
+        assert "产品体验" not in text
+
+
+def test_spu_sort_validation_has_one_shared_source():
+    routes = SYSTEM_DIR / "app/routes"
+    sources = {
+        path.name: path.read_text()
+        for path in routes.glob("*.py")
+    }
+    assert sum(text.count("SORT_KEYS =") for text in sources.values()) == 1
+    assert sum(text.count("def sort_state(") for text in sources.values()) == 1
+    assert "from .spu_table import sort_state" in sources["board.py"]

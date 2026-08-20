@@ -22,7 +22,11 @@
   {% for voice in voices %}
     <article class="voice">
       <p>{{ voice.voice_text or voice.snippet or voice.content }}</p>
-      {% if voice.translation and voice.translation != voice.voice_text %}<p class="translation">{{ voice.translation }}</p>{% endif %}
+      {# 切片下小字直显完整原文（能逐字定位时高亮切片）；非中文再跟中文翻译。 #}
+      {% if voice.full_content %}
+      <p class="full-voice">原文：{% if voice.full_hit %}{{ voice.full_pre }}<mark>{{ voice.full_hit }}</mark>{{ voice.full_post }}{% else %}{{ voice.full_content }}{% endif %}</p>
+      {% endif %}
+      {% if voice.translation and voice.translation != voice.voice_text %}<p class="translation">中文：{{ voice.translation }}</p>{% endif %}
       <div class="meta">
         <span class="s">星 {{ voice.star if voice.star is defined and voice.star is not none else '—' }}</span>
         <span>{{ voice.platform or '平台未知' }}</span>

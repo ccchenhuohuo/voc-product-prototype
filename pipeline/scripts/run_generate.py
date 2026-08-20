@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import sys
 import time
@@ -13,7 +14,7 @@ from datetime import datetime
 
 sys.path.insert(0, "/home/sdy/voc-analytics")
 from voc_analytics import (  # noqa: E402
-    config as C, db, explode, ingest, lifecycle, llm, pipeline, resolve)
+    config as C, db, execute, explode, ingest, lifecycle, llm, pipeline, resolve)
 
 
 LIFECYCLE_ARGS = {
@@ -60,6 +61,29 @@ def _save_log(ctx, stage: str, status: str, started: float,
     print(f"LLM: {usage['calls']} 次 / {usage['tokens']} tokens", flush=True)
     # 费用按 config.PRICE_PER_MTOK 估算，真实账单以百炼控制台为准。
     print(llm.format_cost(usage), flush=True)
+
+
+def _execute_proposals(week: str, ctx) -> dict:
+    """在生成前消费 PM 裁决，确保新证据挂到合并后的目标条目。"""
+    # 静默自动融合默认关闭；只有显式设置 VOC_AUTO_MERGE=1 才改变 pending
+    # 提案状态，沿用原资产图的开关语义。
+    auto = (execute.run_auto(week)
+            if os.environ.get("VOC_AUTO_MERGE") == "1"
+            else {"auto_accepted": "已关闭"})
+    stat = execute.run(week)
+    result = {**auto, **stat}
+    # 提案动作会改写机会点层，属于 finalize 账本；run log 会完整保存 metrics。
+    ctx.metric_update(("finalize",), proposal_execution=result)
+    print(f"[提案落地] {result}", flush=True)
+    return result
+
+
+def _check_revive(week: str, ctx) -> int:
+    """收尾快照后检查完成态/墓碑条目并提 REVIVE 提案。"""
+    count = lifecycle.check_revive(week)
+    ctx.metric_update(("finalize",), revive_proposals=count)
+    print(f"[复活检测] 新增 {count} 条 REVIVE 提案", flush=True)
+    return count
 
 
 def _finalize(args, ctx) -> dict:
@@ -123,25 +147,29 @@ def _finalize(args, ctx) -> dict:
             evi_total=EXCLUDED.evi_total, rank_score=EXCLUDED.rank_score,
             title=EXCLUDED.title, desc_suggestion=EXCLUDED.desc_suggestion
         """, [args.week, args.week])
-        release = lifecycle.release_to_pm()
-
+        revive_total = _check_revive(args.week, ctx)
         # 派生层必须在证据挂靠、跨源合并完成之后刷新，否则 SPU 卡片层与
         # 战略视图读到的还是上一轮（甚至指向已删 opp_id）的物化视图。
-        # 这一步过去只挂在 Dagster 资产上（definitions.py 的 spu_layer），
-        # 手工重建路径 rerun_both.sh 完全绕过它——全量重跑后「老品迭代」和
-        # 「战略视图」两页空白就是这么来的。2026-08-17 排查确认后补上。
+        # 派生层必须由手工收尾刷新；全量重跑不能只更新机会点机器表。
         spu_stat = explode.refresh(args.week)
         print(f"[派生层] SPU {spu_stat['spu_count']} 个 / "
               f"SPU-问题 {spu_stat['issue_count']} 条 / "
               f"n_eff 覆盖 {spu_stat['n_eff_count']} 个机会点")
+        nn_stat = pipeline.refresh_opportunity_neighbors(ctx)
+        print(f"[最近邻] 刷新 {nn_stat['nn_rows']} 条 / "
+              f"悬空 {nn_stat['nn_orphan_rows']} 条")
+        # 最近邻断链是收尾失败，必须在改变 PM 可见性之前拦住。
+        release = lifecycle.release_to_pm()
 
         ctx.metric_update(
             ("finalize",), status="completed", opportunities=len(created),
             attached_evidence=attached_total, split_proposals=split_total,
-            release=release, spu_layer=spu_stat)
+            revive_proposals=revive_total, release=release,
+            spu_layer=spu_stat, opp_nn=nn_stat)
         return {"opportunities": len(created), "attached": attached_total,
-                "splits": split_total, "release": release,
-                "spu_layer": spu_stat}
+                "splits": split_total, "revive": revive_total,
+                "release": release,
+                "spu_layer": spu_stat, "opp_nn": nn_stat}
     except BaseException:
         ledger = ctx.metrics.get("finalize", {})
         ctx.metric_update(
@@ -196,6 +224,7 @@ def main() -> int:
                 print("[全历史] 忽略周窗口，在整个事实层上生成")
             else:
                 window_start, window_end = ingest.window_bounds(args.week)
+            _execute_proposals(args.week, ctx)
             result = pipeline.generate_opportunities(
                 args.week, ctx, week_start=window_start, week_end=window_end,
                 opp_types=LIFECYCLE_ARGS[args.lifecycle],

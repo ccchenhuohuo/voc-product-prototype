@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from .. import queries as Q
+from ..auth import actor_for_request
 from ..db import DatabaseWriteError, db
-from ..viewmodels import date_input, decorate_issue, voice_summary
+from ..viewmodels import (attach_full_voice, date_input, decorate_issue,
+                          voice_summary)
 from ..web import templates
 
 router = APIRouter(prefix="/issue")
@@ -18,7 +18,7 @@ def issue_voices(request: Request, spu: str, opp_id: str):
     issue = db.query_one(Q.ISSUE_DETAIL, (spu, opp_id))
     if not issue:
         raise HTTPException(404, "未找到该问题条目")
-    voices = db.query(Q.ISSUE_VOICES, (opp_id, spu))
+    voices = attach_full_voice(db.query(Q.ISSUE_VOICES, (opp_id, spu)))
     return templates.TemplateResponse(request, "issue-voices.html", {
         "issue": decorate_issue(issue),
         "voices": voices,
@@ -46,7 +46,7 @@ async def update_issue_status(request: Request, spu: str, opp_id: str):
         db.execute(Q.UPDATE_ISSUE_STATUS, (
             spu, opp_id, status, context["decision_note"],
             context["target_release"], date_input(context["release_date"]),
-            os.environ.get("VOC_APP_USER", "voc_human"),
+            actor_for_request(request),
         ))
     except (DatabaseWriteError, ValueError) as exc:
         context["error"] = str(exc)

@@ -1,0 +1,14 @@
+{% if dist.empty %}
+  <div class="donut-row"><div class="empty">{{ dist.empty_message }}</div></div>
+{% else %}
+  <div class="donut-row">
+    <svg class="donut" width="118" height="118" viewBox="0 0 118 118" role="img" aria-label="{{ dist.src }}{{ dist.dim }}占比环形图">
+      {% for arc in dist.arcs %}<path d="{{ arc.d }}" fill="none" stroke="var(--{{ arc.color }})" stroke-width="15" data-dist-index="{{ arc.index }}" opacity="{{ arc.opacity }}"></path>{% endfor %}
+      <text x="59" y="56" text-anchor="middle" font-size="15" font-weight="600" font-family="ui-monospace,Menlo,monospace" fill="var(--ink)">{{ dist.center_pct_label }}</text>
+      <text x="59" y="71" text-anchor="middle" font-size="9.5" fill="var(--ink-4)">{{ dist.center_label }}</text>
+    </svg>
+    <div class="donut-legend">
+      {% for row in dist.rows %}<div class="dl" data-dist-index="{{ row.index }}"><i class="sw" style="background:var(--{{ row.color }});opacity:{{ row.opacity }}"></i><span class="dist-name">{{ row.label }}</span><span class="vv">{{ row.value_label }}</span><span class="pp">{{ row.pct_label }}</span></div>{% endfor %}
+    </div>
+  </div>
+{% endif %}

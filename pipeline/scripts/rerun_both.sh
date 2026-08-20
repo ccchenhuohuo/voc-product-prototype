@@ -8,8 +8,8 @@
 # 警告：脚本会终止匹配 run_generate.py 的进程并清空机会点层；若存在受外键保护的
 # 人工决策则按设计中止。执行前应确认备份并排除其他生成任务。
 #
-# 两段式是正确性要求：并行阶段只做生成，汇聚/拆分/快照/放行必须
-# 等老品迭代与新品创新两个生命周期都成功后再统一做一遍。
+# 两段式是正确性要求：并行阶段在清库后先执行生成前提案钩子，再只做生成；
+# 汇聚/拆分/快照/复活检测/放行必须等老品迭代与新品创新都成功后再统一做一遍。
 set -euo pipefail
 
 # 有超时的子进程监督是正确性硬依赖（见 wait_with_timeout）。必须在停止进程、清库等任何
@@ -271,6 +271,19 @@ if (( REMAINING != 0 )); then
   exit 1
 fi
 
+# 阶段零：先把 G4 判定物化一次。
+# generate_opportunities() 的 opp_types 过滤在 apply_value_gate() 之后，
+# 两个生命周期进程都会对【全池】社媒各判一遍：冷缓存下重复约 8000 次判定、
+# 成本翻倍，且抢写 voc_social_gate 同一主键 last-writer-wins；若同一条无 SPU
+# 消息两边判出不同类别，会在两个生命周期里得到互斥处置而各自对账全绿。
+# 预热后两个进程全部命中缓存、都不写入，三个问题一起消失。
+export VOC_LLM_CONCURRENCY=$(( PER_PROC_CONCURRENCY * 2 ))
+echo "== 阶段零：G4 判定预热（并发 ${VOC_LLM_CONCURRENCY}，run_id=${RUN_ID}）=="
+.venv/bin/python -u scripts/warm_value_gate.py --week 2026-W33 --full-history \
+      --run-id "$RUN_ID" 2>&1 | tee /tmp/warm_gate.log || {
+  echo "!! G4 预热失败，中止重跑（机会层尚未清空，无损失）"; exit 1
+}
+
 echo "== 清空机会点层（保留事实层）=="
 # 人工决策表不在清理范围内：它没有 ON DELETE CASCADE 是有意的保护。
 # 库里若已有人工决策，DELETE 会因外键失败。整段清理必须同时
@@ -290,6 +303,9 @@ echo "   机会点: $OPP_COUNT"
 
 export VOC_LLM_CONCURRENCY="$PER_PROC_CONCURRENCY"
 
+# run_generate.py 在每个生成进程真正取池/调用 LLM 前执行 PM 提案落地；此处
+# 位于清库之后，避免 accepted 提案在清理阶段被删除。最终 finalize-only
+# 进程会在快照后执行 REVIVE 检测。
 echo "== 阶段一：两个生命周期并行生成（每进程并发 ${PER_PROC_CONCURRENCY}，run_id=${RUN_ID}）=="
 CHILDREN_DRAINED=0
 nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --full-history \
@@ -368,7 +384,7 @@ if (( RC_EXISTING != 0 || RC_INNOVATION != 0 )); then
   exit "$FAIL_RC"
 fi
 
-echo "== 阶段二：统一收尾（汇聚 + 拆分检测 + 快照 + 放行）=="
+echo "== 阶段二：统一收尾（汇聚 + 拆分检测 + 快照 + 复活检测 + 放行）=="
 # 收尾单进程，可以用满整个并发额度
 export VOC_LLM_CONCURRENCY=64
 RC_FINALIZE=0

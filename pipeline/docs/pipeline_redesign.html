@@ -96,7 +96,7 @@
 <section>
   <h2><span class="no">0</span>一句话说清改了什么</h2>
   <p class="lede">阶段 2c 已在代码与迁移脚本中将生成主轴改为「统一内容池 → 逐证据分类 → 生命周期桶 → 生命周期提示词/L1」。这是静态代码状态；本轮未执行迁移、未调 LLM、未重跑生成，运行结果均未验证。</p>
-  <div class="callout"><span class="i">ℹ️</span><p><b>术语与状态说明</b>：<code>voc_message.src_line</code> 是已登记的证据来源，生命周期分类读取 <code>voc_source_policy.requires_spu</code>。<code>voc_opportunity.src_line</code> 只是 legacy 单值代表：新建混合组取排序后第一个来源，存量 recount 不改写；完整事实以 <code>source_lines/evi_by_source</code> 为准。<code>channel</code> 仍只是业务子类型。迁移 <code>017_generation_lifecycle_routing.sql</code> 本轮只交付文件。</p></div>
+  <div class="callout"><span class="i">ℹ️</span><p><b>术语与状态说明</b>：<code>voc_message.src_line</code> 是已登记的证据来源，生命周期分类读取 <code>voc_source_policy.requires_spu</code>。<code>voc_opportunity.src_line</code> 只是 legacy 单值代表：新建混合组取排序后第一个来源，存量 recount 不改写；完整事实以 <code>source_lines/evi_by_source</code> 为准。旧业务子类型列已由迁移 024 移除。</p></div>
   <div class="tablewrap"><table>
     <tr><th>阶段</th><th>处置</th><th>为什么</th><th>要不要重跑 LLM</th></tr>
     <tr><td>① 抽取</td><td><span class="tag t-chg">代码已落地</span></td><td><code>clean.py</code> 与迁移 008 已补产品字段、多值数组和标签四级字段；阶段一补 SPU 规范化及迁移 014 留痕字段，014 未执行</td><td>代码/迁移不需 LLM；历史回填状态需运维确认</td></tr>
@@ -143,7 +143,7 @@
       <div class="sh"><span class="num">②</span> 统一取证与分流 <span class="tag t-new">2c 代码已落地 · 未执行</span></div>
       <div class="sb">
         <p style="margin:0 0 9px;color:var(--muted);font-size:12.5px">
-          <code>db.generation_pool()</code> 先在同一个 evidence 粒度入口按内容取证，返回真实 <code>(message_id, seq)</code>。情感与内容标签只决定是否入池及 <code>content_branch/channel</code>，<b>不直接决定 <code>opp_type</code></b>。</p>
+          <code>db.generation_pool()</code> 先在同一个 evidence 粒度入口按内容取证，返回真实 <code>(message_id, seq)</code>。情感与内容标签只决定是否入池及内容分支，<b>不直接决定 <code>opp_type</code></b>。</p>
         <div class="lane"><span class="lk">内容入池</span><span class="lv">
           <span class="box">产品体验负面</span>
           <span class="box b-new">用户使用体验 · 负面</span>
@@ -180,7 +180,7 @@
         <div class="lane"><span class="lk">产出</span><span class="lv">
           <span class="box mono">voc_opportunity</span><span class="rt">= 共性问题（跨 SPU）与诉求</span></span></div>
         <div class="lane"><span class="lk">新建 ID</span><span class="lv">
-          <code>OPP2-</code> + SHA-256 前 128 bit<span class="rt">老品：<code>opp_type + core_tag + problem_mode</code>；新品再含业务 <code>channel</code>；不含来源、周次或模型版本</span></span></div>
+          <code>OPP2-</code> + SHA-256 前 128 bit<span class="rt">老品与新品：<code>opp_type + core_tag + problem_mode</code>；不含来源、旧业务子类型、周次或模型版本</span></span></div>
         <div class="cost"><b>刻意不按具体 SPU 分桶</b>：SPU 在生成前只用于判定生命周期，具体编码不进分桶键，仍可发现跨产品问题。存量 <code>OPP-*</code> 不重键，消解命中时继承已有 canonical ID。</div>
       </div>
     </div>
@@ -190,7 +190,7 @@
       <div class="sh"><span class="num">④</span> 消解 · <span class="mono">voc_analytics.resolve</span> <span class="tag t-new">2c 代码已落地 · 未运行</span></div>
       <div class="sb">
         <div class="lane"><span class="lk">链路</span><span class="lv">
-          L1 按生命周期定键：老品为 <code>(opp_type, core_tag)</code>，新品为 <code>(opp_type, channel, core_tag)</code>；来源不参与候选分区。L2 在桶内按向量余弦相似度排序，L3 LLM 裁决是否同一机会。</span></div>
+          L1 对两个生命周期都使用 <code>(opp_type, core_tag)</code>；来源和旧业务子类型不参与候选分区。L2 在桶内按向量余弦相似度排序，L3 LLM 裁决是否同一机会。</span></div>
         <div class="lane"><span class="lk">附带</span><span class="lv">
           跨来源补证只在同一生命周期内进行 · 拆分检测 · 提案生成；<code>lifecycle.check_tombstone()</code> 当前仅定义、未接入生产流程</span></div>
         <div class="cost"><b>失败即停</b>：Arrearage、鉴权失败、硬配额/余额不足立即打开熔断；同一 run 以原子共享文件把首因传播给另一生命周期进程。并行层传播原异常并取消未开始任务。Stage1 以计划/完成/失败/取消批次及其条数形成账本；任一生成进程非零退出时，终止兄弟进程并禁止收尾。监督脚本在任何停止/清库前验证 Bash ≥5.1。</div>
@@ -313,7 +313,7 @@ voc_source_policy
   src_line       legacy 单值代表；非完整来源事实
   source_lines[] 完整供证来源
   evi_by_source  通用按来源证据计数
-  channel        业务子类型：需求缺口/竞品对标
+  -- 024 已移除旧业务子类型字段
   evi_ec evi_social  一期兼容投影
   dual_source    正证据来源数 >= 2
   problem_mode title desc_*

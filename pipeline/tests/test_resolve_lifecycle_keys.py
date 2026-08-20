@@ -26,19 +26,18 @@ def test_old_product_l1_key_uses_type_and_tag_without_source(monkeypatch) -> Non
 
     monkeypatch.setattr(resolve.db, "q", fake_q)
 
-    assert resolve.l1_candidates("按键卡滞", "老品迭代", "产品体验") == [
+    assert resolve.l1_candidates("按键卡滞", "老品迭代") == [
         {"opp_id": "OPP2-OFFLINE"}
     ]
     sql, params = calls.pop()
 
     assert "opp_type IS NOT DISTINCT FROM %s" in sql
     assert "core_tag IS NOT DISTINCT FROM %s" in sql
-    assert "channel IS NOT DISTINCT FROM %s" not in sql
     assert "src_line" not in sql
     assert params == ["按键卡滞", "老品迭代"]
 
 
-def test_innovation_l1_key_uses_lifecycle_channel_not_source(monkeypatch) -> None:
+def test_innovation_l1_key_uses_the_same_type_and_tag_domain(monkeypatch) -> None:
     calls: list[tuple[str, list]] = []
     monkeypatch.setattr(
         resolve.db,
@@ -46,13 +45,13 @@ def test_innovation_l1_key_uses_lifecycle_channel_not_source(monkeypatch) -> Non
         lambda sql, params: calls.append((sql, params)) or [],
     )
 
-    resolve.l1_candidates("自定义功能", "新品创新", "需求缺口")
+    resolve.l1_candidates("自定义功能", "新品创新")
     sql, params = calls.pop()
 
-    assert "channel IS NOT DISTINCT FROM %s" in sql
+    assert "core_tag IS NOT DISTINCT FROM %s" in sql
     assert "opp_type IS NOT DISTINCT FROM %s" in sql
     assert "src_line" not in sql
-    assert params == ["需求缺口", "自定义功能", "新品创新"]
+    assert params == ["自定义功能", "新品创新"]
 
 
 def test_l1_rejects_unknown_lifecycle_before_query(monkeypatch) -> None:
@@ -60,4 +59,4 @@ def test_l1_rejects_unknown_lifecycle_before_query(monkeypatch) -> None:
     monkeypatch.setattr(resolve.db, "q", query)
 
     with pytest.raises(ValueError, match="未知机会类型"):
-        resolve.l1_candidates("标签", "不存在的生命周期", None)
+        resolve.l1_candidates("标签", "不存在的生命周期")

@@ -13,9 +13,15 @@ def read_xlsx(blob: bytes) -> list[dict]:
     ws = wb.active
     rows = ws.iter_rows(values_only=True)
     try:
-        header = [str(h) if h is not None else "" for h in next(rows)]
+        # 表头漂移（改名、首尾空格、缺列）会让下游 row.get 静默全取 None：
+        # 五个帖子线索字段同时失效，而消息数、证据数、周状态照样成功，
+        # G1b / 父帖标题 / G3 / SPU 继承一起哑掉却无人察觉。先规范再校验。
+        header = [str(h).strip() if h is not None else "" for h in next(rows)]
     except StopIteration:
         return []
+    dup = sorted({h for h in header if h and header.count(h) > 1})
+    if dup:
+        raise ValueError(f"导出表头存在重复列名，无法可靠取值：{dup}")
     out = [dict(zip(header, r)) for r in rows]
     wb.close()
     return out
@@ -53,6 +59,8 @@ def ingest_window(ctx, start: datetime, end: datetime) -> dict:
     stats: dict = {"slices": {}, "source_messages": {},
                    "misaligned": 0, "tail_fixed": 0}
     t0 = time.time()
+    # 先验 schema 再拉数：缺列晚失败会白费约 25 分钟的云听导出。
+    db.ensure_message_schema()
 
     all_msgs: list[dict] = []
     all_evi: list[dict] = []
@@ -66,7 +74,15 @@ def ingest_window(ctx, start: datetime, end: datetime) -> dict:
         stats["slices"][src_line] = metas
         seen: set[str] = set()
         for blob in blobs:
-            for row in read_xlsx(blob):
+            blob_rows = read_xlsx(blob)
+            if src_line == "社媒" and blob_rows:
+                missing = [c for c in C.SOCIAL_REQUIRED_COLUMNS
+                           if c not in blob_rows[0]]
+                if missing:
+                    raise ValueError(
+                        f"社媒导出缺少必需列 {missing}；继续入库会让帖子线索"
+                        f"字段整片为 NULL，G1b/父帖标题/G3/SPU 继承同时失效")
+            for row in blob_rows:
                 mid = row.get("消息ID")
                 if not mid or mid in seen:
                     continue
@@ -89,7 +105,11 @@ def ingest_window(ctx, start: datetime, end: datetime) -> dict:
 
     n_msg = db.save_messages(all_msgs)
     n_evi = db.save_evidence(all_evi)
+    # 事实行与证据行都落库后，按社媒消息组的当前完整事实
+    # 重算唯一 SPU 继承。函数幂等，重叠窗口可安全重复调用。
+    inherited = db.backfill_social_spu_inheritance()
     stats.update(messages_written=n_msg, evidence_written=n_evi,
+                 spu_inherited_written=inherited,
                  elapsed_s=round(time.time() - t0, 1))
     ctx.metrics.setdefault("ingest", {}).update(stats)
     return stats

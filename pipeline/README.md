@@ -1,8 +1,8 @@
 # VOC 数据管道（`pipeline/`）
 
-从云听 CEM 抽取 VOC，经清洗、生成、消解与 SPU 展开后写入 PostgreSQL，供 `system/` 的 PM 机会看板读取。生产调度入口是 Dagster；`scripts/` 下的命令用于初始化、回填、探针、备份和故障处置。
+从云听 CEM 抽取 VOC，经清洗、生成、消解与 SPU 展开后写入 PostgreSQL，供 `system/` 的 PM 机会看板读取。生产唯一入口是 `scripts/` 手工链：日常跑批与全量重建分别由 `run_ingest.py`、`run_generate.py` 和 `rerun_both.sh` 按 runbook 发起。
 
-> 来源口径：`voc_message.src_line` 是 `voc_source_policy` 中已登记的证据来源；`voc_opportunity.src_line` 只是 legacy 单值代表，不能代表混合来源机会的完整事实。新建混合组取 `sorted(source_lines)[0]`，存量行 recount 不改写原值；权威来源事实读 `source_lines` / `evi_by_source`。`channel` 不承担来源语义。
+> 来源口径：`voc_message.src_line` 是 `voc_source_policy` 中已登记的证据来源；`voc_opportunity.src_line` 只是 legacy 单值代表，不能代表混合来源机会的完整事实。新建混合组取 `sorted(source_lines)[0]`，存量行 recount 不改写原值；权威来源事实读 `source_lines` / `evi_by_source`。来源字段不参与机会点身份。
 
 ## 运行要求与安装
 
@@ -40,7 +40,7 @@ VOC_PG_PASSWORD=<YOUR_VOC_WRITER_PASSWORD>
 | `VOC_PG_HUMAN_USER` / `VOC_PG_HUMAN_PASSWORD` | `voc_human` / 空 | 仅人工表写入路径使用 |
 | `VOC_AUTO_MERGE` | 未设置（关闭） | 设为 `1` 才启用静默自动融合 |
 
-生产进程的规范密钥入口是 `/etc/voc-analytics/runtime.env`（权限 `0600`）。当前部署脚本仍会把源目录中的 `.env` 一并同步到发布目录，这是待修的密钥副本风险；不要依赖该副本，也不要把真实值写入仓库。
+生产进程的规范密钥入口是 `/etc/voc-analytics/runtime.env`（权限 `0600`）。历史部署脚本已归档并加阻断守卫；手工链从受控环境注入变量，不复制 `.env` 或把真实值写入仓库。
 
 ## 数据流与代码结构
 
@@ -71,14 +71,15 @@ voc_analytics/        管线核心
   lifecycle.py        生命周期候选逻辑、复活、陈旧检测、放行
   execute.py          执行 PM 已通过的提案并写血缘
   explode.py          刷新 SPU 容器、问题条目与共性度（纯 SQL）
-  definitions.py      Dagster 资产图与周度调度定义
-sql/                  按编号管理的 001-017 迁移（执行前须核对环境基线）
+  scripts/run_generate.py  生成前提案落地、生命周期生成与收尾
+  scripts/rerun_both.sh    清库后的全量双生命周期重建入口
+sql/                  按编号管理的 001-027 迁移（执行前须核对环境基线）
 scripts/              部署、抽取、生成、备份与探针
 tests/                各里程碑验收
 baseline/             L3 判定标注测试集
 ```
 
-`lifecycle.check_tombstone()` 当前仅定义、尚未接入 Dagster 或脚本生成流程，因此不能把专用“墓碑抑制”路径视为已生效；是否接线或删除留待后续重构判断。
+`lifecycle.check_tombstone()` 当前仅定义、尚未接入手工生成流程，因此不能把专用“墓碑抑制”路径视为已生效；是否接线或删除留待后续重构判断。`execute.run()` 在生成前消费 PM 已通过的提案，`lifecycle.check_revive()` 在收尾快照后、放行前提议 REVIVE。
 
 ## 数据库迁移基线
 
@@ -97,8 +98,12 @@ baseline/             L3 判定标注测试集
 | `015` | 按完整证据集重算分类与 `evi_total`，增加分类审计字段，并收紧 `voc_spu_issue` |
 | `016` | 生命周期隔离：对 PM 已接管的 locked 行冻结 `opp_type / classification_state / classify_rule` |
 | `017` | 生成期生命周期路由：`voc_source_policy.requires_spu`、可扩展来源外键、`source_lines` 与 `evi_by_source` |
+| `018`–`019` | `n_eff` 口径对齐与 JSON 空值哨兵归一化 |
+| `020`–`023` | run log 读权、最近邻/来源缓存、社媒线索字段与 G4 缓存 |
+| `024` | 删除已废弃的业务子类型列并按最终列契约重建看板视图 |
+| `025`–`027` | 社媒 SPU 容器/继承挂载、独立声音计数与消息整段情感字段 |
 
-`scripts/m0_deploy_pg.sh` 是灾难恢复所需的建库与角色初始化脚本，仓库没有自动迁移器。**仓库迁移链已到 `017`，但文件存在不等于任一数据库已应用。**本轮明确未执行 `017`；`015/016` 的实际环境状态本轮未连库核对，必须按迁移记录和环境基线逐项确认。任何实际应用都需在备份、基线核对和变更审批后受控执行。
+`scripts/m0_deploy_pg.sh` 是灾难恢复所需的建库与角色初始化脚本，仓库没有自动迁移器。**仓库迁移链已到 `027`，但文件存在不等于任一数据库已应用。**实际应用必须按迁移记录和环境基线逐项确认，并在备份、变更审批后受控执行。
 
 ## 阶段 2a 分类契约
 
@@ -123,7 +128,7 @@ baseline/             L3 判定标注测试集
 
 这组固定规则还有一个不能隐藏的边界：若同义问题的电商证据有 SPU、社媒证据无 SPU，逐证据前置分类会分别命中 R1 与 R2，生命周期隔离又禁止二者合并。因此当前“跨来源同一老品合流”只对各条证据本身均命中 R1（例如社媒证据也挂了 SPU）的场景成立。要覆盖前一种混合挂载场景，必须另行确定 provisional 分类或跨生命周期消解规则；本阶段不擅自改写 R1/R2。
 
-新建机会的 ID 为 `OPP2-` + SHA-256 前 128 bit。哈希材料是经 NFKC、大小写与空白归一的版本化 JSON，并与生命周期的 L1 唯一域一致：老品为 `opp_type + core_tag + problem_mode`，新品再包含业务 `channel`；不包含 `src_line` 来源、品类、周次、模型版本或 Stage1 临时名称。存量 `OPP-*` 不重键，因为多处人工状态、快照、审计、提案数组和血缘无法安全级联；消解命中时继承已有 canonical ID。
+新建机会的 ID 为 `OPP2-` + SHA-256 前 128 bit。哈希材料是经 NFKC、大小写与空白归一的版本化 JSON，并与生命周期的 L1 唯一域一致：`opp_type + core_tag + problem_mode`；不包含来源、旧业务子类型、品类、周次、模型版本或 Stage1 临时名称。`024` 已删除旧业务子类型列，不能再把它写入身份或 schema 口径。存量 `OPP-*` 不重键，因为多处人工状态、快照、审计、提案数组和血缘无法安全级联；消解命中时继承已有 canonical ID。
 
 Arrearage、鉴权失败与硬配额/余额不足立即打开熔断，不重试、不继续；同一 run 的两个生命周期进程通过原子共享熔断文件传播首因，另一进程在下一次请求前停止。并行层传播原始异常并取消未开始任务。Stage1 把计划/完成/失败/取消批次与对应条数写入 run log，账本必须满足 `planned = completed + failed + cancelled`。两个生命周期生成进程任一非零时终止另一个；只有两者均成功才执行跨来源补证、拆分、快照和放行收尾。`rerun_both.sh` 依赖 Bash ≥5.1，并在停止进程或清库前先做版本闸门。
 
@@ -131,16 +136,17 @@ Arrearage、鉴权失败与硬配额/余额不足立即打开熔断，不重试�
 
 ## 启动与常用入口
 
-本地启动 Dagster 开发界面：
+生产跑批入口（手工链）：
 
 ```bash
 cd pipeline
-dagster dev -m voc_analytics.definitions -p 3002
+python scripts/run_ingest.py 2026-W33
+bash scripts/rerun_both.sh
 ```
 
-生产由三个 systemd 服务运行：`voc-analytics-grpc`（`127.0.0.1:4003`）、`voc-analytics-dagster-daemon`、`voc-analytics-dagster-webserver`（`127.0.0.1:3002`）。代码定义了 `voc_weekly` 的每周一 `02:00`（`Asia/Shanghai`）计划，但计划默认未启用，且当前定义没有显式选择上一周分区；部署后必须先启用并核对分区行为。部署和故障处置见 [运维交接](docs/运维交接.md)。
+没有内置自动调度器或生产服务；跑批、回填、失败重试和全量重建都由运维按 [运维交接](docs/运维交接.md) 手工发起并核对 `voc_run_log`。
 
-一次性抽取指定周（脚本接收**位置参数**；例行抽取由 Dagster 调度）：
+一次性抽取指定周（脚本接收**位置参数**）：
 
 ```bash
 cd pipeline
@@ -163,16 +169,16 @@ python scripts/smoke.py
 python -m pytest tests/test_clean_fields.py tests/test_classification.py tests/test_lifecycle_routing.py tests/test_opportunity_identity.py tests/test_llm_fail_stop.py tests/test_stage1_accounting.py
 ```
 
-`scripts/run_generate.py` 与 `scripts/rerun_both.sh` 会调用 LLM 并写库，其中后者还会清理机会点机器层，只用于受控回填。脚本使用 `set -euo pipefail`；两个生命周期生成进程任一非零时立即终止另一个，并禁止 `--finalize-only` 收尾。真正的完整性依据是 run log 中每层计划/完成/失败/取消账本闭合，不是只看 shell 退出码。用途、前置条件和参数以各脚本头部说明为准。
+`scripts/run_generate.py` 与 `scripts/rerun_both.sh` 会调用 LLM 并写库，其中后者还会清理机会点机器层，只用于受控回填。生成前钩子消费 PM 已通过的 MERGE/SPLIT 提案（静默自动融合仍需 `VOC_AUTO_MERGE=1`），收尾在快照后检测 REVIVE；两项计数都写入 `voc_run_log.metrics` 的 finalize 账本。脚本使用 `set -euo pipefail`；两个生命周期生成进程任一非零时立即终止另一个，并禁止 `--finalize-only` 收尾。真正的完整性依据是 run log 中每层计划/完成/失败/取消账本闭合，不是只看 shell 退出码。用途、前置条件和参数以各脚本头部说明为准。
 
 ## 核心约束
 
 - 业务规则在数据库里：状态机、锁语义、「不考虑」必填理由与安全类保护由触发器强制。
 - 机器只写机器表：`voc_writer` 对人工表只读；人工决定不会被周度重算覆盖。
-- 老品迭代与新品创新互不转换；016 对 PM 已接管的 locked 行冻结三个分类字段，017 不改动该行为。
+- 老品迭代与新品创新互不转换；016 对 PM 已接管的 locked 行冻结三个分类字段，后续迁移不改动该行为。
 - 新建 `OPP2-*` 与存量 ID 长期共存；没有专门迁移授权时禁止批量重键。
 - fatal 或对账不闭合时必须以失败结束，不得写成功日志或执行收尾。
-- Dagster 是唯一生产调度入口；脚本只用于初始化、开发调试、探针或受控回填。
+- 手工链是唯一生产调度入口；`run_generate.py` 生成前执行 PM 提案，收尾执行复活检测、派生层刷新和放行。
 
 ## 当前状态与下一阶段
 
@@ -180,4 +186,4 @@ python -m pytest tests/test_clean_fields.py tests/test_classification.py tests/t
 
 阶段一已在代码与迁移脚本中统一来源口径，并把 SPU 规范化与原值留痕落到抽取层。抽取层**不按任何名单筛选 SPU**——云听依本公司产品体系打标，挂到 SPU 即本品；「社媒独有 SPU 是否成卡」是展示层口径，留到阶段三的 `voc_spu` 里定。
 
-阶段二现拆分为 2a / 2b / 2c。2c 只交付统一池、生命周期路由、`OPP2` 身份、失败熔断/账本、`017_generation_lifecycle_routing.sql` 与配套文档/离线测试；本轮未执行 SQL、未连库、未调 LLM、未重跑管道。仓库迁移链已到 017；017 本轮明确未执行，015/016 的实际环境状态与所有生成结果均为**未验证**。
+阶段二现拆分为 2a / 2b / 2c。仓库迁移链已到 `027`；本报告只做代码与文档变更，不连库、不调 LLM、不重跑管道，实际环境状态与生成结果仍须由验收方按 runbook 核对。

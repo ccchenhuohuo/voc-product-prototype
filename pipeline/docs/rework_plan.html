@@ -99,7 +99,7 @@
     <tr><td class="n">6</td><td><b>抽取层不筛 SPU</b><br><span style="font-size:12px;color:var(--faint)">原为「排除第三方型号」，前提已被实测推翻</span></td>
       <td>挂到 SPU 即本品（社媒 2,561 条带 SPU 的消息 <code>brands</code> 全含本品，零例外）。<code>NP-FZ100</code> <code>EN-EL15</code> 是本品兼容电池沿用相机电池规格命名，非竞品</td><td><span class="tag t-code">改代码</span></td></tr>
     <tr><td class="n">7</td><td><b>来源线口径统一</b></td>
-      <td>代码、文档与机会层来源值统一为 电商 / 社媒；<code>channel</code> 保持需求缺口 / 竞品对标</td><td><span class="tag t-code">代码 + 迁移脚本</span></td></tr>
+      <td>代码、文档与机会层来源值统一为 电商 / 社媒；旧业务子类型列后由迁移 024 删除</td><td><span class="tag t-code">代码 + 迁移脚本</span></td></tr>
   </table></div>
 
   <div class="callout"><span class="i">💡</span><p><b>#1 不再交给 LLM 判型。</b>现存机会点由迁移 <code>015_classification_contract.sql</code> 确定性回填，后续生成由纯函数根据完整证据集合分类；#2 才会扩大 LLM 生成池。代码与迁移在 2a 交付但不执行，受控迁移与重跑统一留到 2b。</p></div>
@@ -177,7 +177,7 @@
       <p><b>来源不写死为二分</b>：<code>017_generation_lifecycle_routing.sql</code> 引入 <code>voc_source_policy(src_line, requires_spu)</code>，以「该来源是否保证挂 SPU」表达 R2/R3。初始策略是电商 <code>true</code>、社媒 <code>false</code>、问卷调研 <code>false</code>；未注册来源不能默认落入某条生命周期。迁移同时以来源策略外键替代两值 CHECK，并增加 <code>source_lines</code> / <code>evi_by_source</code>；不修改 016 的 locked 冻结行为。</p>
       <p><b>规则的直接结论</b>：保证挂 SPU 的来源若没有 SPU，命中 R3 无效且在池入口被拦截；因此按已定规则不存在「电商新品诉求」这条合法路由。社媒老品问题也只指已挂 SPU 的子集；无 SPU 子集仍属新品。</p>
       <p><b>固定规则留下的未决边界</b>：若同义问题的电商证据有 SPU、社媒证据无 SPU，逐证据前置分类会分别得到 R1 老品与 R2 新品，而生命周期隔离禁止二者再合并。因此本轮跨来源老品合流只覆盖各条证据本身均命中 R1 的场景；若要让无 SPU 社媒证据随同义老品问题合流，需需求方另行选择 provisional 分类或跨生命周期消解，不能同时声称严格执行现有 R1/R2 与“永远合到一起”。</p>
-      <p><b><code>opp_id</code> 只对新建机会升级</b>：新 ID 为 <code>OPP2-</code> + SHA-256 前 128 bit，哈希材料是经 Unicode NFKC、大小写与空白归一后的版本化 JSON，并与 L1 唯一域一致：老品为 <code>opp_type + core_tag + problem_mode</code>，新品再包含业务 <code>channel</code>。<code>src_line</code> 来源、品类、周次、模型版本与 Stage1 临时名称不参与哈希。存量 <code>OPP-*</code> 不重键，因为人工状态、快照、血缘、提案数组和旧链接都无法安全级联。消解命中时继承 canonical ID；新 ID 使用事务锁串行化同键创建并校验哈希冲突。</p>
+      <p><b><code>opp_id</code> 只对新建机会升级</b>：新 ID 为 <code>OPP2-</code> + SHA-256 前 128 bit，哈希材料是经 Unicode NFKC、大小写与空白归一后的版本化 JSON，并与 L1 唯一域一致：老品与新品均为 <code>opp_type + core_tag + problem_mode</code>。<code>src_line</code> 来源、旧业务子类型、品类、周次、模型版本与 Stage1 临时名称不参与哈希。存量 <code>OPP-*</code> 不重键，因为人工状态、快照、血缘、提案数组和旧链接都无法安全级联。消解命中时继承 canonical ID；新 ID 使用事务锁串行化同键创建并校验哈希冲突。</p>
       <p><b>失败即停</b>：<code>Arrearage</code>、鉴权失败与硬配额/余额不足打开熔断，不重试；两个生命周期进程用同一 run 的原子共享文件传播首个 fatal，另一进程在下一次请求前停止。并行层传播原始异常并取消未开始任务。Stage1 记录计划/完成/失败/取消批次和对应处理条数，run log 要求 <code>planned = completed + failed + cancelled</code>。两个生命周期进程任一非零时终止另一个，只有两者均为 0 才允许跨来源汇聚、拆分、快照和放行收尾；监督脚本在任何停止/清库动作前验证 Bash ≥5.1。</p>
       <div class="callout"><span class="i">📊</span><p><b>池规模只能给静态毛估</b>：旧社媒毛候选是需求缺口 <span class="n">5,005</span> + 竞品对标 <span class="n">2,623</span> 条消息。补回的「用户使用体验」整桶 <span class="n">3,249</span> 条，负面率 <span class="n">23.4%</span>，毛新增约 <code>3,249 × 23.4% ≈ 760</code> 条消息；社媒毛候选因而从 <span class="n">7,628</span> 到约 <span class="n">8,388</span>，约 <span class="n">+10.0%</span>。但 <code>content_type</code> 是多值，760 中可能已与旧两桶重叠，还要扣 <code>low_conf</code>、非空片段和业务门槛；旧数字是消息粒度，新池是证据粒度，所以净增范围只能写为 <code>0–约760 条唯一消息</code>，精确证据行数<b>未验证</b>。旧电商 <span class="n">4,232</span> 是证据数，不得与上述社媒消息数相加。</p></div>
       <div class="gate"><b>闸门 B-2c（离线代码闸门）</b>：① 路由纯函数覆盖跨来源同问题、已定规则下的「电商新品诉求」（R1/R3）、社媒有 SPU 老品问题和零证据；② Stage1/2 与 L1 不再以来源选分支；③ <code>OPP2</code> 同身份跨来源稳定，不与存量前缀混用；④ fatal 不重试、批次账本闭合、任一子进程失败时收尾不可达；⑤ 迁移 017 不触碰 016 locked 冻结，<code>voc_spu_issue</code> 的 <code>HAVING count(*) &gt;= 2</code> 不改。<b>本阶段不执行 SQL、不连库、不调 LLM、不重跑管道。</b></div>

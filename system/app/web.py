@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from fastapi.templating import Jinja2Templates
 
 from . import queries as Q
+from .auth.session import current_user
 from .db import db
 from .viewmodels import (
     format_number,
@@ -14,7 +15,17 @@ from .viewmodels import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+
+def auth_context(request) -> dict[str, object]:
+    """所有完整页面从统一渲染入口取当前登录人。"""
+    return {"current_user": current_user(request)}
+
+
+templates = Jinja2Templates(
+    directory=str(APP_DIR / "templates"),
+    context_processors=[auth_context],
+)
 
 
 def shell_counts() -> dict[str, int]:
@@ -22,7 +33,7 @@ def shell_counts() -> dict[str, int]:
     row = db.query_one(Q.SHELL_COUNTS) or {}
     return {
         key: int(row.get(key) or 0)
-        for key in ("iter", "inno", "strategy", "search", "revived")
+        for key in ("products", "iter", "inno", "strategy", "revived")
     }
 
 

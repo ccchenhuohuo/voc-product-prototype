@@ -25,8 +25,11 @@ from voc_analytics.stages import stage1  # noqa: E402
 import re  # noqa: E402
 from voc_analytics import prompts  # noqa: E402
 
-# 取一个中等老品迭代桶（30-60 条）做两轮全流程
-routed = routing.route_evidence_by_lifecycle(db.generation_pool())
+# 取一个中等电商老品迭代桶（30-60 条）做两轮全流程。
+# 本脚本的目标是 Stage1/Stage2 稳定性，不是五道门的集成验收；
+# 社媒行必须经 G4/G5，因此不再用这个只读脚本的旧便捷路由处理社媒。
+pool = [row for row in db.generation_pool() if row.get("src_line") == "电商"]
+routed = routing.route_evidence_by_lifecycle(pool)
 cand = [(bucket, items) for bucket, items in routed.buckets.items()
         if bucket.opp_type == "老品迭代" and 30 <= len(items) <= 60]
 bucket, items = sorted(cand, key=lambda kv: -len(kv[1]))[0]

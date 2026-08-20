@@ -21,7 +21,7 @@ GRANT CONNECT ON DATABASE voc TO voc_writer, voc_human, voc_reader;
 GRANT USAGE   ON SCHEMA public TO voc_writer, voc_human, voc_reader;
 
 -- ------------------------------------------------------------
--- voc_writer：Dagster 作业。可写事实层与机会点层，manual 只读
+-- voc_writer：手工管线作业。可写事实层与机会点层，manual 只读
 -- ------------------------------------------------------------
 GRANT SELECT, INSERT, UPDATE, DELETE ON
   voc_message, voc_evidence, voc_unclassified_evidence,
@@ -29,7 +29,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
   voc_opp_snapshot, voc_proposal, voc_run_log, voc_tag_taxonomy
 TO voc_writer;
 GRANT SELECT ON voc_opportunity_manual, voc_status_log TO voc_writer;
--- 机器需读 voc_board（release_to_pm 资产、陈旧检测都依赖它）
+-- 机器需读 voc_board（release_to_pm、陈旧检测都依赖它）
 GRANT SELECT ON voc_board, voc_inbox, voc_safety_watch, voc_weekly_metrics TO voc_writer;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO voc_writer;
 

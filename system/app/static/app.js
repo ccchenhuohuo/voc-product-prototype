@@ -99,15 +99,6 @@
       document.querySelector("[data-user-toggle]")?.setAttribute("aria-expanded", "false");
     }
 
-    const tagToggle = event.target.closest("[data-tag-toggle]");
-    if (tagToggle) {
-      const level = tagToggle.closest(".tag-level");
-      const expanded = !level?.classList.contains("expanded");
-      level?.classList.toggle("expanded", expanded);
-      tagToggle.setAttribute("aria-expanded", String(expanded));
-      return;
-    }
-
     const toggle = event.target.closest("[data-status-toggle]");
     if (toggle) {
       const control = toggle.closest(".status-control");
@@ -137,6 +128,88 @@
   document.addEventListener("focusin", (event) => {
     const row = event.target.closest?.("tbody tr[tabindex='0']");
     if (row) selectRow(row);
+  });
+
+  const homeTip = document.querySelector("[data-home-tip]");
+  let activeTipTarget = null;
+
+  function safeTipHtml(value) {
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;")
+      .replaceAll("&lt;br&gt;", "<br>")
+      .replaceAll("&lt;b&gt;", "<b>")
+      .replaceAll("&lt;/b&gt;", "</b>");
+  }
+
+  function moveHomeTip(event) {
+    if (!homeTip) return;
+    const rect = homeTip.getBoundingClientRect();
+    let x = event.clientX + 14;
+    let y = event.clientY + 14;
+    if (x + rect.width > window.innerWidth - 8) x = event.clientX - rect.width - 14;
+    if (y + rect.height > window.innerHeight - 8) y = event.clientY - rect.height - 14;
+    homeTip.style.left = `${x}px`;
+    homeTip.style.top = `${y}px`;
+  }
+
+  function showHomeTip(event, target) {
+    if (!homeTip || !target?.dataset.tip) return;
+    activeTipTarget = target;
+    homeTip.innerHTML = safeTipHtml(target.dataset.tip);
+    homeTip.classList.add("on");
+    moveHomeTip(event);
+  }
+
+  function hideHomeTip(target) {
+    if (!homeTip || activeTipTarget !== target) return;
+    homeTip.classList.remove("on");
+    activeTipTarget = null;
+  }
+
+  document.addEventListener("mouseover", (event) => {
+    const target = event.target.closest?.(".tip-target[data-tip]");
+    if (target && !target.contains(event.relatedTarget)) showHomeTip(event, target);
+
+    const sankeyLink = event.target.closest?.("#sankey .lk");
+    if (sankeyLink && !sankeyLink.contains(event.relatedTarget)) {
+      document.querySelectorAll("#sankey .lk").forEach((link) => {
+        link.style.opacity = link === sankeyLink ? "" : "0.08";
+      });
+    }
+
+    const legendRow = event.target.closest?.("#home-dist .dl[data-dist-index]");
+    if (legendRow && !legendRow.contains(event.relatedTarget)) {
+      legendRow.closest("#home-dist")?.querySelectorAll(".donut path").forEach((path) => {
+        path.style.opacity = path.dataset.distIndex === legendRow.dataset.distIndex ? "1" : ".18";
+      });
+    }
+  });
+
+  document.addEventListener("mousemove", (event) => {
+    if (activeTipTarget) moveHomeTip(event);
+  });
+
+  document.addEventListener("mouseout", (event) => {
+    const target = event.target.closest?.(".tip-target[data-tip]");
+    if (target && !target.contains(event.relatedTarget)) hideHomeTip(target);
+
+    const sankeyLink = event.target.closest?.("#sankey .lk");
+    if (sankeyLink && !sankeyLink.contains(event.relatedTarget)) {
+      document.querySelectorAll("#sankey .lk").forEach((link) => {
+        link.style.opacity = "";
+      });
+    }
+
+    const legendRow = event.target.closest?.("#home-dist .dl[data-dist-index]");
+    if (legendRow && !legendRow.contains(event.relatedTarget)) {
+      legendRow.closest("#home-dist")?.querySelectorAll(".donut path").forEach((path) => {
+        path.style.opacity = "";
+      });
+    }
   });
 
   document.addEventListener("keydown", (event) => {
@@ -191,6 +264,19 @@
 
   document.body.addEventListener("htmx:beforeSwap", (event) => {
     if (event.detail.xhr?.status === 422) event.detail.shouldSwap = true;
+  });
+
+  document.body.addEventListener("htmx:configRequest", (event) => {
+    const button = event.detail.elt?.closest?.("[data-dist-filter]");
+    if (!button) return;
+    const dimension = button.dataset.distFilter;
+    document.querySelectorAll(`[data-dist-filter="${dimension}"]`).forEach((candidate) => {
+      candidate.setAttribute("aria-pressed", String(candidate === button));
+    });
+    const source = document.querySelector('[data-dist-filter="src"][aria-pressed="true"]');
+    const measure = document.querySelector('[data-dist-filter="dim"][aria-pressed="true"]');
+    event.detail.parameters.src = source?.dataset.value || "社媒";
+    event.detail.parameters.dim = measure?.dataset.value || "语种";
   });
 
 })();

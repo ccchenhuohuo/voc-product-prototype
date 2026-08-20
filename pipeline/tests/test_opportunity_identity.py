@@ -18,12 +18,11 @@ from voc_analytics.pipeline import make_opp_id  # noqa: E402
 def _id_from_evidence(evidence: dict) -> str:
     """模拟两个来源行组装同一语义身份。
 
-    ``src_line`` 故意保留在输入中，但 v2 身份材料只提取生命周期与
+    ``src_line`` 故意保留在输入中，但 v3 身份材料只提取生命周期与
     内容语义；这使测试能直接回归“来源不入哈希”。
     """
     return make_opp_id(
         evidence["opp_type"], evidence.get("core_tag"), evidence.get("problem_mode"),
-        evidence.get("channel"),
     )
 
 
@@ -54,23 +53,24 @@ def test_identity_normalization_is_stable_but_lifecycle_isolated() -> None:
     old_id = make_opp_id("老品迭代", "MAGNETIC-Mount", "按键／回弹失效")
     normalized_old_id = make_opp_id("老品迭代", "ＭＡＧＮＥＴＩＣ mount", "按键 回弹失效")
     innovation_id = make_opp_id(
-        "新品创新", "MAGNETIC-Mount", "按键／回弹失效", "需求缺口")
+        "新品创新", "MAGNETIC-Mount", "按键／回弹失效")
 
     assert old_id == normalized_old_id
     assert innovation_id != old_id
 
 
-def test_innovation_identity_keeps_l1_channels_isolated_without_source() -> None:
+def test_innovation_identity_is_unified_without_source_or_removed_dimensions() -> None:
     base = {
         "src_line": "问卷调研",
         "opp_type": "新品创新",
         "core_tag": "便携补光",
         "problem_mode": "希望在弱光时自动补光",
     }
-    gap = _id_from_evidence({**base, "channel": "需求缺口"})
-    comparison = _id_from_evidence({**base, "channel": "竞品对标"})
-    same_gap_other_source = _id_from_evidence(
-        {**base, "src_line": "社媒", "channel": "需求缺口"})
+    first = _id_from_evidence(base)
+    same_semantics_other_source = _id_from_evidence(
+        {**base, "src_line": "社媒"})
+    different_mode = _id_from_evidence(
+        {**base, "problem_mode": "希望增加自动调光能力"})
 
-    assert gap != comparison
-    assert gap == same_gap_other_source
+    assert first == same_semantics_other_source
+    assert first != different_mode

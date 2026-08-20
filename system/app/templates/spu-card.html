@@ -9,20 +9,21 @@
 {% set median_star = card.median_avg_star|default(none) %}
 {% set total = card.issue_count if card.issue_count is defined and card.issue_count is not none else issues|length %}
 {% set opened = card.open_issue_count if card.open_issue_count is defined and card.open_issue_count is not none else total %}
+{% set social_only = not card.has_ec %}
 <header class="head">
   <nav class="trail" aria-label="面包屑"><a href="/iter">老品迭代</a><i>/</i><span>{{ product_name(card) }}</span></nav>
   <h1>{{ product_name(card) }}</h1>
   <p class="lede"><span class="code">{{ card.spu }}</span>
     {% if card.skus %} · SKU {{ card.skus|join(' / ') }}{% endif %}
-    · {{ card.category or card.prod_line or '—' }} · {{ card.launch_period or '—' }}
-    · 定级 {{ card.grade or '—' }} · 负责人 <b>未分配</b></p>
+    · {% if social_only %}<span class="social-only">仅社媒信号</span> · —{% else %}{{ card.category or card.prod_line or '—' }}{% endif %} · {{ card.launch_period or '—' }}
+    · 定级 {{ '—' if social_only else card.grade or '—' }} · 负责人 <b>未分配</b></p>
 </header>
 <div class="scroll">
   <div class="readout">
-    <div class="ro"><div class="v{% if ratio >= 0.20 %} bad{% endif %}">{{ '%.1f'|format(ratio * 100) }}%</div><div class="k">负面占比</div><div class="cmp">组内中位 {% if median_ratio is not none %}{{ '%.1f'|format(median_ratio * 100) }}%{% else %}—{% endif %}</div></div>
-    <div class="ro"><div class="v{% if avg is not none and avg < 4 %} bad{% endif %}">{{ avg|num }}</div><div class="k">均星</div><div class="cmp">组内中位 {{ median_star|num }}</div></div>
+    <div class="ro"><div class="v{% if not social_only and ratio >= 0.20 %} bad{% endif %}">{% if social_only %}—{% else %}{{ '%.1f'|format(ratio * 100) }}%{% endif %}</div><div class="k">负面占比</div><div class="cmp">组内中位 {% if not social_only and median_ratio is not none %}{{ '%.1f'|format(median_ratio * 100) }}%{% else %}—{% endif %}</div></div>
+    <div class="ro"><div class="v{% if not social_only and avg is not none and avg < 4 %} bad{% endif %}">{{ '—' if social_only else avg|num }}</div><div class="k">均星</div><div class="cmp">组内中位 {{ '—' if social_only else median_star|num }}</div></div>
     <div class="ro"><div class="v">{{ (card.message_count or 0)|num }}</div><div class="k">消息</div></div>
-    <div class="ro"><div class="v">{{ (card.negative_evi_count or 0)|num }}</div><div class="k">负面证据</div><div class="cmp">正面 {{ (card.positive_evi_count or 0)|num }}</div></div>
+    <div class="ro"><div class="v">{{ '—' if social_only else (card.negative_evi_count or 0)|num }}</div><div class="k">负面证据</div><div class="cmp">正面 {{ '—' if social_only else (card.positive_evi_count or 0)|num }}</div></div>
     <div class="ro"><div class="v">{{ opened }}/{{ total }}</div><div class="k">待办 / 总条目</div></div>
   </div>
 
@@ -37,5 +38,18 @@
     </tr></thead>
     {% with spu=card.spu, max_evidence=max_evidence %}{% include "partials/issue_list.html" %}{% endwith %}
   </table>
+
+  <div class="grp"><h2>未入机会点原声</h2><span class="c">{{ raw_voices|length }}</span><span class="r">诉求缺口 / 产品缺陷</span></div>
+  <div class="raw-voices">
+    {% for row in raw_voices %}
+      <article class="voice raw-voice">
+        <div class="raw-voice-head"><span class="voice-cls{% if row.cls == '产品缺陷' %} defect{% endif %}">{{ row.cls }}</span></div>
+        <p>{% if row.cls == '诉求缺口' %}{{ row.claim or row.content }}{% else %}{{ row.content|truncate(240, true, '…') }}{% endif %}</p>
+        <div class="meta"><span>{{ row.platform or '平台未知' }}</span><span class="s">{{ row.publish_time.date() if row.publish_time and row.publish_time.date is defined else (row.publish_time or '日期未知') }}</span></div>
+      </article>
+    {% else %}
+      <p class="empty">暂无未进入机会点的原声。</p>
+    {% endfor %}
+  </div>
 </div>
 {% endblock %}

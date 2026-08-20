@@ -2,8 +2,8 @@
 """机会点生成与收尾最小探针：基于已有事实层跑小切片并执行验收口径。
 
 为什么需要它——冷启动跑了两轮才发现的问题，本来都该在这里被挡住：
-  · 放行策略从没执行（逻辑只在 Dagster 资产里，脚本路径绕过）
-  · Dagster 生成资产 build 完不落库
+  · 放行策略、跨来源补证与派生层必须在手工收尾中完整执行
+  · 生成阶段 build 完必须落库
   · 跨来源汇聚 350/350 空转（旧按渠道分组使 core_tag 取值域不相交）
   · problem_mode 退化成分类名，593 条只有 63 个不同向量
   · opp_id 碰撞导致「evi_total=91 而描述只讲了 1 条」
@@ -15,13 +15,11 @@
   set -a; . ./.env; set +a
   .venv/bin/python scripts/smoke.py            # 脚本路径；哨兵周产出结束时清理
   .venv/bin/python scripts/smoke.py --keep     # 脚本路径；保留哨兵周产出供检查
-  .venv/bin/python scripts/smoke.py --dagster  # 物化最近真实 ingest 周分区，不自动清理
 
 前置条件：
   从 /home/sdy/voc-analytics 运行；Python 3.11+ 及项目依赖已安装；数据库与百炼/LLM
   配置已按上例导出，事实层已有探针样本，且没有 run_generate.py 正在运行；宿主机
-  需提供 pgrep。--dagster 还要求 dagster 命令在 PATH 中且资产入口可加载。所有模式
-  都会写数据库，勿并发运行。
+  需提供 pgrep。脚本会写数据库，勿并发运行。
 """
 from __future__ import annotations
 import argparse, re, subprocess, sys, time, unicodedata
@@ -30,7 +28,7 @@ sys.path.insert(0, "/home/sdy/voc-analytics")
 from voc_analytics import (  # noqa: E402
     config as C, db, lifecycle, llm, pipeline, resolve, routing,
 )
-from voc_analytics.stages import stage1, validate  # noqa: E402
+from voc_analytics.stages import precluster, stage1, validate, value_gate  # noqa: E402
 
 SMOKE_WEEK = "9999-W01"          # 哨兵周：探针产出全部打这个标，便于精确清理
 P = F = 0
@@ -194,9 +192,41 @@ def run_acceptance(week: str) -> None:
 
 
 # ---------------------------------------------------------------- 两条执行路径
+def _route_current_generation_pool(ctx):
+    """按正式五道门契约准备探针分桶。
+
+    探针仍只在后续挑少量桶跑 Stage1+，但社媒不得绕过 G4/G5，
+    新品也不得绕过与正式主流程相同的预聚类。
+    """
+    rows = db.generation_pool()
+    ecommerce = [row for row in rows if row.get("src_line") == "电商"]
+    social = [row for row in rows if row.get("src_line") == "社媒"]
+    ecommerce_classified, invalid = routing.classify_evidence_by_lifecycle(ecommerce)
+    if invalid:
+        raise RuntimeError(f"探针生成池含 {len(invalid)} 条无效电商证据")
+
+    gate = value_gate.apply_value_gate(social, ctx)
+    if gate.failed_rows:
+        raise llm.LLMError(f"探针 G4 失败，涉及 {len(gate.failed_rows)} 条证据")
+    social_routing = routing.route_social_value_evidence(gate.passed_rows)
+    classified = ecommerce_classified + social_routing.eligible
+
+    if C.PRECLUSTER_ENABLED:
+        innovation = [row for row in classified if row.get("_opp_type") == "新品创新"]
+        non_innovation = [row for row in classified if row.get("_opp_type") != "新品创新"]
+        clustered = precluster.cluster_claims(innovation, ctx)
+        if clustered["stats"]["claim_empty"]:
+            raise RuntimeError("探针中 G4 放行了空 claim")
+        clustered_rows = [
+            row for members in clustered["clusters"].values() for row in members
+        ]
+        return routing.route_classified_evidence(non_innovation + clustered_rows)
+    return routing.route_classified_evidence(classified)
+
+
 def run_script_path(ctx) -> None:
     """脚本路径：直接调 pipeline 的函数，与 run_generate.py 同一套实现。"""
-    routed = routing.route_evidence_by_lifecycle(db.generation_pool())
+    routed = _route_current_generation_pool(ctx)
 
     old_buckets = [(bucket, items) for bucket, items in routed.buckets.items()
                    if bucket.opp_type == "老品迭代"]
@@ -221,12 +251,12 @@ def run_script_path(ctx) -> None:
     pipeline.persist_opportunities([(o, items) for o in built], SMOKE_WEEK, ctx, verbose=True)
 
     new_buckets = [(bucket, items) for bucket, items in routed.buckets.items()
-                   if bucket.opp_type == "新品创新" and bucket.channel == "竞品对标"]
+                   if bucket.opp_type == "新品创新"]
     new_buckets.sort(key=lambda kv: -len(kv[1]))
     if not new_buckets:
-        raise RuntimeError("统一生成池中没有可用的新品创新·竞品对标桶")
+        raise RuntimeError("统一生成池中没有可用的新品创新桶")
     new_bucket, rows = new_buckets[0][0], new_buckets[0][1][:8]
-    print(f"[新品创新] 竞品对标 n={len(rows)}")
+    print(f"[新品创新] {new_bucket.topic} n={len(rows)}")
     if rows:
         for row in rows:
             row.setdefault("_opp_type", new_bucket.opp_type)
@@ -265,26 +295,8 @@ def run_script_path(ctx) -> None:
     print(f"  放行: {lifecycle.release_to_pm()}")
 
 
-def run_dagster_path() -> None:
-    """Dagster 路径：物化一个周分区。四个缺口都藏在这条路径里，必须单独覆盖。"""
-    week = db.q1("SELECT max(week) FROM voc_run_log WHERE stage='ingest'") or "2026-W33"
-    y, w = week.split("-W")
-    from datetime import datetime
-    key = datetime.fromisocalendar(int(y), int(w), 1).strftime("%Y-%m-%d")
-    cmd = ["dagster", "asset", "materialize", "-m", "voc_analytics.definitions",
-           "--select", "opportunities_by_lifecycle,cross_source_merged,"
-                       "snapshots,release_to_pm", "--partition", key]
-    print(f"[Dagster] {' '.join(cmd)}")
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    print(r.stdout[-2500:] or "(无 stdout)")
-    if r.returncode:
-        print(r.stderr[-1500:])
-    chk("Dagster 物化成功", r.returncode == 0, f"exit={r.returncode}")
-
-
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dagster", action="store_true", help="改走 Dagster 资产路径")
     ap.add_argument("--keep", action="store_true", help="保留哨兵周产出以便人工查看")
     a = ap.parse_args()
 
@@ -294,18 +306,14 @@ def main() -> int:
     ctx = C.RunCtx(run_id=f"smoke_{int(t0)}", week=SMOKE_WEEK)
     llm.reset_usage()
 
-    print(f"=== 最小探针（{'Dagster' if a.dagster else '脚本'}路径）===\n")
+    print("=== 最小探针（手工脚本路径）===\n")
     try:
-        if a.dagster:
-            run_dagster_path()
-            week = db.q1("SELECT max(first_week) FROM voc_opportunity") or SMOKE_WEEK
-        else:
-            run_script_path(ctx)
-            week = SMOKE_WEEK
+        run_script_path(ctx)
+        week = SMOKE_WEEK
         print("\n=== 验收 ===")
         run_acceptance(week)
     finally:
-        if not a.keep and not a.dagster:
+        if not a.keep:
             print()
             cleanup()
 

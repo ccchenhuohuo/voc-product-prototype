@@ -57,7 +57,7 @@ def test_previously_revived_but_completed_issue_still_sinks():
     assert sort_issues(rows)[-1]["opp_id"] == "done"
 
 
-def test_board_excludes_spu_without_issues():
+def test_merged_board_keeps_spu_without_issues_for_all_view():
     spus = [
         {"spu": "with", "grade": "A", "negative_evi_count": 2,
          "positive_evi_count": 8},
@@ -66,7 +66,11 @@ def test_board_excludes_spu_without_issues():
     ]
     issues = [{"spu": "with", "opp_id": "o1", "evi_count": 2,
                "status": "考虑中", "tax_path": None}]
-    assert [card["spu"] for card in group_board(spus, issues)] == ["with"]
+    cards = group_board(spus, issues)
+    assert [card["spu"] for card in cards] == ["empty", "with"]
+    empty = next(card for card in cards if card["spu"] == "empty")
+    assert empty["issues"] == []
+    assert empty["top_issue"] is None
 
 
 def test_strategy_bars_use_current_result_maximum():

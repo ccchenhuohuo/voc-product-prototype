@@ -1,6 +1,7 @@
 """集中配置。所有密钥从环境变量注入，不落盘到仓库（PRD v8 §10.2）。"""
 from __future__ import annotations
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 
@@ -72,8 +73,26 @@ PG = dict(
 
 # ---- 业务口径（PRD v8 §1.2 / §4）----
 BRAND_OWN = "VIJIM"                    # 系统内本品代号
+# 库内本品白名单：分别是 Ulanzi / Joby / Falcam 的库内写法。
+# 2026-08-18 已对全库 brands 十个取值核实；G1 只认这三个值。
+OWN_BRANDS = ("VIJIM", "宙比", "小隼")
+# 证据正文里会同时出现公司品牌、英文名和中文名；主体归属校验统一视为本品。
+# 三个自有品牌各自的中英文写法都要在内：库内 brands 用中文（宙比/小隼），
+# 但作者名与正文里大量出现英文（JOBY Official / FALCAM小隼）。2026-08-18 实测
+# 缺英文名导致 403 条官号内容绕过 G3 漏进 G4。
+BRAND_OWN_ALIASES = (BRAND_OWN, "ULANZI", "优篮子", "宙比", "JOBY", "小隼", "FALCAM")
+# 社媒导出必须带齐的列；缺任一列都会让帖子线索字段整片为 NULL。
+SOCIAL_REQUIRED_COLUMNS = ("消息ID", "消息组ID", "消息类型", "父ID",
+                           "用户名称", "消息标题")
+SOCIAL_KEEP_TAGS = ("用户咨询", "用户使用体验")
+SOCIAL_DROP_TAGS = ("产品种草广告", "产品评测", "竞品拉踩", "二手转让")
+# G3 按作者名判官号；必须从上方同一份本品别名派生，
+# 避免白名单与官号口径各自漂移。PostgreSQL 使用 !~* 做大小写无关匹配。
+OFFICIAL_AUTHOR_PATTERN = "(?:" + "|".join(
+    re.escape(alias) for alias in BRAND_OWN_ALIASES
+) + ")"
 COMMENT_FILTER = {"本竞品": ["本品"]}    # 电商
-SOCIAL_FILTER = {"品牌": [BRAND_OWN]}   # 社媒（本竞品字段在社媒恒为空，见 §1.2）
+SOCIAL_FILTER = {"品牌": list(OWN_BRANDS)}  # 社媒（本竞品字段恒空）
 
 # 当前云听连接器的已注册抽取计划。生成与分类不读这个名单；
 # 新来源可以使用其他连接器写入同一事实层，只需在
@@ -84,11 +103,6 @@ INGEST_SOURCE_PLANS = (
     {"src_line": "社媒", "query_type": "SOCIAL",
      "tag_filter": SOCIAL_FILTER, "slice_days": 15},
 )
-
-# 内容标签分流（§4.4）。来源只负责提供内容；机会类型由生命周期分类决定。
-DEWATER_EXPERIENCE = {"用户使用体验"}
-DEWATER_GAP = {"用户咨询", "其他"}          # 需求缺口通道（"其他"首月抽检后再定）
-DEWATER_COMP = {"产品评测", "竞品拉踩"}     # 竞品对标通道
 
 # Stage 1 分批与投票（§5.5）
 BATCH_SIZE = 50
@@ -104,6 +118,28 @@ GENERATION_MAX_FAILED_RATIO = float(
 # 小桶（2~5 条）坏 1 条在比例上是 20%~50%，但那只是 1 条，不是系统性失败。
 GENERATION_MIN_FAILED_ABS = int(
     os.environ.get("VOC_GENERATION_MIN_FAILED_ABS", "2"))
+# 新增 grounding 闸门先以报告模式标定；显式开关后才参与重试/作废。
+GROUNDING_ENFORCE = os.environ.get(
+    "VOC_GROUNDING_ENFORCE", "0").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
+# C10/C11 的原文只有 13/10 字；C7/C8 的外语原文虽有 51/67 个字符，
+# 实际也只提供一个笼统故障。取 80 可覆盖这批已确认的低信息单证据，同时只
+# 限制标题/problem_mode 的新增实体，不限制忠实转述，也不改变 MIN_EVIDENCE。
+SHORT_EVIDENCE_CHARS = int(os.environ.get("VOC_SHORT_EVIDENCE_CHARS", "80"))
+# 只有全组结构化极性均达到此比例、且没有 low_conf，才启用极性反转提示。
+POLARITY_NONNEGATIVE_RATIO = 1.0
+# 【只认「正面」，不含「中性」】2026-08-17 真库 3934 条标定：把「中性」计入
+# 非负面时，polarity 命中 1062 条（27.0%），其中 769 条（72%）的证据极性全为
+# 中性，且 610 条来自需求缺口渠道——用户问「什么时候出 X」在情绪上就是中性，
+# 但那正是真实的诉求缺口。中性 ≠ 用户已满意，把两者等同是口径错误。
+# 收紧到只认「正面」后预计降到约 293 条（7.4%）。
+# 若将来要重新纳入中性，必须先给出「中性证据里确实不存在缺口」的独立证据。
+POLARITY_NONNEGATIVE = frozenset({"正面"})
+POLARITY_GAP_WORDS = (
+    "缺乏", "缺少", "不足", "过长", "过大", "过重", "无法", "不能",
+    "不支持", "失效", "断裂", "不居中", "偏移", "脱落", "损坏",
+)
 # 自洽性投票：M2 A/B 实测后【关闭】。两个 240+ 证据桶的对照结果——
 #   整体质量: 投票 47组/30%覆盖/15调用  vs  单次 33组/28%覆盖/5调用
 #   耐用性  : 投票 69组/51%覆盖/15调用  vs  单次 25组/49%覆盖/5调用
@@ -112,11 +148,36 @@ GENERATION_MIN_FAILED_ABS = int(
 # 保留实现与开关，M5 标定后可重新评估。
 VOTE_ENABLED = False
 MAX_GROUP_SIZE = 40        # 防最大团粘连
-MIN_EVIDENCE = {"老品迭代": 2, "新品创新": 1}    # §5.2
+# 仅作为 Stage1 提示词变量下发，**落库前没有任何程序校验**。
+# 2026-08-18 实测：老品迭代 159/875（18%）的机会点 evi_total=1，说明它从未
+# 真正生效。业务已确认不做程序筛选（单证据信号要保留、并在产品页可见），
+# 故此处保持现状；改动它不会改变落库结果，别误以为这是一道闸。
+MIN_EVIDENCE = {"老品迭代": 2, "新品创新": 1}    # §5.2（提示词用，非闸门）
 
-# 诉求门（§5.6）
-INTENT_PASS = 0.6
-INTENT_REVIEW = 0.4
+# G4 统一价值门：首票低置信或判为产品缺陷时追加两票。
+GATE_VOTE_CONF = float(os.environ.get("VOC_GATE_VOTE_CONF", "0.8"))
+GATE_VOTE_ENABLED = os.environ.get(
+    "VOC_GATE_VOTE_ENABLED", "1"
+).strip().casefold() not in {"0", "false", "no", "off"}
+
+# 新品创新诉求预聚类。阈值由三组实验共同标定：
+#   · mode_vec 全量扫描：0.10 最大簇 11 且语义纯净，0.20 炸成 986；
+#   · 196 条小样：Luna 同义对距离 0.018–0.075；
+#   · 5,015 条全量探针：0.06–0.15 区间结果稳定。
+# 2026-08-17 用探针那 777 条「需求缺口」真实 claim 的真实向量复算，逐簇复现：
+#   696 簇 / 37 个多成员簇 / 最大簇 24 / 659 单例。阈值扫描（k=20）显示
+#   0.04–0.15 是一整片平台（最大簇恒为 24，簇数 720→653 平滑下降），
+#   悬崖在 0.20（最大簇 76）与 0.25（最大簇 198）。0.10 落在平台中部。
+# 注：同一 claim 文本重复调用 embedding 不是逐位确定的（实测分量偏差
+#   ~6e-4、余弦距离偏差 ~1e-6），比阈值低五个数量级，不影响分簇。
+# 改 PRECLUSTER_COS 时必须同时更新上述依据，不得只改数字。
+PRECLUSTER_ENABLED = os.environ.get(
+    "VOC_PRECLUSTER_ENABLED", "1").strip().casefold() not in {
+        "0", "false", "no", "off",
+    }
+PRECLUSTER_COS = 0.10
+PRECLUSTER_K = 20
+PRECLUSTER_MAX = MAX_GROUP_SIZE
 
 # 去重（§6.3）
 L2_TOPK_MIN, L2_TOPK_MAX, L2_TOPK_RATIO = 3, 10, 0.3

@@ -24,12 +24,12 @@
   <script defer src="{{ url_for('static', path='/app.js') }}"></script>
 </head>
 {% set shell = nav_counts if nav_counts is defined else shell_counts() %}
-{% set iter_count = shell.iter if shell.iter is defined else (shell.board if shell.board is defined else 0) %}
+{% set iter_count = shell.iter if shell.iter is defined else 0 %}
 {% set inno_count = shell.inno if shell.inno is defined else 0 %}
 {% set strategy_count = shell.strategy if shell.strategy is defined else 0 %}
-{% set search_count = shell.search if shell.search is defined else 0 %}
 {% set revived_count = shell.revived if shell.revived is defined else 0 %}
-{% set sidebar_user_name = current_user.name if current_user is defined and current_user.name is defined else '当前用户' %}
+{% set signed_in = current_user is defined and current_user %}
+{% set sidebar_user_name = current_user.name if signed_in else '未登录' %}
 {% set current_path = request.url.path %}
 {% set iter_on = current_path == '/iter' or current_path.startswith('/spu/') or current_path.startswith('/issue/') %}
 {% set inno_on = current_path == '/inno' or current_path.startswith('/inno/') %}
@@ -37,31 +37,27 @@
   <div class="shell">
     <aside class="sb">
       <div class="brand">VOC 机会看板</div>
-      <a class="nav{% if current_path == '/' %} on{% endif %}" href="/">
+      <a class="nav nav-lv1{% if current_path == '/' %} on{% endif %}" href="/">
         <span>首页</span>
       </a>
-      <a class="nav{% if iter_on %} on{% endif %}{% if revived_count %} alarm{% endif %}" href="/iter">
-        <span>老品迭代</span><span class="nc">{{ iter_count }}{% if revived_count %} · {{ revived_count }}⟳{% endif %}</span>
+      <a class="nav nav-lv2{% if iter_on %} on{% endif %}{% if revived_count %} alarm{% endif %}" href="/iter">
+        <span>老品迭代</span><span class="nc">{{ iter_count }}</span>
       </a>
-      <a class="nav{% if inno_on %} on{% endif %}" href="/inno">
+      <a class="nav nav-lv2{% if inno_on %} on{% endif %}" href="/inno">
         <span>新品创新</span><span class="nc">{{ inno_count }}</span>
       </a>
-      <a class="nav{% if current_path == '/strategy' %} on{% endif %}" href="/strategy">
+      <a class="nav nav-lv2{% if current_path == '/strategy' %} on{% endif %}" href="/strategy">
         <span>战略视图</span><span class="nc">{{ strategy_count }}</span>
       </a>
-      <a class="nav{% if current_path == '/search' %} on{% endif %}" href="/search">
-        <span>产品检索</span><span class="nc">{{ search_count }}</span>
+      <a class="nav nav-lv1{% if current_path == '/architecture' %} on{% endif %}" href="/architecture">
+        <span>数据架构</span>
       </a>
       <div class="sb-footer">
-        <div class="sb-note">
-          <span class="kbd">J</span> <span class="kbd">K</span> 移动 ·
-          <span class="kbd">↵</span> 进入 · <span class="kbd">Esc</span> 返回
-        </div>
         <div class="user-area">
           <div class="user-popover" data-user-popover role="dialog" aria-label="用户与外观" hidden>
             <div class="user-summary">
               <strong>{{ sidebar_user_name }}</strong>
-              <span>角色 / 邮箱待接入</span>
+              <span>{% if signed_in %}飞书已登录{% else %}仅查看{% endif %}</span>
             </div>
             <div class="appearance-row">
               <span class="appearance-label">外观</span>
@@ -72,7 +68,7 @@
               </div>
             </div>
             <div class="user-divider"></div>
-            <button class="logout-placeholder" type="button" disabled>退出登录 <span>待接入</span></button>
+            {% if signed_in %}<a class="logout-link" href="/auth/logout">退出登录 <span>{{ sidebar_user_name }}</span></a>{% else %}<a class="logout-link" href="/auth/login?next={{ request.url.path }}">用飞书登录</a>{% endif %}
           </div>
           <button class="user-trigger" type="button" data-user-toggle aria-haspopup="dialog" aria-expanded="false">
             <span class="user-avatar" aria-hidden="true">{{ sidebar_user_name[:1] }}</span>

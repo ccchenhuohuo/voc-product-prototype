@@ -15,13 +15,19 @@ class Classification:
 
 
 def _has_spu(evidence: Mapping[str, object]) -> bool:
-    """与 PostgreSQL ``cardinality(spu) > 0`` 同口径。"""
-    spu = evidence.get("spu")
-    if spu is None:
-        return False
-    if not isinstance(spu, (list, tuple)):
-        raise ValueError(f"证据 spu 必须是数组或 None，实得 {type(spu).__name__}")
-    return len(spu) > 0
+    """与 PostgreSQL ``spu ∪ spu_inherited`` 非空同口径。"""
+    has_value = False
+    for field in ("spu", "spu_inherited"):
+        values = evidence.get(field)
+        if values is None:
+            continue
+        if not isinstance(values, (list, tuple)):
+            raise ValueError(
+                f"证据 {field} 必须是数组或 None，"
+                f"实得 {type(values).__name__}"
+            )
+        has_value = has_value or len(values) > 0
+    return has_value
 
 
 def classify_evidence(evidence: Iterable[Mapping[str, object]]) -> Classification:

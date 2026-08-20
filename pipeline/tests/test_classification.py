@@ -33,6 +33,18 @@ class ClassificationTest(unittest.TestCase):
         self.assertEqual(classify_evidence(evidence).classify_rule, "R1")
         self.assertEqual(classify_evidence(evidence).opp_type, "老品迭代")
 
+    def test_r1_accepts_inherited_spu_without_mutating_fact_spu(self) -> None:
+        evidence = [{
+            "source_requires_spu": False,
+            "spu": [],
+            "spu_inherited": ["SPU-INHERITED"],
+        }]
+        self.assertEqual(
+            classify_evidence(evidence),
+            Classification("老品迭代", "确定", "R1"),
+        )
+        self.assertEqual(evidence[0]["spu"], [])
+
     def test_r2_social_without_spu_is_innovation(self) -> None:
         result = classify_evidence(
             [{"source_requires_spu": False, "spu": []}]
@@ -59,6 +71,14 @@ class ClassificationTest(unittest.TestCase):
             classify_evidence(
                 [{"source_requires_spu": False, "spu": "SPU-A"}]
             )
+
+    def test_inherited_spu_has_the_same_array_type_contract(self) -> None:
+        with self.assertRaisesRegex(ValueError, "spu_inherited 必须是数组"):
+            classify_evidence([{
+                "source_requires_spu": False,
+                "spu": [],
+                "spu_inherited": "SPU-A",
+            }])
 
     def test_source_policy_is_required_even_when_spu_is_present(self) -> None:
         with self.assertRaisesRegex(ValueError, "缺少 source_requires_spu"):

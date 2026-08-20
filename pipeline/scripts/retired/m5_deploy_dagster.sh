@@ -1,3 +1,4 @@
+exit 1
 #!/usr/bin/env bash
 # M5：部署独立 Dagster 实例（PRD v8 §8.2）
 # 用法：cd /home/sdy/voc-analytics && bash scripts/m5_deploy_dagster.sh

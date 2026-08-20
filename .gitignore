@@ -2,6 +2,7 @@
 .mcp.json
 .env
 .env.*
+!system/.env.example
 
 # Python environments, bytecode, and test caches
 *.venv/

@@ -20,31 +20,20 @@ def topk(n_candidates: int) -> int:
 
 
 # ---------------------------------------------------------------- L1
-def l1_candidates(core_tag: str, opp_type: str,
-                  channel: str | None) -> list[dict]:
-    """按生命周期选择 L1 键；来源名称永远不参与分支。"""
-    if opp_type == "老品迭代":
-        sql = """SELECT opp_id, problem_mode, title, rep_snippets, mode_vec::text AS vec,
-                        safety_flag, evi_total
-                   FROM voc_opportunity
-                  WHERE core_tag IS NOT DISTINCT FROM %s
-                    AND opp_type IS NOT DISTINCT FROM %s
-                    AND classification_state = '确定'
-                    AND merged_into IS NULL"""
-        params: list = [core_tag, opp_type]
-    elif opp_type == "新品创新":
-        sql = """SELECT opp_id, problem_mode, title, rep_snippets, mode_vec::text AS vec,
-                        safety_flag, evi_total
-                   FROM voc_opportunity
-                  WHERE channel IS NOT DISTINCT FROM %s
-                    AND core_tag IS NOT DISTINCT FROM %s
-                    AND opp_type IS NOT DISTINCT FROM %s
-                    AND classification_state = '确定'
-                    AND merged_into IS NULL"""
-        params = [channel, core_tag, opp_type]
-    else:
+def l1_candidates(core_tag: str, opp_type: str) -> list[dict]:
+    """两个生命周期统一使用 ``(opp_type, core_tag)`` L1 键。"""
+    if opp_type not in {"老品迭代", "新品创新"}:
         raise ValueError(f"未知机会类型：{opp_type!r}")
-    return db.q(sql, params)
+    return db.q(
+        """SELECT opp_id, problem_mode, title, rep_snippets, mode_vec::text AS vec,
+                  safety_flag, evi_total
+             FROM voc_opportunity
+            WHERE core_tag IS NOT DISTINCT FROM %s
+              AND opp_type IS NOT DISTINCT FROM %s
+              AND classification_state = '确定'
+              AND merged_into IS NULL""",
+        [core_tag, opp_type],
+    )
 
 
 def _parse_vec(s: str | None) -> list[float] | None:
@@ -86,7 +75,7 @@ def l3_verdict(new_mode: str, new_title: str, new_snips: Sequence[str],
 
 def resolve_one(new: dict, ctx) -> dict:
     """对一个新产出的机会点做消解。返回 {action, opp_id, proposals}"""
-    cands = l1_candidates(new["core_tag"], new["opp_type"], new.get("channel"))
+    cands = l1_candidates(new["core_tag"], new["opp_type"])
     if not cands:
         ctx.metric_incr(("resolve",), l1_empty=1)
         return {"action": "create", "opp_id": None, "proposals": []}
@@ -158,7 +147,7 @@ def cross_source_merge(opp_id: str, mode_vec: Sequence[float], opp_type: str,
         if not remaining:
             break
         rows = db.q("""
-          SELECT oe.message_id, oe.seq, m.spu,
+          SELECT oe.message_id, oe.seq, m.spu, m.spu_inherited,
                  p.requires_spu AS source_requires_spu
             FROM voc_opp_evidence oe
             JOIN voc_message m USING (message_id)

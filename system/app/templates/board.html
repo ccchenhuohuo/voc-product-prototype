@@ -5,12 +5,37 @@
 {% block content %}
 <header class="head">
   <h1>老品迭代</h1>
-  <nav class="tabs" aria-label="队列视图">
-    <a class="tab{% if not selected_filter %} on{% endif %}" href="{{ query_url(request, filter=none) }}">全部 <span class="n">{{ shell.iter if shell.iter is defined else cards|length }}</span></a>
-    <a class="tab{% if selected_filter == 'revived' %} on{% endif %}" href="{{ query_url(request, filter='revived') }}">待复议 <span class="n">{{ shell.revived if shell.revived is defined else 0 }}</span></a>
-    <button class="tab" type="button" disabled title="待接入认证后可用">我负责的 <span class="n">—</span></button>
+  <nav class="tabs" aria-label="状态筛选">
+    <a class="tab{% if selected_filter == 'tracked' %} on{% endif %}" href="{{ query_url(request, filter=none) }}">有跟踪中问题 <span class="n">默认</span></a>
+    <a class="tab{% if selected_filter == 'revived' %} on{% endif %}" href="{{ query_url(request, filter='revived') }}">曾复活 <span class="n">{{ shell.revived if shell.revived is defined else 0 }}</span></a>
+    <a class="tab{% if selected_filter == 'all' %} on{% endif %}" href="{{ query_url(request, filter='all') }}">全部 <span class="n">{{ shell.products if shell.products is defined else cards|length }}</span></a>
   </nav>
 </header>
+<div class="filterbar">
+  <form class="search" method="get" action="/iter">
+    <span class="dim">/</span>
+    <input id="q" type="search" name="q" placeholder="SPU 编号、品名、SKU" value="{{ filters.q }}" data-instant-search>
+    <input type="hidden" name="filter" value="{{ selected_filter }}">
+    {% if filters.category %}<input type="hidden" name="category" value="{{ filters.category }}">{% endif %}
+    {% if sorting.key %}<input type="hidden" name="sort" value="{{ sorting.key }}"><input type="hidden" name="dir" value="{{ sorting.dir }}">{% endif %}
+  </form>
+  <section class="tag-tree" aria-label="品类筛选">
+    <div class="tag-levels">
+      <div class="tag-level" data-tag-level="category">
+        <div class="tag-level-title">品类</div>
+        <div class="tag-options">
+          <a class="f tag-option{% if not filters.category %} on{% endif %}"
+             href="{{ query_url(request, category=None) }}">全部<span class="n2">{{ facets.category.get('__all__', shell.products if shell.products is defined else cards|length) }}</span></a>
+          {% for value in categories %}
+            <a class="f tag-option{% if filters.category == value %} on{% endif %}"
+               href="{{ query_url(request, category=None if filters.category == value else value) }}">{{ value }}<span class="n2">{{ facets.category.get(value, 0) }}</span></a>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
 <div class="scroll">
   <table>
     <thead><tr>
@@ -21,34 +46,38 @@
       {{ M.sort_header(request, sorting, '负面证据', 'evidence', align='r', width='84px') }}
       {{ M.sort_header(request, sorting, '均星', 'star', align='r', width='52px') }}
       {{ M.sort_header(request, sorting, '待办/总', 'issues', align='r', width='62px') }}
-      <th style="width:34%">头号问题</th>
-      <th class="r" style="width:74px">近60天</th>
+      <th style="width:25%">头号问题</th>
+      <th class="r" style="width:82px">原声</th>
+      <th class="r" style="width:62px">近60天</th>
     </tr></thead>
     <tbody>
     {% for card in cards %}
+      {% set social_only = not card.has_ec %}
       {% set ratio = card.negative_ratio|default(0, true) %}
-      {% set ratio_alarm = ratio >= 0.20 %}
+      {% set ratio_alarm = not social_only and ratio >= 0.20 %}
       {% set neg = card.negative_evi_count|default(0, true) %}
       {% set avg = card.avg_star|default(none, true) %}
       {% set total = card.issue_count if card.issue_count is defined and card.issue_count is not none else card.issues|length %}
       {% set opened = card.open_issue_count if card.open_issue_count is defined and card.open_issue_count is not none else total %}
       {% set recent = card.recent_evi_count|default(0, true) %}
+      {% set raw_count = card.raw_voice_count|default(0, true) %}
       {% set top = card.top_issue if card.top_issue is defined and card.top_issue else (card.issues[0] if card.issues else none) %}
-      {% set revived = top and top.status == '考虑中' and top.revived_at is not none %}
+      {% set revived = card.has_revived_issue|default(false, true) %}
       <tr class="{% if loop.first %}sel {% endif %}{% if revived %}flag{% endif %}"
           tabindex="0" data-spu="{{ card.spu }}" data-href="/spu/{{ card.spu }}">
         <td class="mark">{% if top %}{{ M.status_mark(top.status, top.revived_at, top.mark_class) }}{% else %}<span class="mk mk-none"></span>{% endif %}</td>
-        <td><div class="nm">{{ product_name(card) }}</div><div class="sub"><span class="code">{{ card.spu }}</span> · {{ card.category or card.prod_line or '—' }} · {{ card.launch_period or '—' }}</div></td>
-        <td class="n dim">{{ (card.grade or '—')|replace('级', '') }}</td>
-        <td class="r"><span class="n-lg{% if ratio_alarm %} alarm-text{% endif %}">{{ '%.1f'|format(ratio * 100) }}</span><span class="dim n" style="font-size:10.5px">%</span></td>
-        <td class="r"><span class="bar{% if ratio_alarm %} hot{% endif %}" style="--w:{{ (neg * 100 / max_negative)|round if max_negative else 0 }}"><span class="n">{{ neg|num }}</span></span></td>
-        <td class="r n{% if avg is none or avg >= 4 %} dim{% else %} alarm-text{% endif %}">{{ avg|num }}</td>
+        <td><div class="nm">{{ product_name(card) }}</div><div class="sub"><span class="code">{{ card.spu }}</span> · {% if social_only %}<span class="social-only">仅社媒信号</span> · —{% else %}{{ card.category or card.prod_line or '—' }}{% endif %} · {{ card.launch_period or '—' }}</div></td>
+        <td class="n dim">{{ '—' if social_only else (card.grade or '—')|replace('级', '') }}</td>
+        <td class="r">{% if social_only %}<span class="dim">—</span>{% else %}<span class="n-lg{% if ratio_alarm %} alarm-text{% endif %}">{{ '%.1f'|format(ratio * 100) }}</span><span class="dim n" style="font-size:10.5px">%</span>{% endif %}</td>
+        <td class="r">{% if social_only %}<span class="dim">—</span>{% else %}<span class="bar{% if ratio_alarm %} hot{% endif %}" style="--w:{{ (neg * 100 / max_negative)|round if max_negative else 0 }}"><span class="n">{{ neg|num }}</span></span>{% endif %}</td>
+        <td class="r n{% if avg is none or avg >= 4 %} dim{% else %} alarm-text{% endif %}">{{ '—' if social_only else avg|num }}</td>
         <td class="r n dim">{{ opened }}/{{ total }}</td>
         <td class="tight"><span style="font-size:12px">{{ top.display_title if top else '—' }}</span></td>
+        <td class="r">{% if raw_count %}<span class="voice-count">原声 {{ raw_count|num }}</span>{% elif not top %}<span class="clean-signal">无信号</span>{% else %}<span class="dim">—</span>{% endif %}</td>
         <td class="r n{% if not recent %} dim{% endif %}">{{ recent if recent else '·' }}</td>
       </tr>
     {% else %}
-      <tr><td class="empty" colspan="9">{% if selected_filter == 'revived' %}当前没有待复议的条目{% else %}当前没有需要处理的产品。{% endif %}</td></tr>
+      <tr><td class="empty" colspan="10">{% if selected_filter == 'revived' %}当前没有曾复活的产品。{% elif selected_filter == 'tracked' %}当前没有正在跟踪的问题产品。{% else %}没有匹配的产品。{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>

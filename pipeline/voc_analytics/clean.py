@@ -156,6 +156,14 @@ def scalar(v: Any) -> str | None:
     return s or None
 
 
+def plain_text(v: Any) -> str | None:
+    """不带数组语义的普通文本字段；只去首尾空白。"""
+    if v is None:
+        return None
+    text = str(v).strip()
+    return text or None
+
+
 def first_value(v: Any) -> str | None:
     """多值导出字段需要单值语义时取首值，不能把列表逗号拼进 text 列。"""
     values = parse_array(v)
@@ -253,6 +261,7 @@ def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str]) -
     except (TypeError, ValueError):
         inter_i = None
     spu_fields = clean_spu_codes(row.get("SPU_"))
+    is_social = src_line == "社媒"
     return {
         "message_id": row.get("消息ID"),
         "src_line": src_line,
@@ -275,7 +284,20 @@ def to_message(row: dict, src_line: str, batch_id: str, dewater_all: set[str]) -
         "country": norm_country(row.get("国家_")),
         "lang": scalar(row.get("语种")),
         "interactions": inter_i,
+        # 云听有两级情感：整段 MessageSentiment 与按标签切分的 TagSentiment。
+        # 片段级早已入 voc_evidence.sentiment 并参与电商生成池筛选；整段级
+        # 此前一直丢弃。先存不筛：G4 读全文自行判断，这列留给
+        # 「整段负面但片段正面」类交叉校验（网袋误判正是这种形态）。
+        "msg_sentiment": scalar(row.get("消息情感")),
         "brands": parse_array(row.get("品牌_")),
         "content_type": ctype,
+        # 云听的社媒帖子线索字段。电商行显式写 NULL，不用
+        # 空字符串伪造一个可分组的 id。spu_inherited 不从导出映射，
+        # 由入库后的幂等回填函数单独维护。
+        "message_group_id": plain_text(row.get("消息组ID")) if is_social else None,
+        "message_type": plain_text(row.get("消息类型")) if is_social else None,
+        "parent_id": plain_text(row.get("父ID")) if is_social else None,
+        "author_name": plain_text(row.get("用户名称")) if is_social else None,
+        "message_title": plain_text(row.get("消息标题")) if is_social else None,
         "pull_batch_id": batch_id,
     }

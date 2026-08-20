@@ -1,0 +1,523 @@
+{% extends "base.html" %}
+{% block title %}数据架构 · VOC{% endblock %}
+{% block body_class %}arch-page{% endblock %}
+{% block content %}
+<header class="head">
+  <h1>数据架构</h1>
+  <p class="lede">从云听的一条原始声音，到看板上的一张卡，中间经过的每一道门、每一次聚合与判定。</p>
+</header>
+<div class="scroll">
+
+  <div class="grp"><h2>总览</h2><span class="r">两条独立管道，只共享入池</span></div>
+  <p class="prose">
+    系统有两条互不干涉的加工管道，分别供给两个页面。它们只共享前半段的入池筛选；
+    一旦分流，就不再有任何交互——不跨管道合并、不跨管道去重。
+    分流的依据只有一条：<b>这条声音能不能落到一个具体的产品上。</b>
+  </p>
+
+  <figure class="arch-fig">
+    <svg viewBox="0 0 900 240" role="img" aria-labelledby="ov-t">
+      <title id="ov-t">总览：声音入池后，按能否落到具体产品分流为老品迭代与新品创新两条管道</title>
+      <defs>
+        <marker id="ar-ov" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor" stroke="none"/>
+        </marker>
+      </defs>
+
+      <rect class="bx" x="8" y="96" width="126" height="60"/>
+      <text x="71" y="120">云听原始数据</text>
+      <text x="71" y="138" class="sm">电商评论 · 社媒内容</text>
+
+      <path class="fl" d="M138 126 H164" marker-end="url(#ar-ov)"/>
+
+      <rect class="bx key" x="170" y="91" width="140" height="70"/>
+      <text x="240" y="115">G 系列 · 入池</text>
+      <text x="240" y="133" class="sm">层层筛掉噪音</text>
+      <text x="240" y="149" class="sm">两条管道共享此段</text>
+
+      <path class="fl" d="M314 126 H340 V66 H424" marker-end="url(#ar-ov)"/>
+      <path class="fl" d="M314 126 H340 V186 H424" marker-end="url(#ar-ov)"/>
+      <text x="382" y="58" class="sm">能落到产品</text>
+      <text x="382" y="204" class="sm">落不到产品</text>
+
+      <rect class="bx iter" x="430" y="36" width="170" height="60"/>
+      <text x="515" y="60">老品迭代管道</text>
+      <text x="515" y="78" class="sm">核心是 L 系列</text>
+
+      <rect class="bx inno" x="430" y="156" width="170" height="60"/>
+      <text x="515" y="180">新品创新管道</text>
+      <text x="515" y="198" class="sm">核心是 G 系列</text>
+
+      <path class="fl" d="M604 66 H630" marker-end="url(#ar-ov)"/>
+      <path class="fl" d="M604 186 H630" marker-end="url(#ar-ov)"/>
+
+      <rect class="bx" x="634" y="36" width="258" height="60"/>
+      <text x="763" y="60">老品迭代页</text>
+      <text x="763" y="78" class="sm">这个产品现在有哪些问题</text>
+
+      <rect class="bx" x="634" y="156" width="258" height="60"/>
+      <text x="763" y="180">新品创新页</text>
+      <text x="763" y="198" class="sm">用户在要什么我们还没有的</text>
+    </svg>
+  </figure>
+
+  <div class="grp"><h2>G 系列 · 入池</h2><span class="r">决定什么声音有资格进入分析</span></div>
+  <p class="prose">
+    原始数据里绝大多数内容不该进入分析：广告种草、第三方评测、竞品讨论、纯夸赞、问价问货。
+    入池阶段负责把它们挡在外面。两个数据源的噪音结构不同，各走各的契约。
+  </p>
+
+  <div class="arch-cols">
+    <div class="arch-col">
+      <h3>电商评论 · 单一契约</h3>
+      <p class="prose">四个条件同时成立才入池：命中产品相关标签、情感为负面、原声片段非空、
+        且必须带有云听标注的商品编号。电商评论天生附着在某个商品下，
+        品牌与来源都无需再判，因此不走后面的五道门。</p>
+    </div>
+    <div class="arch-col">
+      <h3>社媒内容 · 五道门</h3>
+      <p class="prose">上下文复杂、噪音密度高。前三道门是结构判定，快且确定；
+        第四道才动用模型逐条读，成本集中在这里；第五道决定它流向哪条管道。
+        门与门之间是串联关系，任何一道不过即终止。</p>
+    </div>
+  </div>
+
+  <ol class="gate-list">
+    <li><b>G1 品牌白名单</b><span>只保留本品牌内容。品牌标签中一旦出现非本品品牌即排除——不维护竞品词表，未知品牌一律不进，宁可少收也不误收。</span></li>
+    <li><b>G1b 同组传染</b><span>一条评论所在的帖子若已判定为竞品内容，整组连同评论一起排除。避免竞品帖子底下的讨论被当成本品的用户声音。</span></li>
+    <li><b>G2 标签门</b><span>只保留「用户咨询」与「用户使用体验」两类；种草广告、产品评测、竞品拉踩、二手转让一票否决。</span></li>
+    <li><b>G3 官号门</b><span>剔除品牌自有账号发布的内容——官方口吻不是用户声音，且它天然满足前两道门，不专门挡就会大量漏进来。</span></li>
+    <li><b>G4 价值门</b><span>模型逐条判定为诉求缺口、产品缺陷或无价值。读的是完整正文而非片段；评论还会带上所在帖子的标题作为上下文，避免脱离语境误判。诉求也在这里被提炼成归一化短句。</span></li>
+    <li><b>G5 归属路由</b><span>按能否落到具体产品分流：能落到的进老品迭代；落不到的诉求进新品创新；落不到的缺陷因无法定位改哪个产品而终止。</span></li>
+  </ol>
+
+  <p class="prose">
+    「能落到产品」有两种成立方式：云听直接标注了商品编号，
+    或者虽无标注、但同一个帖子里的其他消息唯一地指向某个产品，由此推断得出。
+    <b>推断出的归属只用于挂载，不回写为事实标注</b>，两者在数据里始终可区分。
+  </p>
+
+  <div class="grp"><h2>老品迭代管道</h2><span class="r">L 系列：先圈定产品，再归纳问题</span></div>
+  <p class="prose">
+    这条管道回答的是「<b>这个产品现在有哪些问题、各有多少人在说</b>」。
+    使用场景是打开某个产品看它的问题清单，因此组织单位是产品——
+    问题依附于产品存在，<b>一张问题卡只属于一个产品</b>。
+  </p>
+
+  <figure class="arch-fig">
+    <svg viewBox="0 0 900 222" role="img" aria-labelledby="l-t">
+      <title id="l-t">老品迭代：证据先按产品圈定，再在每个产品内部各自聚合成问题卡</title>
+      <defs>
+        <marker id="ar-l" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor" stroke="none"/>
+        </marker>
+      </defs>
+
+      <rect class="bx" x="8" y="89" width="118" height="60"/>
+      <text x="67" y="113">入池证据</text>
+      <text x="67" y="131" class="sm">电商 + 社媒</text>
+
+      <path class="fl" d="M130 119 H160" marker-end="url(#ar-l)"/>
+
+      <rect class="bx key" x="164" y="84" width="136" height="70"/>
+      <text x="232" y="108">L1 · 产品圈定</text>
+      <text x="232" y="126" class="sm">按产品归拢证据</text>
+      <text x="232" y="142" class="sm">两来源天然混合</text>
+
+      <path class="fl" d="M304 119 H326 V61 H352" marker-end="url(#ar-l)"/>
+      <path class="fl" d="M304 119 H352" marker-end="url(#ar-l)"/>
+      <path class="fl" d="M304 119 H326 V177 H352" marker-end="url(#ar-l)"/>
+
+      <rect class="bx" x="356" y="36" width="112" height="50"/>
+      <text x="412" y="66" class="sm">产品 A 的证据</text>
+      <rect class="bx" x="356" y="94" width="112" height="50"/>
+      <text x="412" y="124" class="sm">产品 B 的证据</text>
+      <rect class="bx" x="356" y="152" width="112" height="50"/>
+      <text x="412" y="182" class="sm">产品 C 的证据</text>
+
+      <path class="fl" d="M472 61 H500" marker-end="url(#ar-l)"/>
+      <path class="fl" d="M472 119 H500" marker-end="url(#ar-l)"/>
+      <path class="fl" d="M472 177 H500" marker-end="url(#ar-l)"/>
+
+      <rect class="bx iter" x="504" y="36" width="120" height="50"/>
+      <text x="564" y="57" class="sm">L2 · 组内聚合</text>
+      <text x="564" y="74" class="sm">归纳失效模式</text>
+      <rect class="bx iter" x="504" y="94" width="120" height="50"/>
+      <text x="564" y="115" class="sm">L2 · 组内聚合</text>
+      <text x="564" y="132" class="sm">归纳失效模式</text>
+      <rect class="bx iter" x="504" y="152" width="120" height="50"/>
+      <text x="564" y="173" class="sm">L2 · 组内聚合</text>
+      <text x="564" y="190" class="sm">归纳失效模式</text>
+
+      <path class="fl" d="M628 61 H656" marker-end="url(#ar-l)"/>
+      <path class="fl" d="M628 119 H656" marker-end="url(#ar-l)"/>
+      <path class="fl" d="M628 177 H656" marker-end="url(#ar-l)"/>
+
+      <rect class="bx" x="660" y="36" width="232" height="50"/>
+      <text x="776" y="66" class="sm">问题卡 A1 · A2</text>
+      <rect class="bx" x="660" y="94" width="232" height="50"/>
+      <text x="776" y="124" class="sm">问题卡 B1</text>
+      <rect class="bx" x="660" y="152" width="232" height="50"/>
+      <text x="776" y="182" class="sm">问题卡 C1 · C2 · C3</text>
+
+      <text x="564" y="218" class="sm">每个产品独立进行，互不干涉</text>
+    </svg>
+  </figure>
+
+  <div class="arch-cols">
+    <div class="arch-col">
+      <h3>L1 · 圈定产品</h3>
+      <p class="prose">把每条证据归到它提及的产品名下，事实标注与组内推断在这一步等效使用。
+        电商与社媒因此天然混在同一个产品块里，<b>不存在「两边分开处理、事后再缝合」的环节</b>。</p>
+      <p class="prose">一条同时抱怨两个产品的评论，会同时成为两边的证据。
+        这不是重复计数，而是它的真实语义：这句话确实同时构成了对 A 和对 B 的抱怨。</p>
+    </div>
+    <div class="arch-col">
+      <h3>L2 · 归纳问题</h3>
+      <p class="prose">在每个产品内部，把散落的证据归纳成失效模式：
+        同一物理部位、同一失效机理、同一使用场景的抱怨，归为一个问题。
+        证据多的热门产品先粗切成几批分别归纳，再按模式语义把批间的同一问题并回来。</p>
+      <p class="prose">归纳出的问题随后生成标题、现象、归因与改进建议，并过一轮质量复核。
+        证据不足以支撑判断时判为无效，而不是勉强凑出一条。</p>
+    </div>
+  </div>
+
+  <p class="prose">
+    云听标签在这一步作为提示模型的参考特征，但<b>不充当硬性分组边界</b>。
+    两个数据源的标签词表并不完全重合，以标签划界会让同一个问题因为挂了不同标签而被拆成两条。
+    标签是预设的方向，语义才是这句话的真实含义。
+  </p>
+
+  <div class="grp"><h2>新品创新管道</h2><span class="r">G 系列：诉求归一化后按语义聚合</span></div>
+  <p class="prose">
+    这条管道回答的是「<b>用户在要什么我们还没有的东西</b>」。
+    它处理的是落不到任何现有产品的诉求，因此没有产品这个组织单位，
+    直接按诉求本身的语义聚合。
+  </p>
+
+  <figure class="arch-fig">
+    <svg viewBox="0 0 900 155" role="img" aria-labelledby="i-t">
+      <title id="i-t">新品创新：诉求先归一化为统一格式的短句，再按语义聚类成机会点</title>
+      <defs>
+        <marker id="ar-i" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor" stroke="none"/>
+        </marker>
+      </defs>
+
+      <rect class="bx" x="8" y="42" width="160" height="70"/>
+      <text x="88" y="66">落不到产品的诉求</text>
+      <text x="88" y="84" class="sm">全部来自社媒</text>
+      <text x="88" y="100" class="sm">缺陷在此终止</text>
+
+      <path class="fl" d="M172 77 H202" marker-end="url(#ar-i)"/>
+
+      <rect class="bx key" x="210" y="42" width="190" height="70"/>
+      <text x="305" y="66">诉求归一化</text>
+      <text x="305" y="84" class="sm">读完整正文，提炼成</text>
+      <text x="305" y="100" class="sm">「缺少 + 对象 + 能力」</text>
+
+      <path class="fl" d="M404 77 H434" marker-end="url(#ar-i)"/>
+
+      <rect class="bx inno" x="442" y="42" width="190" height="70"/>
+      <text x="537" y="66">语义聚类</text>
+      <text x="537" y="84" class="sm">近义诉求并为一条</text>
+      <text x="537" y="100" class="sm">阈值从严，宁漏勿错</text>
+
+      <path class="fl" d="M636 77 H666" marker-end="url(#ar-i)"/>
+
+      <rect class="bx" x="674" y="42" width="218" height="70"/>
+      <text x="783" y="66">机会点</text>
+      <text x="783" y="84" class="sm">生成标题与描述</text>
+      <text x="783" y="100" class="sm">挂载原声证据</text>
+    </svg>
+  </figure>
+
+  <div class="arch-cols">
+    <div class="arch-col">
+      <h3>为什么先归一化再聚类</h3>
+      <p class="prose">用户表达同一诉求的方式千差万别，且中英日西多语种混杂。
+        直接拿原文做语义比对，向量会被语种和表面措辞主导，
+        同一句诉求的中文版与英文版会被判成两件事。</p>
+      <p class="prose">先由模型读完整正文、提炼成统一格式的中文短句，再做聚类，
+        跨语种、跨说法的同一诉求才能被识别为同一件事。</p>
+    </div>
+    <div class="arch-col">
+      <h3>为什么阈值定得很紧</h3>
+      <p class="prose">聚合阈值设得紧，只合并近义表述。代价是同一诉求换个说法可能分成两条；
+        收益是不会把不同的诉求错误地并成一条。</p>
+      <p class="prose">对创新诉求而言，<b>错并的代价远高于漏并</b>——
+        错并会凭空造出一个没人真正提过的需求。
+        诉求本身长尾分散是它的固有特性，不是聚合没做好。</p>
+    </div>
+  </div>
+
+  <div class="grp"><h2>上下文注入</h2><span class="r">每次调模型，喂进去的到底是什么</span></div>
+  <p class="prose">
+    模型只能看见提示词里写了的东西。<b>喂什么、喂多少、按什么单位喂，决定了产出的上限</b>——
+    质量问题多数不是模型不行，而是它根本没拿到判断所需的信息。
+    全流程共四处调模型，各自的上下文构造如下。
+  </p>
+
+  <figure class="arch-fig">
+    <svg viewBox="0 0 900 268" role="img" aria-labelledby="c-t">
+      <title id="c-t">四处模型调用各自注入的上下文与来源字段</title>
+      <defs>
+        <marker id="ar-c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor" stroke="none"/>
+        </marker>
+      </defs>
+
+      <rect class="bx key" x="8" y="30" width="168" height="212"/>
+      <text x="92" y="54">证据池</text>
+      <text x="92" y="76" class="sm">云听切片与标签体系</text>
+      <text x="92" y="93" class="sm">片段 · 标签 · 语义路径</text>
+      <text x="92" y="110" class="sm">情感 · 是否产品相关</text>
+      <text x="92" y="134" class="sm">消息本体</text>
+      <text x="92" y="151" class="sm">原文 · 中译 · 星级</text>
+      <text x="92" y="168" class="sm">国家 · 平台 · 品牌 · 互动</text>
+      <text x="92" y="192" class="sm">帖子结构</text>
+      <text x="92" y="209" class="sm">消息组 · 类型 · 标题</text>
+      <text x="92" y="226" class="sm">产品归属 · 来源策略</text>
+
+      <path class="fl" d="M180 136 H204"/>
+      <path class="fl" d="M204 44 V230"/>
+      <path class="fl" d="M204 44 H236" marker-end="url(#ar-c)"/>
+      <path class="fl" d="M204 106 H236" marker-end="url(#ar-c)"/>
+      <path class="fl" d="M204 168 H236" marker-end="url(#ar-c)"/>
+      <path class="fl" d="M204 230 H236" marker-end="url(#ar-c)"/>
+
+      <rect class="bx" x="240" y="22" width="188" height="44"/>
+      <text x="334" y="40" class="sm">G4 价值门 · 按消息</text>
+      <text x="334" y="57" class="sm">完整正文 + 父帖标题 + 平台</text>
+
+      <rect class="bx iter" x="240" y="84" width="188" height="44"/>
+      <text x="334" y="102" class="sm">Stage1 模式切分 · 按批</text>
+      <text x="334" y="119" class="sm">桶上下文 + 逐条元数据 + 全文</text>
+
+      <rect class="bx iter" x="240" y="146" width="188" height="44"/>
+      <text x="334" y="164" class="sm">Stage2 写卡 · 按组</text>
+      <text x="334" y="181" class="sm">模式名 + 分布画像 + 全文</text>
+
+      <rect class="bx" x="240" y="208" width="188" height="44"/>
+      <text x="334" y="226" class="sm">Stage3/4 校验复核</text>
+      <text x="334" y="243" class="sm">产出物 + 原证据回读</text>
+
+      <path class="fl" d="M432 44 H468" marker-end="url(#ar-c)"/>
+      <path class="fl" d="M432 106 H468" marker-end="url(#ar-c)"/>
+      <path class="fl" d="M432 168 H468" marker-end="url(#ar-c)"/>
+      <path class="fl" d="M432 230 H468" marker-end="url(#ar-c)"/>
+
+      <rect class="bx" x="472" y="22" width="420" height="44"/>
+      <text x="682" y="40" class="sm">判定类别；诉求同时产出归一化短句</text>
+      <text x="682" y="57" class="sm">同一消息只判一次，判定结果按提示词版本入缓存</text>
+
+      <rect class="bx" x="472" y="84" width="420" height="44"/>
+      <text x="682" y="102" class="sm">每批 50 条证据 → 若干失效模式与成员编号</text>
+      <text x="682" y="119" class="sm">批间共现建图 → 最大团分解，单组封顶 40</text>
+
+      <rect class="bx" x="472" y="146" width="420" height="44"/>
+      <text x="682" y="164" class="sm">标题 · 现象 · 归因 · 建议 · problem_mode</text>
+      <text x="682" y="181" class="sm">校验不通过带约束重试，最多三轮</text>
+
+      <rect class="bx" x="472" y="208" width="420" height="44"/>
+      <text x="682" y="226" class="sm">引用逐字性、编造实体、无支撑程度词</text>
+      <text x="682" y="243" class="sm">不通过则打回重写</text>
+    </svg>
+  </figure>
+
+  <div class="arch-cols">
+    <div class="arch-col">
+      <h3>数据来自哪里</h3>
+      <p class="prose">全部上下文出自同一个证据池查询，三张表拼成：
+        云听切出的<b>证据行</b>（片段、标签、语义路径、情感、是否产品相关）、
+        证据所属的<b>消息</b>（原文、中译、星级、国家、平台、语种、品牌、互动量、品类、品名、
+        帖子组号、消息类型、父 ID、标题、产品归属）、以及<b>来源策略</b>（该来源是否要求必须挂产品）。</p>
+      <p class="prose">没有第二条取数路径。任何一处模型调用想要新字段，都得先进这个池子——
+        这样「模型看见了什么」永远等同于「池子里有什么」，可复现、可审计。</p>
+    </div>
+    <div class="arch-col">
+      <h3>为什么必须喂完整原文</h3>
+      <p class="prose">云听给出的片段是按标签切出的单句，脱离上下文常常不足以判断诉求主体。
+        实测有一条片段只有「正规大品牌的」六个字，模型据此生成出「品牌正规性背书」这种卡。
+        52 例 A/B 对照：只喂片段的硬伤率 17%，补上完整原文后降到 0%。</p>
+      <p class="prose">所以片段之后一律跟一段<b>【完整原文】</b>。同一条消息被切成多个片段时，
+        全文在一次提示词渲染里只出现一次，后续片段标注「同上条消息」——
+        既不重复烧 token，也不让模型误以为是几条独立的声音。</p>
+    </div>
+  </div>
+
+  <ol class="gate-list">
+    <li><b>G4 · 按消息</b><span>判定单位是消息不是证据行：一条消息被切成几个片段，它是不是有价值这件事只有一个答案。取文顺序为原文 → 证据文 → 片段 → 中译，截 4000 字。</span></li>
+    <li><b>G4 · 父帖标题</b><span>只有评论和回复带父帖标题，帖子和视频本身不带——它的标题就是自己，喂了是重复。父帖标题取同一帖子组内类型为帖子或视频、标题非空的那条。评论脱离父帖常常无法判断在说什么，这一条是误判的主要来源。</span></li>
+    <li><b>G4 · 二次投票</b><span>先判一票；置信度低于 0.8、或判成「产品缺陷」时，再补两票取多数。缺陷类加判是因为它下游直接生成问题卡，误判代价最高。</span></li>
+    <li><b>Stage1 · 桶上下文</b><span>批次开头给出品类、标签、语义路径，让模型知道这一桶证据大体在讲什么；逐条再给星级、国家、平台、品牌，最后是片段与完整原文。</span></li>
+    <li><b>Stage1 · 分批与合票</b><span>每批 50 条，全量证据都参与、不做截断。批内产出的模式记成员共现，跨批汇总成图后做最大团分解——不用连通分量，因为链式传递会把不同失效模式粘成一大组。单组封顶 40 条。</span></li>
+    <li><b>Stage2 · 分布画像</b><span>除模式名外，还给出该组的品类、标签、语义路径、1–2 星占比、互动量合计、证据条数、涉及国家与品名，让描述能落到具体分布上而不是泛泛而谈。</span></li>
+  </ol>
+
+  <div class="grp"><h2>向量用在哪</h2><span class="r">召回归向量，判定归模型</span></div>
+  <p class="prose">
+    全流程只有两处用到 embedding，逻辑完全不同。但它们共享同一条铁律：
+    <b>向量只负责把可能相关的候选捞出来，最终判定一律交给模型逐对判。</b>
+    这不是保守，是实测逼出来的——见下方「阈值为什么不可用」。
+  </p>
+
+  <figure class="arch-fig">
+    <svg viewBox="0 0 900 230" role="img" aria-labelledby="v-t">
+      <title id="v-t">embedding 的两处用法：新品创新的预聚类，与老品迭代的候选召回</title>
+      <defs>
+        <marker id="ar-v" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="currentColor" stroke="none"/>
+        </marker>
+      </defs>
+
+      <text x="70" y="26" class="sm">向量化对象</text>
+      <text x="300" y="26" class="sm">召回</text>
+      <text x="560" y="26" class="sm">判定</text>
+      <text x="790" y="26" class="sm">结果</text>
+
+      <rect class="bx inno" x="8" y="42" width="140" height="56"/>
+      <text x="78" y="66" class="sm">归一化诉求短句</text>
+      <text x="78" y="83" class="sm">原文与片段不入向量</text>
+
+      <path class="fl" d="M152 70 H186" marker-end="url(#ar-v)"/>
+
+      <rect class="bx" x="190" y="42" width="220" height="56"/>
+      <text x="300" y="60" class="sm">全量两两比距离，取阈值内</text>
+      <text x="300" y="77" class="sm">最近 20 个邻居连边</text>
+      <text x="300" y="92" class="sm">并查集求连通分量</text>
+
+      <path class="fl" d="M414 70 H448" marker-end="url(#ar-v)"/>
+
+      <rect class="bx" x="452" y="42" width="216" height="56"/>
+      <text x="560" y="66" class="sm">无模型判定</text>
+      <text x="560" y="83" class="sm">阈值从严，宁漏勿错</text>
+
+      <path class="fl" d="M672 70 H706" marker-end="url(#ar-v)"/>
+
+      <rect class="bx inno" x="710" y="42" width="182" height="56"/>
+      <text x="801" y="66" class="sm">新品创新的簇</text>
+      <text x="801" y="83" class="sm">唯一去重层</text>
+
+      <rect class="bx iter" x="8" y="140" width="140" height="56"/>
+      <text x="78" y="164" class="sm">问题陈述短句</text>
+      <text x="78" y="181" class="sm">与批次模式名</text>
+
+      <path class="fl" d="M152 168 H186" marker-end="url(#ar-v)"/>
+
+      <rect class="bx" x="190" y="140" width="220" height="56"/>
+      <text x="300" y="158" class="sm">在候选块内按余弦排序</text>
+      <text x="300" y="175" class="sm">取前 3–10 条</text>
+      <text x="300" y="190" class="sm">不设通过阈值</text>
+
+      <path class="fl" d="M414 168 H448" marker-end="url(#ar-v)"/>
+
+      <rect class="bx key" x="452" y="140" width="216" height="56"/>
+      <text x="560" y="164" class="sm">模型逐对判同异</text>
+      <text x="560" y="181" class="sm">判定权全在这里</text>
+
+      <path class="fl" d="M672 168 H706" marker-end="url(#ar-v)"/>
+
+      <rect class="bx iter" x="710" y="140" width="182" height="56"/>
+      <text x="801" y="164" class="sm">挂到既有卡或新建</text>
+      <text x="801" y="181" class="sm">多命中转人工提案</text>
+
+      <text x="450" y="222" class="sm">两处共用一条铁律：向量召回，模型判定</text>
+    </svg>
+  </figure>
+
+  <div class="arch-cols">
+    <div class="arch-col">
+      <h3>一 · 新品创新的预聚类</h3>
+      <p class="prose"><b>只有归一化后的诉求短句进向量</b>，用户原文、云听片段、机器中译一律不进——
+        它们带着语种与措辞噪音，会把向量拉向表达方式而不是诉求本身。</p>
+      <p class="prose">按消息去重后建 k 近邻图：每个短句只与距离在阈值内的对象连边，
+        且只保留最近的 20 个，再用并查集求连通分量。
+        限制邻居数是为了防链式粘连——不限的话，一串两两勉强相似的短句会被串成一个巨簇。</p>
+      <p class="prose">簇过大时阈值自动收紧、最多重切三轮；仍超限就按距离升序做受限强制切分。
+        向量化失败的短句各自成为单例簇，<b>有明确终态，不静默丢弃</b>。
+        簇号由成员列表哈希得出，同样的输入必然得到同样的簇号。</p>
+    </div>
+    <div class="arch-col">
+      <h3>二 · 老品迭代的候选召回</h3>
+      <p class="prose">两个子场景。<b>跨轮消解</b>：新产出的问题卡要判断是挂到既有卡上还是新建，
+        先按身份键圈出候选，再按问题陈述短句的向量排序取前 3–10 条，
+        逐对交模型判同异；判「同」的最高置信者挂载，同时命中多条则转人工提案，
+        安全类一律不自动合并。</p>
+      <p class="prose"><b>跨批归并</b>：一个产品证据太多被切成几批，各批各自命名了模式，
+        把模式名向量化，余弦足够高的一对再交模型确认是否同义，同义才合并。
+        两个硬约束不能去掉：合并后仍受单组 40 条上限（早期无上限，把几个 40 人组滚成 88 人，
+        Stage2 拿到 88 条证据只描述了 1 条，其余全靠编）；
+        兜底名「未命名模式」不参与合并，它语义空泛，和什么都像，会变成吸附器。</p>
+    </div>
+  </div>
+
+  <dl class="arch-dl">
+    <dt>阈值为什么不可用</dt>
+    <dd>向量<b>排序</b>极准——实测 15 个待判条目，正确答案全部排在第一位。
+      但<b>阈值</b>不可用：应该挂载的那批，相似度最低到 0.656；应该新建的那批，相似度最高到 0.706。
+      两个分布是重叠的，切在哪儿都会同时产生误挂和误建。
+      所以召回与判定必须分家：向量排序把候选压到十条以内，省掉几百次模型调用；
+      判定交给模型逐对读问题陈述、标题与代表原声，它能看见向量看不见的语义差别。</dd>
+
+    <dt>被向量化的那句话必须具体</dt>
+    <dd>问题卡上有一个字段专供向量化，它不给人看，写的是「什么部件 + 在什么条件下 + 出什么问题」。
+      它一旦被写成分类名（「需求缺口类」这种），几百条卡会算出同一个向量，
+      召回、消解、跨批归并全部失效——实测发生过一次，593 条只有 63 个不同值。
+      因此落库前有一道校验专门拦分类名，拦下就退回批次模式名，再退回标题兜底。</dd>
+
+    <dt>为什么预聚类不用模型，消解却要用</dt>
+    <dd>预聚类比的是已经被归一化到同一格式的短句，措辞差异已在归一化阶段消掉，
+      余下的距离基本就是语义距离，紧阈值足够。
+      消解比的是两张完整的问题卡，差别往往在部位、条件、机理这些细节上，
+      向量能把它们排到一起，但分不出「同一个问题」和「同一个部位的两个问题」——那需要读。</dd>
+  </dl>
+
+  <div class="grp"><h2>收尾</h2><span class="r">两条管道产出之后的统一步骤</span></div>
+  <p class="prose">
+    检出一张卡里混了两个不同问题的情况并提请人工裁决、冻结本周快照供下周对比声量增减、
+    刷新产品与问题的派生数据、按周度上限把新问题推送给产品经理，其余留在待办池等待下轮。
+    这里<b>不再有任何跨管道的汇聚或合并</b>——两条管道各自的产出直接进入各自的页面。
+  </p>
+
+  <div class="grp"><h2>关键取舍</h2></div>
+  <dl class="arch-dl">
+    <dt>标签与语义，谁说了算</dt>
+    <dd>标签是预先定义好的重要方向，语义是整句话的真实含义，单靠哪一个都不够。
+      本架构的分工是：<b>语义负责判定，标签作为特征辅助</b>。
+      标签不充当硬性分组边界，因为两个数据源的标签体系存在裂缝，
+      以标签为界会让同一个问题被裂缝劈开。</dd>
+
+    <dt>老品为什么按产品组织，而不按问题</dt>
+    <dd>产品经理在这一页的动作是「打开某个产品，看它的问题清单」。
+      以产品为组织单位，证据归属清晰、口径稳定、跨轮次可比。
+      「同一类问题横跨哪些产品」是另一个视角的诉求，由战略视图独立承担，
+      不反向约束这条管道的身份设计。</dd>
+
+    <dt>两条管道为什么不互相去重</dt>
+    <dd>它们产出物的性质不同：一个是已有产品的缺陷，一个是尚不存在的产品诉求。
+      强行跨管道比对，只会把语义相近但业务含义完全不同的两件事混为一谈，
+      并让证据的归属变得无法追溯。</dd>
+
+    <dt>宁可不产出，也不凑数</dt>
+    <dd>模型在证据不足时倾向于编造具体规格来填满输出格式——这是最难被发现的一类错误，
+      因为编出来的内容读起来完全合理。
+      因此判定环节一律读完整原文而非片段，并在证据无法支撑判断时明确判为无效。</dd>
+  </dl>
+
+  <div class="grp"><h2>术语</h2></div>
+  <dl class="arch-dl term">
+    <dt>证据</dt>
+    <dd>一条通过入池筛选的用户原声，是全系统最小的可追溯单位。看板上任何一个数字，都能下钻到构成它的那批证据。</dd>
+    <dt>问题卡</dt>
+    <dd>老品迭代的产出：某个产品上的一种失效模式，附现象、归因、改进建议与支撑证据。</dd>
+    <dt>机会点</dt>
+    <dd>新品创新的产出：一类尚无对应产品的用户诉求，附支撑证据。</dd>
+    <dt>失效模式</dt>
+    <dd>问题的归并口径：同一物理部位、同一失效机理、同一使用场景，视为同一种失效。</dd>
+    <dt>声量</dt>
+    <dd>支撑一张卡的证据条数，即有多少人在说这件事。同一条证据可以同时支撑多张卡，前提是它确实同时提到了那几个产品。</dd>
+  </dl>
+
+</div>
+{% endblock %}

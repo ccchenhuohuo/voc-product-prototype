@@ -217,7 +217,7 @@ CREATE TRIGGER trg_voc_log_spu_issue_status
   BEFORE INSERT OR UPDATE ON voc_spu_issue_manual
   FOR EACH ROW EXECUTE FUNCTION voc_log_spu_issue_status();
 
--- REFRESH 只有物化视图 owner 能执行。Dagster 使用 voc_writer，因此用固定
+-- REFRESH 只有物化视图 owner 能执行。手工管线使用 voc_writer，因此用固定
 -- search_path 的 SECURITY DEFINER 薄函数收窄权限，而不是把视图所有权交给机器。
 CREATE OR REPLACE FUNCTION voc_refresh_spu_layer() RETURNS void
 LANGUAGE plpgsql

@@ -2,14 +2,15 @@ from math import sqrt
 
 from app import queries as Q
 from scripts.check_sql import PARAMS
+from scripts.check_sql import main as check_sql_main
 
 
 def compact(sql: str) -> str:
     return " ".join(sql.lower().split())
 
 
-def test_queue_and_search_sort_by_wilson_lower_bound():
-    for sql in (Q.BOARD_SPUS, Q.SEARCH_SPUS):
+def test_merged_spu_page_sorts_by_wilson_lower_bound():
+    for sql in (Q.BOARD_SPUS,):
         text = compact(sql)
         assert "negative_evi_count::numeric" in text
         assert "nullif(" in text
@@ -45,7 +46,7 @@ def test_two_of_two_example_in_task_has_higher_wilson_score_than_608_of_2701():
 
 
 def test_pending_total_sort_uses_open_count_then_total_count():
-    for sql in (Q.BOARD_SPUS, Q.SEARCH_SPUS):
+    for sql in (Q.BOARD_SPUS,):
         text = compact(sql)
         for direction in ("asc", "desc"):
             marker = f"ordering.sort_key = 'issues' and ordering.sort_dir = '{direction}'"
@@ -54,13 +55,8 @@ def test_pending_total_sort_uses_open_count_then_total_count():
         assert "then r.issue_count else null end" in text
 
 
-def test_tag_facets_are_ordered_by_coverage_before_name():
-    text = compact(Q.SEARCH_TAG_FACETS)
-    assert "order by x.level_order, x.count desc, x.domain, x.sub, x.leaf" in text
-
-
 def test_pending_over_total_uses_manual_status_with_default():
-    for sql in (Q.BOARD_SPUS, Q.SEARCH_SPUS, Q.SPU_DETAIL):
+    for sql in (Q.BOARD_SPUS, Q.SPU_DETAIL):
         text = compact(sql)
         assert "from voc_spu_issue i" in text
         assert "left join voc_spu_issue_manual m" in text
@@ -73,9 +69,6 @@ def test_pending_over_total_uses_manual_status_with_default():
         compact(Q.BOARD_SPUS).split("issue_state as (", 1)[1].split(
             "), issue_counts as", 1
         )[0],
-        compact(Q.SEARCH_SPUS).split("issue_counts as (", 1)[1].split(
-            "), results as", 1
-        )[0],
         compact(Q.SPU_DETAIL).split("issue_counts as (", 1)[1].split(
             ") select s.*", 1
         )[0],
@@ -85,14 +78,13 @@ def test_pending_over_total_uses_manual_status_with_default():
         assert "merged_into" not in section
 
 
-def test_revived_queue_query_matches_the_sidebar_definition():
-    text = compact(Q.BOARD_SPUS_REVIVED)
-    assert "m.status = '考虑中'" in text
-    assert "m.revived_at is not null" in text
-    assert "left join voc_spu_issue i on i.spu = m.spu and i.opp_id = m.opp_id" in text
-    assert "left join voc_opportunity o on o.opp_id = m.opp_id" in text
-    assert "o.merged_into is null" in text
-    assert "join revived_spus v on v.spu = c.spu" in text
+def test_status_presets_share_one_spu_query():
+    text = compact(Q.BOARD_SPUS)
+    assert "select %s::text as status_filter" in text
+    assert "when 'all' then true" in text
+    assert "when 'revived' then coalesce(c.has_revived_issue, false)" in text
+    assert "else coalesce(c.open_issue_count, 0) > 0" in text
+    assert "bool_or(x.revived_at is not null) as has_revived_issue" in text
 
 
 def test_recent_evidence_uses_publish_time_never_attach_week():
@@ -171,23 +163,61 @@ def test_new_read_queries_use_explicit_join_conditions():
     for sql in (
         Q.SHELL_COUNTS,
         Q.BOARD_SPUS,
-        Q.BOARD_SPUS_REVIVED,
         Q.BOARD_ISSUES,
         Q.BOARD_INNOVATIONS,
-        Q.SEARCH_SPUS,
-        Q.SEARCH_SPUS_BY_DOMAIN,
-        Q.SEARCH_SPUS_BY_SUB,
-        Q.SEARCH_SPUS_BY_LEAF,
         Q.SPU_DETAIL,
+        Q.SPU_RAW_VOICES,
         Q.SPU_ISSUES,
         Q.ISSUE_DETAIL,
         Q.ISSUE_VOICES,
         Q.INNOVATION_DETAIL,
         Q.INNOVATION_EVIDENCE,
         Q.STRATEGY_OPPORTUNITIES,
-        Q.SEARCH_TAG_FACETS,
     ):
         assert " using " not in compact(sql)
+
+
+def test_raw_voice_queries_match_inherited_spus_and_exclude_used_messages():
+    for sql in (Q.BOARD_SPUS, Q.SPU_RAW_VOICES):
+        text = compact(sql)
+        assert "join voc_social_gate" in text
+        assert "spu_inherited" in text
+        assert "g.cls in ('诉求缺口', '产品缺陷')" in text
+        assert "not exists" in text
+        assert "from voc_opp_evidence" in text
+        assert "oe.message_id = msg.message_id" in text
+
+
+def test_removed_channel_is_absent_from_innovation_and_home_queries():
+    for sql in (
+        Q.BOARD_INNOVATIONS, Q.INNOVATION_DETAIL,
+        Q.HOME2_SOURCES, Q.HOME2_FLOW_SOCIAL, Q.HOME2_FLOW_EC,
+        Q.HOME2_STATUS, Q.HOME2_FRESHNESS, Q.HOME2_WEEKLY, Q.HOME2_DIST,
+    ):
+        assert "channel" not in compact(sql)
+
+
+def test_shell_counts_exposes_total_products_and_problem_spus_without_search_key():
+    text = compact(Q.SHELL_COUNTS)
+    assert "from voc_spu s) as products" in text
+    assert "count(distinct i.spu)" in text
+    assert "as iter" in text
+    assert "as search" not in text
+
+
+def test_merged_spu_queries_read_has_ec_from_expanded_view():
+    assert "s.has_ec" in compact(Q.BOARD_SPUS)
+    assert "case when s.has_ec" in compact(Q.SPU_DETAIL)
+
+
+def test_innovation_list_is_organized_by_evidence_count():
+    text = compact(Q.BOARD_INNOVATIONS)
+    assert "order by o.evi_total desc nulls last" in text
+    assert text.index("o.evi_total desc") < text.index("o.rank_score desc")
+
+
+def test_static_sql_check_runs_without_a_database_connection():
+    assert check_sql_main(static_only=True) == 0
 
 
 def test_every_public_query_is_registered_with_matching_parameter_count():

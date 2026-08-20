@@ -108,7 +108,15 @@ class CleanProductFieldsTest(unittest.TestCase):
 
     def test_social_message_keeps_every_spu_with_trace_fields(self) -> None:
         message = clean.to_message(
-            {"消息ID": "social-spu-1", "SPU_": "[MT-79, NP-FZ100, EN-EL15]"},
+            {
+                "消息ID": "social-spu-1",
+                "SPU_": "[MT-79, NP-FZ100, EN-EL15]",
+                "消息组ID": "group-1",
+                "消息类型": "评论",
+                "父ID": "post-1",
+                "用户名称": "普通用户",
+                "消息标题": "  社媒标题  ",
+            },
             "社媒",
             "batch-social",
             set(),
@@ -117,6 +125,26 @@ class CleanProductFieldsTest(unittest.TestCase):
         self.assertEqual(message["spu"], ["MT79", "NPFZ100", "ENEL15"])
         self.assertEqual(message["spu_raw"], ["MT-79", "NP-FZ100", "EN-EL15"])
         self.assertEqual(message["spu_unmatched"], [])
+        self.assertEqual(message["message_group_id"], "group-1")
+        self.assertEqual(message["message_type"], "评论")
+        self.assertEqual(message["parent_id"], "post-1")
+        self.assertEqual(message["author_name"], "普通用户")
+        self.assertEqual(message["message_title"], "社媒标题")
+
+    def test_ecommerce_thread_fields_are_explicit_nulls(self) -> None:
+        message = clean.to_message({
+            "消息ID": "ec-1",
+            "消息组ID": "should-not-leak",
+            "消息类型": "帖子",
+            "父ID": "parent",
+            "用户名称": "author",
+            "消息标题": "title",
+        }, "电商", "batch-ec", set())
+
+        self.assertTrue(all(message[field] is None for field in (
+            "message_group_id", "message_type", "parent_id",
+            "author_name", "message_title",
+        )))
 
     def test_unlabelled_brand_stays_unknown(self) -> None:
         """社媒约九成没有本竞品归属，缺失必须是 NULL 而不是 false，
@@ -162,6 +190,16 @@ class CleanProductFieldsTest(unittest.TestCase):
                   ("tax_stage", "tax_domain", "tax_sub", "tax_leaf")),
             ("A4.Act", "产品体验", "产品部件", "配件"),
         )
+
+    def test_ingest_calls_inheritance_after_window_rows_are_persisted(self) -> None:
+        ingest_path = pathlib.Path(__file__).resolve().parents[1] / "voc_analytics" / "ingest.py"
+        text = ingest_path.read_text()
+        messages = text.index("db.save_messages(")
+        evidence = text.index("db.save_evidence(")
+        inheritance = text.index("db.backfill_social_spu_inheritance()")
+
+        self.assertLess(messages, inheritance)
+        self.assertLess(evidence, inheritance)
 
 
 if __name__ == "__main__":

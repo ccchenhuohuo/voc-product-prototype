@@ -44,6 +44,7 @@ fi
 echo "== 启动 $HOST:$PORT =="
 setsid env "${PGVARS[@]}" \
   .venv/bin/python -m uvicorn app.main:app --host "$HOST" --port "$PORT" \
+  --proxy-headers --forwarded-allow-ips=127.0.0.1 \
   >"$LOG" 2>&1 </dev/null &
 disown || true
 

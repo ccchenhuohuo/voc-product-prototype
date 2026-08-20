@@ -7,10 +7,11 @@
 "该序号存在" 与 "quote_span 是那条证据原文的连续子串"，彻底避开跨语种比对。
 """
 from __future__ import annotations
+from decimal import Decimal, InvalidOperation
 import re
 import unicodedata
 
-from .. import prompts
+from .. import config, prompts
 
 # 标题：主体 + 冒号 + 含受控动作词的对象（动作词可在冒号后任意位置）
 _TITLE_RE = re.compile(
@@ -18,16 +19,134 @@ _TITLE_RE = re.compile(
 
 # 描述中疑似需要溯源的片段
 _MODEL_PAT = re.compile(
-    r"(iPhone\s*\d+[A-Za-z ]*|Galaxy\s*S?\d+[A-Za-z ]*|Mate\s*\d+[A-Za-z ]*|"
+    r"(iPhone\s*(?:の\s*)?(?:\d+[A-Za-z ]*|Pro\s*Max)|Galaxy\s*S?\d+[A-Za-z ]*|Mate\s*\d+[A-Za-z ]*|"
     r"Pixel\s*\d+[A-Za-z ]*|DJI\s*[A-Za-z0-9 ]+|Osmo\s*[A-Za-z0-9 ]+|Action\s*\d+\w*|"
     r"Pocket\s*\d+\w*|Insta360\s*[A-Za-z0-9 ]+|A\d{4}|ZV-?E?\d+\w*|"
-    r"[A-Z]{2,}-?\d{2,}[A-Z]*)", re.I)
-_NUM_PAT = re.compile(r"\d+(?:\.\d+)?\s*(?:个月|个星期|周|天|小时|分钟|秒|年|kg|g|mm|cm|%|星)")
+    r"(?=[A-Z0-9-]*\d)[A-Z][A-Z0-9-]{2,})", re.I)
+
+# 数值必须带量纲才进入闸门，避免把型号里的数字误当参数。最长单位放前面，
+# 防止 ``mAh`` 被 ``m`` 抢先匹配。螺口/螺纹/ネジ是 1/4 英寸接口的常见省略写法，
+# 只在数字（通常为分数）紧邻它们时作为英寸量纲处理。
+_NUM_PAT = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?)\s*"
+    r"(?P<unit>个月|个星期|小时|分钟|mAh|inch|英寸|流明|螺纹|螺口|ネジ|"
+    r"kg|kW|mm|cm|Nm|lm|°C|℃|瓦|周|天|秒|年|W|g|K|m|米|[\"″]|L|升|V|A|%|星|度|档|轴|爪|目)",
+    re.I,
+)
+
+_NUM_UNIT = {
+    "个月": ("month", Decimal("1")),
+    "个星期": ("time_s", Decimal("604800")),
+    "周": ("time_s", Decimal("604800")),
+    "天": ("time_s", Decimal("86400")),
+    "小时": ("time_s", Decimal("3600")),
+    "分钟": ("time_s", Decimal("60")),
+    "秒": ("time_s", Decimal("1")),
+    "年": ("year", Decimal("1")),
+    "kg": ("mass_g", Decimal("1000")),
+    "g": ("mass_g", Decimal("1")),
+    "kw": ("power_w", Decimal("1000")),
+    "w": ("power_w", Decimal("1")),
+    "瓦": ("power_w", Decimal("1")),
+    "℃": ("temperature_c", Decimal("1")),
+    "°c": ("temperature_c", Decimal("1")),
+    "度": ("degree", Decimal("1")),
+    "k": ("color_temperature_k", Decimal("1")),
+    "m": ("length_mm", Decimal("1000")),
+    "米": ("length_mm", Decimal("1000")),
+    "cm": ("length_mm", Decimal("10")),
+    "mm": ("length_mm", Decimal("1")),
+    "英寸": ("length_mm", Decimal("25.4")),
+    "inch": ("length_mm", Decimal("25.4")),
+    '"': ("length_mm", Decimal("25.4")),
+    "″": ("length_mm", Decimal("25.4")),
+    "螺纹": ("length_mm", Decimal("25.4")),
+    "螺口": ("length_mm", Decimal("25.4")),
+    "ネジ": ("length_mm", Decimal("25.4")),
+    "l": ("volume_ml", Decimal("1000")),
+    "升": ("volume_ml", Decimal("1000")),
+    "lm": ("luminous_flux_lm", Decimal("1")),
+    "流明": ("luminous_flux_lm", Decimal("1")),
+    "v": ("voltage_v", Decimal("1")),
+    "a": ("current_a", Decimal("1")),
+    "mah": ("capacity_mah", Decimal("1")),
+    "nm": ("torque_nm", Decimal("1")),
+    "%": ("percent", Decimal("1")),
+    "星": ("star", Decimal("1")),
+    "档": ("gear_count", Decimal("1")),
+    "轴": ("axis_count", Decimal("1")),
+    "爪": ("claw_count", Decimal("1")),
+    "目": ("mesh_count", Decimal("1")),
+}
 
 
 def _norm(s: str) -> str:
     """全角转半角 + 去空白，用于宽松子串比对。"""
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or "")).lower()
+
+
+def _model_norm(s: str) -> str:
+    """型号比较忽略日语属格连接词；不对一般自然语言做跨语种猜测。"""
+    return _norm(s).replace("の", "")
+
+
+def _decimal(text: str) -> Decimal | None:
+    """解析小数或分数；无效输入不进入数值 token。"""
+    try:
+        compact = re.sub(r"\s+", "", text)
+        if "/" in compact:
+            numerator, denominator = compact.split("/", 1)
+            denominator_value = Decimal(denominator)
+            if not denominator_value:
+                return None
+            return Decimal(numerator) / denominator_value
+        return Decimal(compact)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _decimal_text(value: Decimal) -> str:
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _num_match_token(match: re.Match[str]) -> tuple[str, str] | None:
+    value = _decimal(match.group("value"))
+    unit = unicodedata.normalize("NFKC", match.group("unit")).casefold()
+    normalized = _NUM_UNIT.get(unit)
+    if value is None or normalized is None:
+        return None
+    dimension, multiplier = normalized
+    return _decimal_text(value * multiplier), dimension
+
+
+def _num_tokens(text: str) -> set[tuple[str, str]]:
+    """返回 ``(归一数值, 量纲)``，等价单位在同一空间比较。
+
+    长度统一到 mm、质量统一到 g、体积统一到 ml、功率统一到 W；因此
+    ``1.8m``/``180cm`` 与 ``1/4英寸``/``6.35mm`` 会得到同一 token。
+    """
+    return {
+        token for match in _NUM_PAT.finditer(text or "")
+        if (token := _num_match_token(match)) is not None
+    }
+
+
+def _evidence_parts(items: list[dict], idx_map: list[int]) -> list[str]:
+    """按首次出现顺序返回该组可引文本三字段的去重并集。"""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for i in idx_map:
+        item = items[i]
+        for key in ("snippet", "content", "content_zh"):
+            value = str(item.get(key) or "").strip()
+            normalized = _norm(value)
+            if value and normalized not in seen:
+                seen.add(normalized)
+                parts.append(value)
+    return parts
 
 
 def check_citations(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
@@ -50,25 +169,48 @@ def check_citations(obj: dict, items: list[dict], idx_map: list[int]) -> list[st
 
 def check_orphan_claims(obj: dict, items: list[dict] | None = None,
                         idx_map: list[int] | None = None) -> list[str]:
-    """描述中出现的机型/数字必须可溯源。
+    """标题、问题模式与现象段中的机型/数字必须可溯源。
 
-    合法来源有两个：citations 里显式给出的，以及证据行自带的 product_name
-    字段 —— 后者是结构化事实而非模型编造，早期只查 citations 造成大量误报。
+    合法来源包括 citations 的 value、证据行的 product_name，以及该组
+    snippet/content/content_zh 三字段并集。数值在归一化的值+量纲空间比较，
+    不再用裸数字子串（后者会把产品编码 3318 当成「3 秒」的来源）。
     """
-    cited = {_norm(str(c.get("value", ""))) for c in (obj.get("citations") or [])}
-    if items and idx_map is not None:
-        cited |= {_norm(items[i].get("product_name") or "") for i in idx_map}
-        cited |= {_norm(items[i].get("snippet") or "") for i in idx_map}
-    cited.discard("")
-    errs = []
-    text = (obj.get("desc_phenomenon") or "")
-    for m in set(_MODEL_PAT.findall(text)):
-        if not any(_norm(m) in c or c in _norm(m) for c in cited if c):
-            errs.append(f"现象段出现未溯源机型: {m}")
-    for m in set(_NUM_PAT.findall(text)):
-        digits = re.sub(r"\D", "", m)
-        if digits and not any(digits in c for c in cited if c):
-            errs.append(f"现象段出现未溯源数值: {m}")
+    sources: list[str] = []
+    for citation in obj.get("citations") or []:
+        value = str(citation.get("value") or "")
+        unit = str(citation.get("unit") or "")
+        sources.extend((value, value + unit))
+    if items is not None and idx_map is not None:
+        sources.extend(str(items[i].get("product_name") or "") for i in idx_map)
+        sources.extend(_evidence_parts(items, idx_map))
+
+    cited_texts = {_norm(source) for source in sources if _norm(source)}
+    cited_models = {
+        _model_norm(model)
+        for source in sources for model in _MODEL_PAT.findall(source)
+    }
+    cited_numbers = set().union(*(_num_tokens(source) for source in sources)) if sources else set()
+    errs: list[str] = []
+    fields = ("title", "problem_mode", "desc_phenomenon")
+    for field in fields:
+        text = str(obj.get(field) or "")
+        for model in sorted(set(_MODEL_PAT.findall(text)), key=_norm):
+            normalized = _model_norm(model)
+            if not any(
+                normalized in source
+                or (len(source) >= 3 and re.search(r"[a-z]", source)
+                    and source in normalized)
+                for source in cited_texts | cited_models
+            ):
+                errs.append(f"{field} 出现未溯源机型: {model}")
+        seen_numbers: set[tuple[str, str]] = set()
+        for match in _NUM_PAT.finditer(text):
+            token = _num_match_token(match)
+            if token is None or token in seen_numbers:
+                continue
+            seen_numbers.add(token)
+            if token not in cited_numbers:
+                errs.append(f"{field} 出现未溯源数值: {match.group(0)}")
     return errs
 
 
@@ -191,12 +333,7 @@ def _evidence_corpus(items: list[dict], idx_map: list[int]) -> str:
     """该组证据的全部可引文本。三个字段都要并进来：
     电商的原声在 snippet，社媒的在 content，译文在 content_zh——
     漏掉 content_zh 会把「引用了译文」误判成幻觉。"""
-    parts = []
-    for i in idx_map:
-        it = items[i]
-        parts += [it.get("snippet") or "", it.get("content") or "",
-                  it.get("content_zh") or ""]
-    return _norm(" ".join(parts))
+    return _norm(" ".join(_evidence_parts(items, idx_map)))
 
 
 def check_quotes(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
@@ -249,6 +386,33 @@ def check_problem_mode(obj: dict) -> list[str]:
     return []
 
 
+def check_polarity(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
+    """结构化证据全为非负面时，拦截产出擅自断言存在缺口。"""
+    if not idx_map:
+        return []
+    sentiments = [str(items[i].get("sentiment") or "").strip() for i in idx_map]
+    if any(not sentiment for sentiment in sentiments):
+        return []                         # 结构化极性不完整时不猜
+    nonnegative = sum(
+        sentiment in config.POLARITY_NONNEGATIVE for sentiment in sentiments)
+    if nonnegative / len(sentiments) < config.POLARITY_NONNEGATIVE_RATIO:
+        return []
+    low_conf = any(
+        items[i].get("low_conf") is True or items[i].get("_low_conf") is True
+        for i in idx_map
+    )
+    if low_conf:
+        return []
+    text = " ".join(str(obj.get(field) or "") for field in ("title", "problem_mode"))
+    hits = sorted({word for word in config.POLARITY_GAP_WORDS if word in text})
+    if not hits:
+        return []
+    return [
+        f"title/problem_mode 命中缺口断言词（{'、'.join(hits)}），但组内结构化极性"
+        f"全部为正面/中性且非 low_conf；请改为中性转述，或降级为「用户已认可，无缺口」"
+    ]
+
+
 def check_no_leak(obj: dict) -> list[str]:
     """JSON 字段名不得出现在给人看的描述里。"""
     errs = []
@@ -264,14 +428,86 @@ def check_no_leak(obj: dict) -> list[str]:
 
 _STD_PAT = re.compile(r"\b(ISO|GB/?T?|EN|ASTM|IEC|JIS|ANSI)\s?\d{3,}[-:\d.]*", re.I)
 
+_PRODUCT_CUES = (
+    "电池|三脚架|闪光灯|摄影灯|灯|相机|支架|背板|后背|云台|手柄|保护壳|"
+    "快拆板|底座|麦克风|镜头|充电器"
+)
+_BRAND_BEFORE_PRODUCT = re.compile(
+    rf"([A-Za-z][A-Za-z0-9_-]{{2,}}|[\u4e00-\u9fff]{{2,10}}?)(?:的)?(?={_PRODUCT_CUES})",
+    re.I,
+)
+_CJK_BEFORE_LATIN_PRODUCT = re.compile(
+    rf"([\u4e00-\u9fff]{{2,10}}?)(?=[A-Za-z][A-Za-z0-9_-]{{2,}}(?:的)?(?:{_PRODUCT_CUES}))",
+    re.I,
+)
+_BRAND_PREFIX = re.compile(
+    r"^.*(?:就是发现|发现|还好我买了|我买了|买了|这个|那个|这款|那款|换成|使用)")
+
+
+def _evidence_brand_candidates(text: str) -> set[str]:
+    """从产品词前的命名片段抽品牌候选，不维护会过时的竞品表。"""
+    candidates: set[str] = set()
+    raw_candidates = (
+        _BRAND_BEFORE_PRODUCT.findall(text or "")
+        + _CJK_BEFORE_LATIN_PRODUCT.findall(text or "")
+    )
+    for raw in raw_candidates:
+        value = _BRAND_PREFIX.sub("", raw).strip("的这那款个")
+        # 中英混排名称（如「小隼TagBatt电池」）由正则稳定取到尾部 Latin token。
+        latin = re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", value)
+        if latin:
+            value = latin[-1]
+        if any(character.isdigit() for character in value):
+            continue                    # 型号不是品牌；归属由下方上下文分支判断
+        if len(value) >= 2 and not any(
+                value in cue for cue in _PRODUCT_CUES.split("|")):
+            candidates.add(value)
+    return candidates
+
+
+def _own_brand_norms() -> set[str]:
+    aliases = getattr(config, "BRAND_OWN_ALIASES", (config.BRAND_OWN,))
+    return {_norm(str(alias)) for alias in aliases if alias}
+
 
 def check_title_subject(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
-    """标题若点名具体品名，该品名必须在组内证据中占多数（防张冠李戴）。"""
+    """标题若点名具体品名或第三方主体，必须与组内证据归属一致。"""
     title = (obj.get("title") or "").split("：")[0].split(":")[0].strip()
     if not title:
         return []
     names = [items[i].get("product_name") for i in idx_map if items[i].get("product_name")]
     if not names:
+        source_text = " ".join(_evidence_parts(items, idx_map))
+        own = _own_brand_norms()
+        candidates = {
+            candidate for candidate in _evidence_brand_candidates(source_text)
+            if _norm(candidate) not in own
+        }
+        title_norm = _norm(title)
+        mentioned = sorted(
+            candidate for candidate in candidates if _norm(candidate) in title_norm)
+        if mentioned:
+            return [
+                f"title 主体『{title}』点名证据正文抽取出的第三方品牌/产品 token"
+                f"『{'、'.join(mentioned)}』，不属于本品品牌及别名；请勿将第三方问题"
+                f"张冠李戴到本品机会点"
+            ]
+
+        # 标题中的型号若只在第三方命名片段附近出现，也按第三方主体处理。
+        normalized_source = _norm(source_text)
+        for model in sorted(set(_MODEL_PAT.findall(title)), key=_norm):
+            model_norm = _norm(model)
+            pos = normalized_source.find(model_norm)
+            if pos < 0:
+                continue
+            context = normalized_source[max(0, pos - 24):pos + len(model_norm) + 24]
+            nearby = sorted(
+                candidate for candidate in candidates if _norm(candidate) in context)
+            if nearby and not any(alias in context for alias in own):
+                return [
+                    f"title 型号『{model}』在证据中仅与第三方 token"
+                    f"『{'、'.join(nearby)}』同现，主体归属疑似张冠李戴"
+                ]
         return []
     hit = sum(1 for n in names if _norm(n) in _norm(title) or _norm(title) in _norm(n))
     # 标题主体像是某个具体品名（能在证据品名里找到对应）却占比不足 => 张冠李戴
@@ -280,6 +516,110 @@ def check_title_subject(obj: dict, items: list[dict], idx_map: list[int]) -> lis
         return [f"标题主体『{title}』只覆盖 {hit}/{len(names)} 条证据的品名"
                 f"（组内主要品名为『{top}』），跨品名组应改用「品类+部件」作主体"]
     return []
+
+
+_PAREN_DETAIL = re.compile(r"[（(]([^（）()]{2,100})[）)]")
+# 只保留【具体部件】后缀。2026-08-17 真库 3934 条标定：抽象后缀罚的是句式而非
+# 编造——「能力」217 次、「接口」201 次、「功能」70 次命中，而「新增 X 能力」正是
+# prompts.ACTIONS 规定的标准标题句式，「品类」则来自强制的主体前缀。它们与
+# 「时因接口」「在无功能」「理与协议」这类从词中间切出的碎片一起，构成了
+# 短证据规则 80% 命中率（1134 条符合条件里命中 907）的主要来源。
+# 具体部件后缀（系统/模块/组件/底座/云台/脚垫/协议/阵列）罚的是真实编造，保留。
+# 移除抽象后缀后 C 组无一丢失：C6 仍由「扣分系统」「扣分底座」命中，
+# C3/C4/C7/C8/C10/C11 由括号扩写通道命中。
+_ENTITY_SUFFIX_PREFIX = {
+    "系统": 2, "模块": 2, "组件": 2, "底座": 2, "云台": 2,
+    "脚垫": 2, "协议": 2, "阵列": 2,
+}
+_ENTITY_STANDALONE = ("保护壳", "热插拔", "涂层", "刮花", "掉漆", "频闪", "实时取景")
+_SOFT_ENTITY_SUFFIXES = ("功能", "能力", "版本")
+_KANA = re.compile(r"[\u3040-\u30ff]")
+_HAN = re.compile(r"[\u3400-\u9fff]")
+
+
+def _entity_tokens(text: str) -> set[str]:
+    """抽取短证据下可稳定识别的具体技术实体，不做开放式分词。"""
+    tokens = {term for term in _ENTITY_STANDALONE if term in text}
+    for suffix, prefix_len in _ENTITY_SUFFIX_PREFIX.items():
+        start = 0
+        while (pos := text.find(suffix, start)) >= 0:
+            prefix = re.search(
+                rf"[\u4e00-\u9fff]{{0,{prefix_len}}}$", text[:pos])
+            token = (prefix.group(0) if prefix else "") + suffix
+            if len(token) >= len(suffix):
+                tokens.add(token)
+            start = pos + len(suffix)
+    return tokens
+
+
+def _entity_supported(token: str, corpus: str) -> bool:
+    normalized = _norm(token)
+    normalized = re.sub(r"^(?:含|支持|适配|例如|比如|如)", "", normalized).rstrip("等")
+    if normalized and (normalized in corpus or normalized in corpus.replace("の", "")):
+        return True
+    if "螺纹接口" in normalized and any(alias in corpus for alias in ("螺口", "螺纹", "ネジ")):
+        return True
+    for suffix in _SOFT_ENTITY_SUFFIXES:
+        suffix_norm = _norm(suffix)
+        if normalized.endswith(suffix_norm):
+            stem = normalized[:-len(suffix_norm)]
+            if len(stem) >= 2 and stem in corpus:
+                return True
+    return False
+
+
+def _title_body(title: str) -> str:
+    """去掉标题的主体前缀，只留冒号之后的动作与对象。
+
+    标题格式「主体：动作」是 ``_TITLE_RE`` 与提示词强制要求的，主体几乎总是
+    「X品类 / X配件」这类归类词，本就不会逐字出现在证据里。2026-08-17 真库
+    3934 条标定：短证据命中 1015 条中有 658 条（64.8%）罚的正是这个前缀
+    （如「摄影手柄品类：」里的「手柄品类」）——那是在罚格式本身。
+    主体是否被证据支撑属于 ``check_title_subject`` 的职责，不在本函数。
+    无冒号时整串都是动作描述，原样返回。
+    """
+    head, sep, body = title.partition("：")
+    if not sep:
+        head, sep, body = title.partition(":")
+    return body if sep else title
+
+
+def check_short_evidence(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
+    """低信息证据只允许转述，不得补写不存在的具体实体。
+
+    数值和型号仍由既有 ``check_orphan_claims`` 单点负责；本函数只补它覆盖不到的
+    模块、组件、协议、场景部件等名词，避免形成第二套参数闸门。
+    标题只看冒号之后的部分，理由见 ``_title_body``。
+    """
+    parts = _evidence_parts(items, idx_map)
+    corpus = _norm(" ".join(parts))
+    if len(corpus) >= config.SHORT_EVIDENCE_CHARS:
+        return []
+
+    raw_corpus = " ".join(parts)
+    has_content_zh = any(items[i].get("content_zh") for i in idx_map)
+    same_language_lexical = has_content_zh or (
+        bool(_HAN.search(raw_corpus)) and not _KANA.search(raw_corpus))
+    errs: list[str] = []
+    for field in ("title", "problem_mode"):
+        text = str(obj.get(field) or "")
+        if field == "title":
+            text = _title_body(text)
+        candidates: set[str] = set()
+        if same_language_lexical:
+            candidates |= _entity_tokens(text)
+        # 外语到中文不能做裸字面比较；但括号里的新增规格/模块是明确的扩写边界。
+        for detail in _PAREN_DETAIL.findall(text):
+            if not _num_tokens(detail):       # 参数已由 check_orphan_claims 负责
+                candidates.add(detail)
+        unsupported = sorted(
+            token for token in candidates if not _entity_supported(token, corpus))
+        for token in unsupported:
+            errs.append(
+                f"{field} 在仅 {len(corpus)} 字的短证据上引入未出现的具体实体『{token}』；"
+                f"短证据只能转述，不得补写模块、部件、协议、参数或场景细节"
+            )
+    return errs[:6]
 
 
 def check_suggestion(text: str) -> list[str]:
@@ -295,12 +635,51 @@ def check_suggestion(text: str) -> list[str]:
     return errs
 
 
-def validate_stage2(obj: dict, items: list[dict], idx_map: list[int]) -> list[str]:
-    return (check_format(obj) + check_count_claim(obj, len(idx_map))
-            + check_problem_mode(obj)
-            + check_citations(obj, items, idx_map)
-            + check_quotes(obj, items, idx_map)
-            + check_orphan_claims(obj, items, idx_map)
-            + check_title_subject(obj, items, idx_map)
-            + check_country_claims(obj, items, idx_map)
-            + check_no_leak(obj))
+def validate_stage2(obj: dict, items: list[dict], idx_map: list[int], ctx=None,
+                    grounding_out: list[str] | None = None) -> list[str]:
+    """汇总 Stage2 校验；新增 grounding 规则受报告/强制开关控制。
+
+    顺序先跑既有结构与逐字溯源，再跑新增语义边界：前者错误更基础、重试提示
+    应排在前面；后者在报告模式只计数，强制模式才并入同一错误列表。
+    ``ctx`` 与 ``grounding_out`` 均为可选，保留原三参数调用的兼容性。
+    """
+    orphan_errors = check_orphan_claims(obj, items, idx_map)
+    legacy_orphan = [
+        error for error in orphan_errors if error.startswith("desc_phenomenon ")]
+    new_orphan = [error for error in orphan_errors if error not in legacy_orphan]
+
+    subject_errors = check_title_subject(obj, items, idx_map)
+    has_product_names = any(items[i].get("product_name") for i in idx_map)
+    legacy_subject = subject_errors if has_product_names else []
+    new_subject = [] if has_product_names else subject_errors
+
+    hard_errors = (
+        check_format(obj)
+        + check_count_claim(obj, len(idx_map))
+        + check_problem_mode(obj)
+        + check_citations(obj, items, idx_map)
+        + check_quotes(obj, items, idx_map)
+        + legacy_orphan
+        + legacy_subject
+        + check_country_claims(obj, items, idx_map)
+        + check_no_leak(obj)
+    )
+    polarity_errors = check_polarity(obj, items, idx_map)
+    short_errors = check_short_evidence(obj, items, idx_map)
+    grounding_errors = new_orphan + polarity_errors + new_subject + short_errors
+
+    if grounding_out is not None:
+        grounding_out.extend(grounding_errors)
+    if ctx is not None:
+        ctx.metric_incr(
+            ("generation",),
+            grounding_checked_attempts=1,
+            grounding_enforced_attempts=int(config.GROUNDING_ENFORCE),
+            grounding_flagged_attempts=int(bool(grounding_errors)),
+            grounding_issue_count=len(grounding_errors),
+            grounding_orphan_issues=len(new_orphan),
+            grounding_polarity_issues=len(polarity_errors),
+            grounding_title_subject_issues=len(new_subject),
+            grounding_short_evidence_issues=len(short_errors),
+        )
+    return hard_errors + (grounding_errors if config.GROUNDING_ENFORCE else [])

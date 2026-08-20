@@ -2,7 +2,7 @@
 
 `system/` 是面向产品经理的服务端渲染机会看板，读取 `pipeline/` 生成的 VOC PostgreSQL 数据，并把人工状态写回独立的 manual 表。应用采用 FastAPI + Jinja2 + 仓库内置的 HTMX-compatible 精简运行时；运行期不调用 LLM，也不依赖 npm 或外网。数据库结构与权限须达到 `pipeline/sql/` 当前最终等效结构，应用本身不执行迁移。注意，`011` 末尾的自检要求 `voc_spu_issue` 已有条目，`012` 的自检要求已有未合并的新品创新机会；`013` 只适用于符合已核实 645 条分布的既有 012 存量库，当前 `001` 已建立新来源约束的空库不执行它。完全空库不能不经数据准备就机械执行整组脚本。
 
-`voc_message.src_line` 与 `voc_opportunity.src_line` 均保存「电商 / 社媒」，表示消息或机会的发现来源。`voc_opportunity.channel` 仍保存「需求缺口 / 竞品对标」，不是消息来源。
+`voc_message.src_line` 与 `voc_opportunity.src_line` 均保存「电商 / 社媒」，表示消息或机会的发现来源。机会点不再保留旧业务子类型列；需求缺口、竞品对标等业务语义由现行内容与分类字段承载。
 
 ## 安装与启动
 
@@ -13,12 +13,13 @@ cd system
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[test]'
-uvicorn app.main:app --host 127.0.0.1 --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+  --proxy-headers --forwarded-allow-ips=127.0.0.1
 ```
 
-ASGI import string 是 `app.main:app`，上述命令监听 `127.0.0.1:8000`。仓库没有内置 systemd、Docker Compose 或其他进程托管配置，生产进程的服务名须由运维环境确认。
+ASGI import string 是 `app.main:app`，上述命令监听 `127.0.0.1:8000`。`--proxy-headers --forwarded-allow-ips=127.0.0.1` 只信任本机反代的转发头，使 HTTPS 入口下 `url_for()` 产生正确的 `https://` 静态资源地址。仓库没有内置 systemd、Docker Compose 或其他进程托管配置，生产进程的服务名须由运维环境确认。
 
-八个用户可见的 GET 入口是：`/` 重定向 `/iter`，老品迭代队列 `/iter`，SPU 详情 `/spu/{spu}`，问题原声 `/issue/{spu}/{opp_id}`，新品共享池 `/inno`，新品详情 `/inno/{opp_id}`，战略视图 `/strategy`，产品检索 `/search`。问题条目和新品创新分别通过 `/issue/{spu}/{opp_id}/status`、`/inno/{opp_id}/status` 提交状态。另有已注册的局部模板路由 `/spu/{spu}/issues`，但当前模板、静态脚本与测试都没有调用它，是否作为预留接口保留需后续确认。老品队列只展示当前有问题条目的 SPU；产品检索覆盖 `voc_spu` 中的全部 SPU。
+八个用户可见的 GET 入口是：首页 `/`，老品迭代队列 `/iter`，SPU 详情 `/spu/{spu}`，问题原声 `/issue/{spu}/{opp_id}`，新品共享池 `/inno`，新品详情 `/inno/{opp_id}`，战略视图 `/strategy`，产品检索 `/search`。问题条目和新品创新分别通过 `/issue/{spu}/{opp_id}/status`、`/inno/{opp_id}/status` 提交状态。另有已注册的局部模板路由 `/spu/{spu}/issues`，但当前模板、静态脚本与测试都没有调用它，是否作为预留接口保留需后续确认。老品队列只展示当前有问题条目的 SPU；产品检索覆盖 `voc_spu` 中的全部 SPU。
 
 复活检测可独立执行：
 
@@ -47,9 +48,29 @@ python scripts/check_sql.py
 - `VOC_PG_HUMAN_USER`
 - `VOC_PG_HUMAN_PASSWORD`
 
-Web 应用启动时会读取 `system/.env`；`scripts/check_revive.py` 与 `scripts/check_sql.py` 不加载该文件，运行前必须把以上变量导出到进程环境。
+Web 应用启动时会读取 `system/.env`；`scripts/check_revive.py` 与 `scripts/check_sql.py` 不加载该文件，运行前必须把以上变量导出到进程环境。完整格式见 `.env.example`。
 
-可选的 `VOC_APP_USER` 仅供 Web 状态更新写入 `updated_by`，未设置时使用 `voc_human`。它不是数据库密码，也不改变数据库角色；复活脚本使用前述 `--actor`，不读取该变量。
+可选的 `VOC_APP_USER` 仅在 Web 请求取不到会话身份时作为 `updated_by` 降级值，未设置时使用 `voc_human`。正常经过全局登录门的路径不会使用它。它不是数据库密码，也不改变数据库角色；复活脚本使用前述 `--actor`，不读取该变量。
+
+## 登录与授权
+
+Web 应用使用飞书企业自建应用登录，并用 14 天有效的服务端签名 `voc_session` cookie 保存 `open_id`、姓名和签发时间。飞书 access token 只用于登录回调中紧接着的用户信息请求，不落盘也不写入 cookie。除 `/auth/`、`/static/` 和不查数据库的 `/healthz` 外，所有路由都必须先登录。
+
+认证配置如下：
+
+- `VOC_FEISHU_APP_ID`：必填，飞书企业自建应用 App ID。
+- `VOC_FEISHU_APP_SECRET`：必填密钥，只在服务端换取 token。
+- `VOC_SESSION_SECRET`：必填密钥，用于签名会话与 OAuth state；缺失时应用启动立即失败，不会自动生成。
+- `VOC_PUBLIC_BASE_URLS`：必填，逗号分隔的公开站点根地址，例如 `https://voc.ulanzi.com`。它同时是 OAuth 回调 origin 和非 GET 请求 `Origin` 的白名单。
+- `VOC_ALLOWED_OPEN_IDS`：必须声明，逗号分隔的可读飞书 `open_id`；空值表示拒绝所有人。
+- `VOC_WRITER_OPEN_IDS`：必须声明，逗号分隔的可写飞书 `open_id`；空值表示无人可写。写名单不自动包含读权限，需要写入状态的人必须同时出现在两个名单中。
+- `VOC_COOKIE_SECURE`：可选，默认 `true`；只有本地 HTTP 开发时才设为 `false`。
+
+名单一律用 `open_id` 维护，不按姓名匹配；姓名会变更且可能重名，`open_id` 才是账号锚点。首次登录只能证明身份，不会自动授予查看或写入权限。修改名单后需重启 Web 进程以重读配置。
+
+飞书开放平台中必须为 `VOC_PUBLIC_BASE_URLS` 的每个根地址登记完整回调 URL：`<根地址>/auth/feishu/callback`，例如 `https://voc.ulanzi.com/auth/feishu/callback`。应用会根据本次请求的受信反代头选择白名单中的 origin；伪造的 Host 不会成为回调地址。
+
+两个状态 POST 写入的 `updated_by` 现为 `姓名(open_id后8位)`，例如 `张三(ced16385)`，使重名用户在 `voc_status_log` / `voc_spu_issue_log` 中仍可区分。这只是给现有 SQL 传入操作人，应用不新建会话表或执行迁移。
 
 ## 权限边界
 

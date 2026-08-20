@@ -1,4 +1,4 @@
-"""SPU 展开层：Dagster 只调用数据库业务规则并回报统计。"""
+"""SPU 展开层：手工收尾调用数据库业务规则并回报统计。"""
 from __future__ import annotations
 
 from . import db

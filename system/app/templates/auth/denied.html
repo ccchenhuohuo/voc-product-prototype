@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>无权限 · VOC 机会看板</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/_tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sb">
+      <div class="brand">VOC 机会看板</div>
+    </aside>
+    <div class="body">
+      <main class="view">
+        <header class="head">
+          <h1>尚未开通查看权限</h1>
+          <p class="lede">你已成功登录，但当前飞书账号不在可读名单中。</p>
+        </header>
+        <section class="scroll">
+          <div class="form">
+            <p class="prose">请联系系统负责人把你的飞书账号加入名单。</p>
+            <div class="readout">
+              <div class="ro"><div class="v">{{ current_user.name }}</div><div class="k">姓名</div></div>
+              <div class="ro"><div class="v code">{{ current_user.open_id }}</div><div class="k">open_id</div></div>
+            </div>
+            <div class="ops">
+              <a class="act" href="/auth/logout">退出</a>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

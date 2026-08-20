@@ -25,9 +25,11 @@ def spu_detail(request: Request, spu: str):
         raise HTTPException(404, "未找到该 SPU")
     card = sort_spus([raw])[0]
     issues = _issues(spu)
+    raw_voices = db.query(Q.SPU_RAW_VOICES, (spu,))
     return templates.TemplateResponse(request, "spu-card.html", {
         "card": card,
         "issues": issues,
+        "raw_voices": raw_voices,
         "max_evidence": _max_evidence(issues),
     })
 

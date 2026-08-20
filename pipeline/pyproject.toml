@@ -1,14 +1,11 @@
 [project]
 name = "voc-analytics"
 version = "0.0.1"
-description = "VOC 数据管道（云听 CEM → PostgreSQL → Dagster）"
+description = "VOC 数据管道（云听 CEM → PostgreSQL → 手工生成链）"
 requires-python = ">=3.11"
 dependencies = [
   "psycopg[binary]>=3.1",
   "openpyxl>=3.1",
-  "dagster>=1.7",
-  "dagster-webserver>=1.7",
-  "dagster-postgres>=0.23",
 ]
 
 [project.optional-dependencies]

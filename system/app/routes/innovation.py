@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from .. import queries as Q
+from ..auth import actor_for_request
 from ..db import DatabaseWriteError, db
-from ..viewmodels import date_input, display_status, status_mark
+from ..viewmodels import (attach_full_voice, date_input, display_status,
+                          status_mark)
 from ..web import templates
 
 router = APIRouter(prefix="/inno")
@@ -38,7 +38,9 @@ def innovation_detail(request: Request, opp_id: str):
     if not raw:
         raise HTTPException(404, "未找到该新品创新条目")
     opportunity = _decorate(raw)
-    evidence = db.query(Q.INNOVATION_EVIDENCE, (opp_id,))
+    evidence = attach_full_voice(
+        db.query(Q.INNOVATION_EVIDENCE, (opp_id,)),
+        snippet_key="snippet", full_key="content")
     return templates.TemplateResponse(request, "innovation-card.html", {
         "opportunity": opportunity,
         "evidence": evidence,
@@ -67,7 +69,7 @@ async def update_innovation_status(request: Request, opp_id: str):
             context["decision_note"],
             context["target_release"],
             date_input(context["release_date"]),
-            os.environ.get("VOC_APP_USER", "voc_human"),
+            actor_for_request(request),
         ))
     except (DatabaseWriteError, ValueError) as exc:
         context["error"] = str(exc)

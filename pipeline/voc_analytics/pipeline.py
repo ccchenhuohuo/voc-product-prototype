@@ -1,13 +1,13 @@
 """生成与消解编排（PRD v8 §4.3–4.4 / §5 / §6）。"""
 from __future__ import annotations
 import hashlib, json, re, unicodedata
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Sequence
 
 from psycopg.types.json import Jsonb
 
 from . import config as C, db, llm, prompts, resolve
-from .stages import generate, stage1, validate
+from .stages import generate, precluster, stage1, validate, value_gate
 
 
 _IDENTITY_SEP = re.compile(r"[\s\-_—–/|，,。.;；:：()（）\[\]【】]+")
@@ -20,37 +20,24 @@ def _identity_text(value: str | None) -> str:
 
 
 def opportunity_identity_key(opp_type: str, core_tag: str | None,
-                             problem_mode: str | None,
-                             channel: str | None = None) -> str:
-    """v2 机会身份材料，与生命周期对应的 L1 唯一域保持一致。
-
-    老品 L1 是 ``(opp_type, core_tag)``，不含来源或 channel；新品 L1
-    是 ``(opp_type, channel, core_tag)``，所以 channel 必须进入身份域。
-    ``channel`` 是业务内容通道，不是 ``src_line`` 数据来源。
-    """
+                             problem_mode: str | None) -> str:
+    """v3 机会身份统一为生命周期、核心标签与问题模式。"""
     if opp_type not in {"老品迭代", "新品创新"}:
         raise ValueError(f"未知机会类型：{opp_type!r}")
     material = {
-        "version": 2,
+        "version": 3,
         "opp_type": opp_type,
         "core_tag": _identity_text(core_tag),
         "problem_mode": _identity_text(problem_mode),
     }
-    if opp_type == "新品创新":
-        normalized_channel = _identity_text(channel)
-        if not normalized_channel:
-            raise ValueError("新品创新身份缺少 channel")
-        material["channel"] = normalized_channel
     return json.dumps(
         material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def make_opp_id(opp_type: str, core_tag: str | None,
-                problem_mode: str | None,
-                channel: str | None = None) -> str:
+                problem_mode: str | None) -> str:
     """新建行使用独立命名空间，避免与存量 ``OPP-*`` 发生主键冲突。"""
-    material = opportunity_identity_key(
-        opp_type, core_tag, problem_mode, channel)
+    material = opportunity_identity_key(opp_type, core_tag, problem_mode)
     digest = hashlib.sha256(material.encode()).hexdigest()[:32]
     return f"OPP2-{digest.upper()}"
 
@@ -88,60 +75,6 @@ def _rep_snips(items: list[dict], members: Sequence[int], k: int = 5) -> list[st
     return out
 
 
-# ---------------------------------------------------------------- 诉求门
-def _intent_text(r: dict) -> str:
-    """诉求判定的取文口径：片段、正文、中译三者能拿到哪个就都给。
-
-    片段是云听按标签切出来的短句，诉求语气常常落在片段之外的正文里；
-    中译则是低资源语种唯一可靠的语义载体。三者拼接后再截断，
-    比只看片段多召回一个数量级（实测 0.62% -> 9.06%）。
-    """
-    seen: list[str] = []
-    for key in ("evidence_text", "snippet", "content", "content_zh"):
-        value = (r.get(key) or "").strip()
-        if value and value not in seen:
-            seen.append(value)
-    return "\n".join(seen)[:800]
-
-
-def intent_gate(rows: list[dict], ctx) -> tuple[list[dict], dict]:
-    """需求缺口渠道的 LLM 四分类闸门。低置信也放行（R11：宁可多看不可漏）。
-
-    这里曾有一道中文关键词正则做预筛，只有命中的行才送 LLM。它有两个
-    致命面：其一与 R11 直接冲突——把「宁可多看」做成了「只看关键词」；
-    其二它是一份中文词表，而本渠道 7,914 行里 4,082 行（52%）不是中文，
-    德文/法文/俄文/越南语/意大利语/印尼语的实测命中率是 0.00%，
-    整个语种的诉求信号被静默清零。2026-08-17 实测通过率 0.62%。
-    去掉预筛后全量送判，代价约 2.5M tokens——相对单轮全量重跑是零头，
-    而召回口径由提示词的四分类与置信阈值决定，不再由词表决定。
-    """
-    stats = {"total": len(rows), "intent": defaultdict(int)}
-
-    def classify(r: dict) -> dict:
-        obj, meta = llm.chat_json(prompts.INTENT_GATE.format(
-            content=_intent_text(r),
-            platform=r.get("platform"), interactions=r.get("interactions") or 0,
-            brands=",".join(r.get("brands") or []) or "-"),
-            max_tokens=250, required=["intent"])
-        ctx.bump(tokens=meta.get("tokens", 0))
-        return {**r, "_intent": obj.get("intent"),
-                "_conf": float(obj.get("confidence") or 0)}
-
-    judged = [r for r in rows if _intent_text(r)]
-    stats["no_text"] = len(rows) - len(judged)
-
-    out = []
-    for res in llm.parallel_map(classify, judged):
-        stats["intent"][res["_intent"]] += 1
-        if res["_intent"] == "需求缺口" and res["_conf"] >= C.INTENT_REVIEW:
-            res["_needs_review"] = res["_conf"] < C.INTENT_PASS
-            out.append(res)
-    stats["intent"] = dict(stats["intent"])
-    stats["passed"] = len(out)
-    ctx.metric_update(("intent_gate",), **stats)
-    return out, stats
-
-
 def _bucket_context(bucket, items: list[dict]) -> dict:
     categories = sorted({r.get("category") for r in items if r.get("category")})
     prod_lines = sorted({r.get("prod_line") for r in items if r.get("prod_line")})
@@ -149,12 +82,11 @@ def _bucket_context(bucket, items: list[dict]) -> dict:
     stars = [r["star"] for r in items if r.get("star") is not None]
     low_rate = (sum(1 for star in stars if star <= 2) / len(stars)) if stars else None
     return {
-        "bucket_key": f"{bucket.opp_type}|{bucket.topic}|{bucket.channel or '-'}",
+        "bucket_key": f"{bucket.opp_type}|{bucket.topic}",
         "category": categories[0] if len(categories) == 1 else (
             "跨品类" if categories else "未定"),
         "storage_category": categories[0] if len(categories) == 1 else None,
         "tag": bucket.topic if bucket.opp_type == "老品迭代" else None,
-        "channel": bucket.channel,
         "tax_path": paths.most_common(1)[0][0] if paths else "",
         "prod_line": prod_lines[0] if len(prod_lines) == 1 else (
             "通用" if prod_lines else "未定"),
@@ -167,17 +99,137 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
                            limit_buckets: int = 0, limit_rows: int = 0,
                            vote: bool | None = None,
                            verbose: bool = False) -> dict:
-    """统一入口：内容池 → 前置分类 → 生命周期分桶 → 生成与持久化。"""
-    from .routing import route_evidence_by_lifecycle
+    """统一入口：G1--G4 → G5 2×2 → 生命周期分桶 → 生成。"""
+    from .routing import (
+        classify_evidence_by_lifecycle,
+        route_classified_evidence,
+        route_social_value_evidence,
+    )
 
+    ctx.metric_update(
+        ("generation",), planned_buckets=0, completed_buckets=0,
+        failed_buckets=0, cancelled_buckets=0, planned_groups=0,
+        completed_groups=0, failed_groups=0, cancelled_groups=0,
+        planned_persistence=0, completed_persistence=0, failed_persistence=0,
+        unclassified_rows=0, dropped_rows=0,
+        grounding_checked_attempts=0, grounding_enforced_attempts=0,
+        grounding_flagged_attempts=0, grounding_issue_count=0,
+        grounding_orphan_issues=0, grounding_polarity_issues=0,
+        grounding_title_subject_issues=0, grounding_short_evidence_issues=0,
+        grounding_rejected_groups=0,
+        selected_evidence_rows=0,
+        social_candidate_rows=0, g1_competitor_rows=0,
+        g2_dewater_rows=0, g3_official_rows=0,
+        structural_passed_rows=0, value_gate_input_rows=0,
+        value_gate_input_messages=0, value_gate_cache_hit_messages=0,
+        value_gate_llm_messages=0, value_gate_llm_votes=0,
+        value_gate_failed_rows=0, g4_no_value_rows=0,
+        generic_claim_rows=0, unassigned_defect_rows=0,
+        social_old_pool_rows=0, social_innovation_pool_rows=0,
+        precluster_enabled=C.PRECLUSTER_ENABLED,
+        precluster_target_rows=0,
+        precluster_input_rows=0, precluster_input_units=0,
+        precluster_embedded_units=0, precluster_embed_failed_units=0,
+        precluster_clusters=0, precluster_singleton_clusters=0,
+        precluster_oversized_clusters=0, precluster_claim_empty=0,
+        precluster_cluster_member_units=0, precluster_cluster_member_rows=0,
+        precluster_planned_buckets=0,
+        scope_truncated_buckets=0, scope_truncated_rows=0)
+
+    structural = db.social_structural_gate_counts(week_start, week_end)
     rows = db.generation_pool(week_start, week_end)
-    routed = route_evidence_by_lifecycle(rows)
-    selected = [(bucket, items) for bucket, items in routed.buckets.items()
-                if opp_types is None or bucket.opp_type in opp_types]
+    ecommerce_rows = [row for row in rows if row.get("src_line") == "电商"]
+    social_rows = [row for row in rows if row.get("src_line") == "社媒"]
+
+    ecommerce_classified, invalid = classify_evidence_by_lifecycle(ecommerce_rows)
+    try:
+        gate = value_gate.apply_value_gate(social_rows, ctx)
+    except BaseException:
+        ctx.metric_update(
+            ("generation",), value_gate_input_rows=len(social_rows),
+            value_gate_failed_rows=len(social_rows))
+        raise
+    social_routing = route_social_value_evidence(gate.passed_rows)
+    classified = ecommerce_classified + social_routing.eligible
+
+    social_by_lifecycle = Counter(
+        row["_opp_type"] for row in social_routing.eligible
+    )
+    ctx.metric_update(
+        ("generation",),
+        social_candidate_rows=int(structural.get("social_candidate_rows", 0)),
+        g1_competitor_rows=int(structural.get("g1_competitor_rows", 0)),
+        g2_dewater_rows=int(structural.get("g2_dewater_rows", 0)),
+        g3_official_rows=int(structural.get("g3_official_rows", 0)),
+        structural_passed_rows=int(structural.get("structural_passed_rows", 0)),
+        value_gate_input_rows=len(social_rows),
+        value_gate_input_messages=int(gate.stats["input_messages"]),
+        value_gate_cache_hit_messages=int(gate.stats["cache_hit_messages"]),
+        value_gate_llm_messages=int(gate.stats["llm_messages"]),
+        value_gate_llm_votes=int(gate.stats["llm_votes"]),
+        value_gate_failed_rows=len(gate.failed_rows),
+        g4_no_value_rows=len(gate.no_value_rows),
+        generic_claim_rows=len(gate.generic_claim_rows),
+        unassigned_defect_rows=len(social_routing.unassigned_defects),
+        social_old_pool_rows=social_by_lifecycle.get("老品迭代", 0),
+        social_innovation_pool_rows=social_by_lifecycle.get("新品创新", 0),
+    )
+    if gate.failed_rows:
+        raise llm.LLMError(
+            f"G4 单消息判定失败，涉及 {len(gate.failed_rows)} 条证据")
+
+    scoped_rows = [
+        row for row in classified
+        if opp_types is None or row.get("_opp_type") in opp_types
+    ]
+    if C.PRECLUSTER_ENABLED:
+        innovation_rows = [
+            row for row in scoped_rows if row.get("_opp_type") == "新品创新"
+        ]
+        non_innovation_rows = [
+            row for row in scoped_rows if row.get("_opp_type") != "新品创新"
+        ]
+        ctx.metric_update(
+            ("generation",), precluster_target_rows=len(innovation_rows))
+        clustered = precluster.cluster_claims(innovation_rows, ctx)
+        pre_stats = clustered["stats"]
+        ctx.metric_update(
+            ("generation",),
+            precluster_input_rows=pre_stats["input_rows"],
+            precluster_input_units=pre_stats["input_units"],
+            precluster_embedded_units=pre_stats["embedded_units"],
+            precluster_embed_failed_units=pre_stats["embed_failed_units"],
+            precluster_clusters=pre_stats["clusters"],
+            precluster_singleton_clusters=pre_stats["singleton_clusters"],
+            precluster_oversized_clusters=pre_stats["oversized_clusters"],
+            precluster_claim_empty=pre_stats["claim_empty"],
+            precluster_cluster_member_units=pre_stats["cluster_member_units"],
+            precluster_cluster_member_rows=pre_stats["cluster_member_rows"],
+        )
+        if pre_stats["claim_empty"]:
+            raise RuntimeError(
+                "G4 已应将空/占位 claim 收敛为「诉求过泛」，"
+                f"预聚类仍收到 {pre_stats['claim_empty']} 条空 claim")
+        clustered_rows = [
+            row
+            for cluster_rows in clustered["clusters"].values()
+            for row in cluster_rows
+        ]
+        routed = route_classified_evidence(non_innovation_rows + clustered_rows)
+    else:
+        ctx.metric_update(
+            ("generation",),
+            precluster_target_rows=sum(
+                row.get("_opp_type") == "新品创新" for row in scoped_rows
+            ),
+        )
+        routed = route_classified_evidence(scoped_rows)
+
+    selected = list(routed.buckets.items())
     selected.sort(key=lambda pair: (-len(pair[1]), pair[0].opp_type,
-                                    pair[0].topic, pair[0].channel or ""))
+                                    pair[0].topic))
     available_buckets = len(selected)
-    scoped_evidence_rows = sum(len(items) for _, items in selected)
+    scoped_evidence_rows = len(scoped_rows)
     truncated_bucket_rows = 0
     if limit_buckets:
         truncated_bucket_rows = sum(len(items) for _, items in selected[limit_buckets:])
@@ -188,37 +240,37 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         if limit_rows else 0
     )
     truncated_rows = truncated_bucket_rows + truncated_row_limit
-    selected_evidence_rows = sum(
+    selected_stage1_rows = sum(
         min(len(items), limit_rows) if limit_rows else len(items)
         for _, items in selected)
+    selected_evidence_rows = selected_stage1_rows
 
     by_lifecycle = Counter()
-    for bucket, items in routed.buckets.items():
-        by_lifecycle[bucket.opp_type] += len(items)
+    for row in classified:
+        by_lifecycle[row["_opp_type"]] += 1
     by_source = Counter(r.get("src_line") for r in rows)
     ctx.metric_update(
-        ("pool",), evidence_rows=len(rows), routed_rows=sum(len(v) for v in routed.buckets.values()),
-        invalid_rows=len(routed.invalid), scoped_evidence_rows=scoped_evidence_rows,
+        ("pool",), evidence_rows=len(rows), routed_rows=len(classified),
+        invalid_rows=len(invalid), scoped_evidence_rows=scoped_evidence_rows,
         available_buckets=available_buckets, selected_buckets=len(selected),
         selected_evidence_rows=selected_evidence_rows,
         truncated_buckets=truncated_buckets, truncated_rows=truncated_rows,
         by_lifecycle=dict(sorted(by_lifecycle.items())),
         by_source=dict(sorted(by_source.items())))
+    innovation_planned_buckets = sum(
+        bucket.opp_type == "新品创新" for bucket, _ in selected)
     ctx.metric_update(
-        ("generation",), planned_buckets=len(selected), completed_buckets=0,
-        failed_buckets=0, cancelled_buckets=0, planned_groups=0,
-        completed_groups=0, failed_groups=0, cancelled_groups=0,
-        planned_persistence=0, completed_persistence=0, failed_persistence=0,
-        unclassified_rows=0, dropped_rows=0,
+        ("generation",), planned_buckets=len(selected),
+        precluster_planned_buckets=(
+            innovation_planned_buckets if C.PRECLUSTER_ENABLED else 0),
         selected_evidence_rows=selected_evidence_rows,
-        intent_gate_input_rows=0, intent_gate_passed_rows=0,
-        intent_gate_rejected_rows=0, intent_gate_failed_rows=0,
         scope_truncated_buckets=truncated_buckets,
         scope_truncated_rows=truncated_rows)
 
     # 限制参数可用来确认「是否会截断」，但生产入口不允许把
-    # 子集写入后冒充全量成功。在任何 LLM/持久化前失败，同时把
-    # 未启动桶记为 cancelled，run log 可明确看出不完整范围。
+    # 子集写入后冒充全量成功。语义簇本身决定桶数，因此必须在诉求门与
+    # 预聚类后才能判定截断；仍保证在 Stage1 和任何数据库写入前失败。
+    # 同时把未启动桶记为 cancelled，run log 可明确看出不完整范围。
     if truncated_buckets or truncated_rows:
         ctx.metric_update(("generation",), cancelled_buckets=len(selected))
         raise RuntimeError(
@@ -239,21 +291,9 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         try:
             items = original_items[:limit_rows] if limit_rows else original_items
             info = _bucket_context(bucket, items)
-            if bucket.opp_type == "新品创新" and bucket.channel == "需求缺口":
-                gate_input = len(items)
-                ctx.metric_incr(("generation",), intent_gate_input_rows=gate_input)
-                try:
-                    items, _ = intent_gate(items, ctx)
-                except BaseException:
-                    ctx.metric_incr(
-                        ("generation",), intent_gate_failed_rows=gate_input)
-                    raise
-                ctx.metric_incr(
-                    ("generation",), intent_gate_passed_rows=len(items),
-                    intent_gate_rejected_rows=gate_input - len(items))
             if not items:
                 ctx.metric_incr(("generation",), completed_buckets=1)
-                return {"pairs": [], "bucket": bucket}
+                return {"ids": [], "bucket": bucket}
 
             split = stage1.split_bucket(items, bucket.opp_type, info, ctx, vote=vote)
             groups = stage1.merge_similar_modes(split["groups"], ctx)
@@ -318,19 +358,33 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
                       f"：{dropped_groups[0]}")
             ctx.metric_incr(("generation",), completed_buckets=1,
                             planned_persistence=len(built))
-            return {"pairs": [(obj, items) for obj in built], "bucket": bucket}
+            pairs = [(obj, items) for obj in built]
         except Exception:
             ctx.metric_incr(("generation",), failed_buckets=1)
             raise
+
+        # 落库放进桶自己的线程。安全性来自分区：resolve_one 的 L1 只在同一
+        # core_tag 内召回候选（resolve.py:23 `core_tag IS NOT DISTINCT FROM %s`），
+        # 而桶键就是 core_tag，所以不同桶的卡永远不可能互为合并候选——
+        # 区内串行、区间并行，去重语义一个字不变。
+        #
+        # 这一步是整轮耗时的大头：2026-08-19 实测 generate_existing 4h44m 里
+        # Stage1 全量只占 143 秒，其余几乎全在这个此前串行的循环里。每张卡
+        # 平均 3 次 L3 判定、单次实测 4.2 秒（收尾 4,097 次调用 / 5h 反推），
+        # 串行叠起来就是几小时；并行后关键路径塌缩到最大桶的卡数 × 3。
+        #
+        # 必须放在 try 之外：桶已计入 completed_buckets，若落库失败再进
+        # except 会同时记 failed_buckets，打破 bp == bc + bf + bx 对账不变量。
+        # 落库失败自有 failed_persistence 记账，异常也会经 parallel_imap 上抛。
+        ids = persist_opportunities(
+            pairs, week, ctx, verbose=verbose, account=True)
+        return {"ids": ids, "bucket": bucket}
 
     created: list[str] = []
     try:
         for prepared in llm.parallel_imap(
                 prepare, selected, workers=len(selected) or 1):
-            pairs = prepared["pairs"]
-            ids = persist_opportunities(
-                pairs, week, ctx, verbose=verbose, account=True)
-            created.extend(ids)
+            created.extend(prepared["ids"])
     finally:
         generation = ctx.metrics.get("generation", {})
         ctx.metric_update(
@@ -352,7 +406,7 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
     if not reconciliation["complete"]:
         raise RuntimeError(f"生成对账失败：{reconciliation}")
     return {"created": created, "pool_rows": len(rows),
-            "invalid_rows": len(routed.invalid), "reconciliation": reconciliation}
+            "invalid_rows": len(invalid), "reconciliation": reconciliation}
 
 
 def generation_reconciliation(ctx) -> dict:
@@ -373,10 +427,52 @@ def generation_reconciliation(ctx) -> dict:
     scope_truncated_buckets = int(g.get("scope_truncated_buckets", 0))
     scope_truncated_rows = int(g.get("scope_truncated_rows", 0))
     selected_evidence_rows = int(g.get("selected_evidence_rows", 0))
-    gate_input_rows = int(g.get("intent_gate_input_rows", 0))
-    gate_passed_rows = int(g.get("intent_gate_passed_rows", 0))
-    gate_rejected_rows = int(g.get("intent_gate_rejected_rows", 0))
-    gate_failed_rows = int(g.get("intent_gate_failed_rows", 0))
+    social_candidate_rows = int(g.get("social_candidate_rows", 0))
+    g1_competitor_rows = int(g.get("g1_competitor_rows", 0))
+    g2_dewater_rows = int(g.get("g2_dewater_rows", 0))
+    g3_official_rows = int(g.get("g3_official_rows", 0))
+    structural_passed_rows = int(g.get("structural_passed_rows", 0))
+    value_gate_input_rows = int(g.get("value_gate_input_rows", 0))
+    value_gate_input_messages = int(g.get("value_gate_input_messages", 0))
+    value_gate_cache_hit_messages = int(g.get("value_gate_cache_hit_messages", 0))
+    value_gate_llm_messages = int(g.get("value_gate_llm_messages", 0))
+    value_gate_llm_votes = int(g.get("value_gate_llm_votes", 0))
+    value_gate_failed_rows = int(g.get("value_gate_failed_rows", 0))
+    g4_no_value_rows = int(g.get("g4_no_value_rows", 0))
+    generic_claim_rows = int(g.get("generic_claim_rows", 0))
+    unassigned_defect_rows = int(g.get("unassigned_defect_rows", 0))
+    social_old_pool_rows = int(g.get("social_old_pool_rows", 0))
+    social_innovation_pool_rows = int(g.get("social_innovation_pool_rows", 0))
+    precluster_enabled = bool(g.get("precluster_enabled", False))
+    precluster_target_rows = int(g.get("precluster_target_rows", 0))
+    precluster_input_rows = int(g.get("precluster_input_rows", 0))
+    precluster_input_units = int(g.get("precluster_input_units", 0))
+    precluster_embedded_units = int(g.get("precluster_embedded_units", 0))
+    precluster_embed_failed_units = int(
+        g.get("precluster_embed_failed_units", 0))
+    precluster_clusters = int(g.get("precluster_clusters", 0))
+    precluster_singleton_clusters = int(
+        g.get("precluster_singleton_clusters", 0))
+    precluster_oversized_clusters = int(
+        g.get("precluster_oversized_clusters", 0))
+    precluster_claim_empty = int(g.get("precluster_claim_empty", 0))
+    precluster_cluster_member_units = int(
+        g.get("precluster_cluster_member_units", 0))
+    precluster_cluster_member_rows = int(
+        g.get("precluster_cluster_member_rows", 0))
+    precluster_planned_buckets = int(
+        g.get("precluster_planned_buckets", 0))
+    grounding_checked_attempts = int(g.get("grounding_checked_attempts", 0))
+    grounding_enforced_attempts = int(g.get("grounding_enforced_attempts", 0))
+    grounding_flagged_attempts = int(g.get("grounding_flagged_attempts", 0))
+    grounding_issue_count = int(g.get("grounding_issue_count", 0))
+    grounding_orphan_issues = int(g.get("grounding_orphan_issues", 0))
+    grounding_polarity_issues = int(g.get("grounding_polarity_issues", 0))
+    grounding_title_subject_issues = int(
+        g.get("grounding_title_subject_issues", 0))
+    grounding_short_evidence_issues = int(
+        g.get("grounding_short_evidence_issues", 0))
+    grounding_rejected_groups = int(g.get("grounding_rejected_groups", 0))
 
     # Stage1 每个桶各自记账。这里同时汇总「逻辑证据行」和
     # 「批次尝试行」；开启投票时后者是前者的多倍，两者不能混为
@@ -411,10 +507,63 @@ def generation_reconciliation(ctx) -> dict:
         # 取消（sbx/srx）仍必须为 0——那代表本轮被中断。
         and sbx == srx == 0
     )
+    precluster_failed_ratio = (
+        precluster_embed_failed_units / max(precluster_input_units, 1))
+    precluster_failure_allowed = (
+        precluster_embed_failed_units <= C.GENERATION_MIN_FAILED_ABS
+        or precluster_failed_ratio <= C.GENERATION_MAX_FAILED_RATIO
+    )
+    precluster_complete = (
+        not precluster_enabled
+        or (
+            precluster_claim_empty == 0
+            and precluster_target_rows == precluster_input_rows
+            and precluster_input_units == (
+                precluster_embedded_units + precluster_embed_failed_units)
+            and precluster_cluster_member_units == (
+                precluster_embedded_units + precluster_embed_failed_units)
+            # 簇的「成员数」按去重后聚类单元计；同时单独对账
+            # 展开后证据行，避免多证据消息的其余行静默消失。
+            and precluster_cluster_member_rows == precluster_input_rows
+            and precluster_planned_buckets == precluster_clusters
+            and 0 <= precluster_singleton_clusters <= precluster_clusters
+            and precluster_failure_allowed
+        )
+    )
+    structural_gate_complete = (
+        social_candidate_rows == (
+            g1_competitor_rows + g2_dewater_rows + g3_official_rows
+            + structural_passed_rows
+        )
+        and structural_passed_rows == value_gate_input_rows
+    )
+    social_terminal_complete = (
+        value_gate_input_rows == (
+            g4_no_value_rows + generic_claim_rows + unassigned_defect_rows
+            + social_old_pool_rows + social_innovation_pool_rows
+            + value_gate_failed_rows
+        )
+        and value_gate_failed_rows == 0
+        and value_gate_input_messages == (
+            value_gate_cache_hit_messages + value_gate_llm_messages)
+    )
     routing_complete = (
-        gate_input_rows == gate_passed_rows + gate_rejected_rows
-        and gate_failed_rows == 0
-        and selected_evidence_rows == s1_input + gate_rejected_rows
+        selected_evidence_rows == s1_input
+        and precluster_complete
+        and structural_gate_complete
+        and social_terminal_complete
+    )
+    # grounding 作废复用 failed_groups 这个既有终态，不能另开一条会让机会点
+    # 静默消失的账。其余计数是报告模式观测量，也做基本单调性校验。
+    grounding_complete = (
+        0 <= grounding_enforced_attempts <= grounding_checked_attempts
+        and 0 <= grounding_flagged_attempts <= grounding_checked_attempts
+        and grounding_issue_count >= grounding_flagged_attempts
+        and grounding_issue_count == (
+            grounding_orphan_issues + grounding_polarity_issues
+            + grounding_title_subject_issues + grounding_short_evidence_issues)
+        and 0 <= grounding_rejected_groups <= grounding_flagged_attempts
+        and grounding_rejected_groups <= gf
     )
     complete = (
         bp == bc + bf + bx
@@ -422,6 +571,7 @@ def generation_reconciliation(ctx) -> dict:
         and pp == pc + pf + px
         and stage1_complete
         and routing_complete
+        and grounding_complete
         and scope_truncated_buckets == scope_truncated_rows == 0
         # gf（按质量校验跳过的单条产出）是【设计允许】的，不计入不完整：
         # 几千条产出里必然有个别过不了 Stage2/3/4 校验，这是概率问题。
@@ -442,10 +592,50 @@ def generation_reconciliation(ctx) -> dict:
         "scope_truncated_buckets": scope_truncated_buckets,
         "scope_truncated_rows": scope_truncated_rows,
         "selected_evidence_rows": selected_evidence_rows,
-        "intent_gate_input_rows": gate_input_rows,
-        "intent_gate_passed_rows": gate_passed_rows,
-        "intent_gate_rejected_rows": gate_rejected_rows,
-        "intent_gate_failed_rows": gate_failed_rows,
+        "social_candidate_rows": social_candidate_rows,
+        "g1_competitor_rows": g1_competitor_rows,
+        "g2_dewater_rows": g2_dewater_rows,
+        "g3_official_rows": g3_official_rows,
+        "structural_passed_rows": structural_passed_rows,
+        "value_gate_input_rows": value_gate_input_rows,
+        "value_gate_input_messages": value_gate_input_messages,
+        "value_gate_cache_hit_messages": value_gate_cache_hit_messages,
+        "value_gate_llm_messages": value_gate_llm_messages,
+        "value_gate_llm_votes": value_gate_llm_votes,
+        "value_gate_failed_rows": value_gate_failed_rows,
+        "g4_no_value_rows": g4_no_value_rows,
+        "generic_claim_rows": generic_claim_rows,
+        "unassigned_defect_rows": unassigned_defect_rows,
+        "social_old_pool_rows": social_old_pool_rows,
+        "social_innovation_pool_rows": social_innovation_pool_rows,
+        "structural_gate_complete": structural_gate_complete,
+        "social_terminal_complete": social_terminal_complete,
+        "precluster_enabled": precluster_enabled,
+        "precluster_target_rows": precluster_target_rows,
+        "precluster_input_rows": precluster_input_rows,
+        "precluster_input_units": precluster_input_units,
+        "precluster_embedded_units": precluster_embedded_units,
+        "precluster_embed_failed_units": precluster_embed_failed_units,
+        "precluster_clusters": precluster_clusters,
+        "precluster_singleton_clusters": precluster_singleton_clusters,
+        "precluster_oversized_clusters": precluster_oversized_clusters,
+        "precluster_claim_empty": precluster_claim_empty,
+        "precluster_cluster_member_units": precluster_cluster_member_units,
+        "precluster_cluster_member_rows": precluster_cluster_member_rows,
+        "precluster_planned_buckets": precluster_planned_buckets,
+        "precluster_failed_ratio": precluster_failed_ratio,
+        "precluster_failure_allowed": precluster_failure_allowed,
+        "precluster_complete": precluster_complete,
+        "grounding_checked_attempts": grounding_checked_attempts,
+        "grounding_enforced_attempts": grounding_enforced_attempts,
+        "grounding_flagged_attempts": grounding_flagged_attempts,
+        "grounding_issue_count": grounding_issue_count,
+        "grounding_orphan_issues": grounding_orphan_issues,
+        "grounding_polarity_issues": grounding_polarity_issues,
+        "grounding_title_subject_issues": grounding_title_subject_issues,
+        "grounding_short_evidence_issues": grounding_short_evidence_issues,
+        "grounding_rejected_groups": grounding_rejected_groups,
+        "grounding_complete": grounding_complete,
         "stage1_bucket_count": len(stage1_buckets),
         "stage1_input_rows": s1_input,
         "stage1_accounted_rows": s1_accounted,
@@ -481,6 +671,30 @@ def validate_lifecycle_sources(row: dict) -> tuple[str, list[str]]:
         raise ValueError(
             f"{row.get('opp_id')} 的 source_lines 含重复来源：{raw_sources!r}")
     return opp_type, sorted(sources)
+
+
+def refresh_opportunity_neighbors(ctx) -> dict:
+    """收尾刷新最近邻缓存，并确保两端机会点均不悬空。"""
+    db.execute("SELECT voc_refresh_opp_nn()")
+    rows = db.q("""
+      SELECT count(*)::bigint AS nn_rows,
+             count(*) FILTER (
+               WHERE source.opp_id IS NULL OR neighbor.opp_id IS NULL
+             )::bigint AS nn_orphan_rows
+        FROM voc_opp_nn nn
+        LEFT JOIN voc_opportunity source ON source.opp_id = nn.opp_id
+        LEFT JOIN voc_opportunity neighbor ON neighbor.opp_id = nn.neighbor_id
+    """)
+    stat = rows[0] if rows else {"nn_rows": 0, "nn_orphan_rows": 0}
+    normalized = {
+        "nn_rows": int(stat.get("nn_rows", 0)),
+        "nn_orphan_rows": int(stat.get("nn_orphan_rows", 0)),
+    }
+    ctx.metric_update(("finalize",), **normalized)
+    if normalized["nn_orphan_rows"]:
+        raise RuntimeError(
+            f"机会点最近邻缓存仍有 {normalized['nn_orphan_rows']} 条悬空")
+    return normalized
 
 
 # ---------------------------------------------------------------- 生成一个机会点
@@ -548,8 +762,7 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
                 else _no_placeholder(group["mode_name"]))
     problem_mode = _specific_mode(obj, group["mode_name"])
     return {
-        "opp_id": make_opp_id(
-            opp_type, core_tag, problem_mode, ctx_info.get("channel")),
+        "opp_id": make_opp_id(opp_type, core_tag, problem_mode),
         "opp_type": classification.opp_type,
         "classification_state": classification.classification_state,
         "classify_rule": classification.classify_rule,
@@ -558,7 +771,6 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
         "src_line": source_lines[0],
         "source_lines": source_lines,
         "evi_by_source": dict(sorted(source_counts.items())),
-        "channel": ctx_info.get("channel") if opp_type == "新品创新" else None,
         "prod_line": ctx_info.get("prod_line"),
         "category": ctx_info.get("storage_category"),
         "category_set": cats or None,
@@ -597,10 +809,10 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
 
 
 # ---------------------------------------------------------------- 落库
-# 这三个函数原先只存在于 scripts/run_generate.py 里，Dagster 的两个生成资产
-# 把机会点 build 出来后只是累加进列表就返回了，【从不落库】。也就是说周度
-# 调度这条路径跑完什么都没写进去。与 lifecycle.release_to_pm 是同一类问题：
-# 逻辑写在脚本里、调度器绕过脚本。提到这里由两条路径共用。
+# 这三个函数原先只存在于 scripts/run_generate.py 里，旧调度路径把机会点 build
+# 出来后只是累加进列表就返回了，【从不落库】。也就是说那条路径跑完什么都没
+# 写进去。与 lifecycle.release_to_pm 是同一类问题：逻辑写在脚本里、调度器绕过
+# 脚本。提到这里由手工链统一复用。
 def lock_opportunities(connection, opp_ids: Sequence[str]) -> None:
     """按稳定顺序锁定即将改写证据集的机会点。
 
@@ -632,7 +844,7 @@ def recount(opp_id: str, connection=None) -> None:
     # save / attach / merge 路径在关系变更前已先取得这把锁。
     lock_opportunities(connection, [opp_id])
     rows = connection.execute("""
-      SELECT m.src_line, m.spu, m.star,
+      SELECT m.src_line, m.spu, m.spu_inherited, m.star,
              p.requires_spu AS source_requires_spu
         FROM voc_opp_evidence oe
         JOIN voc_message m USING (message_id)
@@ -691,11 +903,11 @@ def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
                       "WHERE opp_id=%s", [week, opp_id])
         else:
             opp_id = opp["opp_id"]
-            # 同一 v2 身份的并发 create 串行化；存量 OPP-* 不在此命名空间。
+            # 同一 v3 身份的并发 create 串行化；存量 OPP-* 不在此命名空间。
             c.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                       [opp_id])
             existing = c.execute(
-                "SELECT opp_id, opp_type, core_tag, problem_mode, channel, "
+                "SELECT opp_id, opp_type, core_tag, problem_mode, "
                 "classification_state, merged_into, safety_flag "
                 "FROM voc_opportunity "
                 "WHERE opp_id=%s FOR UPDATE", [opp_id]).fetchone()
@@ -703,27 +915,24 @@ def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
                 if existing.get("merged_into"):
                     # 普通 MERGE 源被清空证据后会 recount 成 R0，opp_type
                     # 合法地变为 NULL；不能拿墓碑当前类型重算原 ID。身份内容
-                    # 字段仍保留，先用它们（含新品业务 channel）排除碰撞。
+                    # 字段仍保留，先用它们排除碰撞。
                     expected_content = (
                         _identity_text(opp.get("core_tag")),
                         _identity_text(opp.get("problem_mode")),
-                        (_identity_text(opp.get("channel"))
-                         if opp["opp_type"] == "新品创新" else ""),
                     )
                     actual_content = (
                         _identity_text(existing.get("core_tag")),
                         _identity_text(existing.get("problem_mode")),
-                        _identity_text(existing.get("channel")),
                     )
                     if actual_content != expected_content:
                         raise RuntimeError(f"opp_id 墓碑身份冲突：{opp_id}")
                 else:
                     expected = opportunity_identity_key(
                         opp["opp_type"], opp.get("core_tag"),
-                        opp.get("problem_mode"), opp.get("channel"))
+                        opp.get("problem_mode"))
                     actual = opportunity_identity_key(
                         existing["opp_type"], existing.get("core_tag"),
-                        existing.get("problem_mode"), existing.get("channel"))
+                        existing.get("problem_mode"))
                     if actual != expected:
                         raise RuntimeError(f"opp_id 哈希冲突：{opp_id}")
 
@@ -738,7 +947,7 @@ def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
                         raise RuntimeError(f"merged_into 出现循环：{sorted(seen | {next_id})}")
                     seen.add(next_id)
                     canonical = c.execute(
-                        "SELECT opp_id, opp_type, core_tag, problem_mode, channel, "
+                        "SELECT opp_id, opp_type, core_tag, problem_mode, "
                         "classification_state, merged_into, safety_flag "
                         "FROM voc_opportunity WHERE opp_id=%s FOR UPDATE",
                         [next_id]).fetchone()

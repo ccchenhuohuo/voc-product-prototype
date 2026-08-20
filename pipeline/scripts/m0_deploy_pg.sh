@@ -44,13 +44,7 @@ for i in $(seq 1 60); do
 done
 docker exec "$CONTAINER" pg_isready -U voc_admin -d voc
 
-echo "== 4. 建 Dagster 元数据库 =="
-docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc \
-  "SELECT 1 FROM pg_database WHERE datname='voc_dagster'" | grep -q 1 \
-  || docker exec "$CONTAINER" psql -U voc_admin -d voc \
-       -c "CREATE DATABASE voc_dagster OWNER voc_admin;"
-
-echo "== 5. 扩展可用性检查 =="
+echo "== 4. 扩展可用性检查 =="
 # 查的必须是本项目实际使用的扩展。原来写的是 pg_bigm/pgroonga——那是别的项目的
 # 中文分词方案，本项目用 pg_trgm，检查恒为「缺失」却没人看，等于没检查。
 MISSING=$(docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc \
@@ -59,7 +53,7 @@ MISSING=$(docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc \
 [ -z "$MISSING" ] || { echo "!! 缺少必需扩展: $MISSING" >&2; exit 6; }
 echo "   vector / pg_trgm 均可用"
 
-echo "== 6. 执行 DDL =="
+echo "== 5. 执行 DDL =="
 # 只跑空库可安全执行的结构性迁移。排除的三类及原因：
 #   · 011 / 012 —— 自检要插 __selftest__ 行，而人工表对 voc_opportunity 有外键，
 #     空库无机会点可引用，必然失败。它们的触发器定义本身是需要的。
@@ -73,13 +67,13 @@ for f in $EMPTY_DB_SAFE; do
   docker exec -i "$CONTAINER" psql -U voc_admin -d voc -v ON_ERROR_STOP=1 < "sql/${f}.sql"
 done
 
-echo "== 7. 设置角色口令 =="
+echo "== 6. 设置角色口令 =="
 docker exec "$CONTAINER" psql -U voc_admin -d voc -v ON_ERROR_STOP=1 \
   -c "ALTER ROLE voc_writer PASSWORD '${VOC_WRITER_PASSWORD}';" \
   -c "ALTER ROLE voc_human  PASSWORD '${VOC_HUMAN_PASSWORD}';" \
   -c "ALTER ROLE voc_reader PASSWORD '${VOC_READER_PASSWORD}';"
 
-echo "== 8. 验收 =="
+echo "== 7. 验收 =="
 docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc "
   SELECT 'tables=' || count(*) FROM information_schema.tables
    WHERE table_schema='public' AND table_type='BASE TABLE';"
@@ -91,7 +85,7 @@ docker exec "$CONTAINER" psql -U voc_admin -d voc -tAc "
 
 cat <<'REMAIN'
 
-== 9. 本脚本【未】应用的迁移，上线前必须另行处理 ==
+== 8. 本脚本【未】应用的迁移，上线前必须另行处理 ==
    011_audit_after_trigger.sql       人工层 AFTER 审计（自检需已有机会点可引用）
    012_audit_after_trigger_opp.sql   机会点人工层 AFTER 审计（同上）
    013_src_line_rename.sql           仅存量库升级：断言写死 645 行，空库不适用

@@ -19,7 +19,7 @@ END $$;
 -- REFRESH 与 DROP 争的是同一把物化视图锁，先到先得，不会并发。
 -- 这里不能写 LOCK TABLE voc_spu_issue —— PostgreSQL 明确拒绝对物化视图加显式表锁
 -- （cannot lock relation ... not supported for materialized views），2026-08-17 实测。
--- 真正的保护仍是受控窗口：执行前停止 Dagster 调度。
+-- 真正的保护仍是受控窗口：执行前停止并行手工生成。
 LOCK TABLE public.voc_opportunity, public.voc_opp_evidence IN SHARE ROW EXCLUSIVE MODE;
 
 ALTER TABLE voc_opportunity

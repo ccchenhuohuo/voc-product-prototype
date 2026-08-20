@@ -18,9 +18,9 @@ PRIORITY = {"项目中": 5, "在跟进": 4, "已完成": 3, "考虑中": 2, "不
 def release_to_pm() -> dict:
     """安全类 / 双源印证 / rank Top-N 放行进 PM 视野，其余留 backlog。
 
-    这段逻辑早期只写在 Dagster 的 release_to_pm 资产里，而冷启动是直接跑
-    scripts/run_generate.py 绕过 Dagster 的，结果 593 条机会点全部留在
-    backlog、PM 侧一条也看不到。提取到这里由两条路径共用，避免再次漏跑。
+    这段逻辑早期只写在旧调度资产里，而冷启动直接跑
+    scripts/run_generate.py 时会绕过它，结果机会点全部留在 backlog、PM 侧一条
+    也看不到。提取到这里由手工收尾路径调用，避免再次漏跑。
 
     needs_review 的条目【照常放行】：§3.4 的 voc_inbox 就是靠
     「needs_review AND NOT backlog」把它们送进 PM 的复核队列，
@@ -64,7 +64,7 @@ def tombstones(require_vec: bool = False) -> list[dict]:
     """
     sql = """
       SELECT o.opp_id, o.problem_mode, o.title, o.rep_snippets,
-             o.mode_vec::text AS vec, o.core_tag, o.opp_type, o.channel,
+             o.mode_vec::text AS vec, o.core_tag, o.opp_type,
              o.safety_flag, o.evi_total
         FROM voc_opportunity o JOIN voc_opportunity_manual m USING(opp_id)
        WHERE m.status='不考虑'"""
