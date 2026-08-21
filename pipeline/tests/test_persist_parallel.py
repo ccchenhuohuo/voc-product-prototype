@@ -53,6 +53,15 @@ def test_persistence_happens_in_worker_threads(monkeypatch) -> None:
                         lambda *a, **k: {})
     monkeypatch.setattr(P.db, "generation_pool", lambda *a, **k: rows)
     monkeypatch.setattr(P.db, "verify_assign_snapshot", lambda _run_id: len(rows))
+    monkeypatch.setattr(
+        P.db, "load_assign_snapshot_rows",
+        lambda _run_id: [
+            {"message_id": row["message_id"], "seq": row["seq"],
+             "assigned_spu": row["spu_assignments"][0]["assigned_spu"]}
+            for row in rows
+        ],
+    )
+    monkeypatch.setattr(P.db, "clear_terminal_evidence", lambda _run_id: 0)
     monkeypatch.setattr(P.db, "save_unclassified", lambda *a, **k: 0)
     monkeypatch.setattr(P.db, "q", lambda *a, **k: [])
 

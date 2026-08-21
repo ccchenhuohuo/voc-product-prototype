@@ -118,6 +118,11 @@ GENERATION_MAX_FAILED_RATIO = float(
 # 小桶（2~5 条）坏 1 条在比例上是 20%~50%，但那只是 1 条，不是系统性失败。
 GENERATION_MIN_FAILED_ABS = int(
     os.environ.get("VOC_GENERATION_MIN_FAILED_ABS", "2"))
+# 守恒终态损耗上限：F 中没有落到关系表、而进入已知终态账的扇出键占比。
+# 它约束的是整轮数据完整性，来源于 v3 守恒门要求，和 STRATEGY、生成失败
+# 容忍策略都无关；默认最多允许 5%。
+TERMINAL_LOSS_MAX_RATIO = float(
+    os.environ.get("VOC_TERMINAL_LOSS_MAX_RATIO", "0.05"))
 # 新增 grounding 闸门先以报告模式标定；显式开关后才参与重试/作废。
 GROUNDING_ENFORCE = os.environ.get(
     "VOC_GROUNDING_ENFORCE", "0").strip().casefold() in {

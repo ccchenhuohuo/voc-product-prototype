@@ -153,6 +153,50 @@ def verify_assign_snapshot(run_id: str) -> int:
     return int(q1("SELECT voc_verify_assign_snapshot(%s)", [run_id]) or 0)
 
 
+def load_assign_snapshot_rows(run_id: str) -> list[dict]:
+    """物理读取当前轮全部扇出键；守恒门不得从 generation_pool 反推 F。"""
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    return q(
+        """SELECT message_id, seq, assigned_spu
+             FROM voc_assign_snapshot
+            WHERE run_id = %s
+            ORDER BY message_id, seq, assigned_spu""",
+        [run_id],
+    )
+
+
+def load_relation_assignment_rows(run_id: str) -> list[dict]:
+    """读取当前轮 OPP2 老品关系的 distinct 扇出投影键。"""
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    return q(
+        """SELECT DISTINCT oe.message_id, oe.seq, oe.assigned_spu
+             FROM voc_opp_evidence oe
+             JOIN voc_opportunity o ON o.opp_id = oe.opp_id
+            WHERE oe.assign_run_id = %s
+              AND o.opp_id LIKE 'OPP2-%%'
+              AND o.opp_type = '老品迭代'
+              AND oe.assigned_spu IS NOT NULL
+            ORDER BY oe.message_id, oe.seq, oe.assigned_spu""",
+        [run_id],
+    )
+
+
+def load_terminal_assignment_rows(run_id: str) -> list[dict]:
+    """读取当前轮终态账的 distinct 扇出键。"""
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    return q(
+        """SELECT DISTINCT message_id, seq, assigned_spu
+             FROM voc_unclassified_evidence
+            WHERE run_id = %s
+              AND assigned_spu IS NOT NULL
+            ORDER BY message_id, seq, assigned_spu""",
+        [run_id],
+    )
+
+
 def load_social_gates(message_ids: Sequence[str], prompt_ver: str) -> list[dict]:
     """只读取当前 prompt 版本的 G4 缓存；旧版本自动重判。"""
     ids = sorted(set(message_ids))
@@ -185,9 +229,83 @@ def save_run_log(ctx, stage: str, **kw) -> None:
     upsert("voc_run_log", [row], ["run_id"])
 
 
-def save_unclassified(pairs: Iterable[tuple[str, int]], week: str, reason: str) -> int:
-    rows = [{"message_id": m, "seq": s, "week": week, "reason": reason} for m, s in pairs]
-    return upsert("voc_unclassified_evidence", rows, ["message_id", "seq", "week"])
+TERMINAL_REASONS = frozenset({
+    "unclassified", "vote_dropped", "truncated",
+    "generation_failed", "grounding_rejected",
+})
+
+
+def save_unclassified(pairs: Iterable[tuple[str, int]], week: str,
+                      reason: str) -> int:
+    """保留无 SPU 的 legacy 终态；035 后用 NULL-run 局部唯一键幂等写。"""
+    if reason not in TERMINAL_REASONS:
+        raise ValueError(f"未知终态原因：{reason!r}")
+    rows = list(dict.fromkeys(pairs))
+    if not rows:
+        return 0
+    with conn() as c:
+        cur = c.cursor()
+        cur.executemany(
+            """INSERT INTO voc_unclassified_evidence
+                      (message_id, seq, week, reason)
+               VALUES (%s, %s, %s, %s)
+               ON CONFLICT (message_id, seq, week) WHERE run_id IS NULL
+               DO UPDATE SET reason = EXCLUDED.reason""",
+            [(message_id, seq, week, reason) for message_id, seq in rows],
+        )
+        return cur.rowcount or 0
+
+
+def clear_terminal_evidence(run_id: str) -> int:
+    """同一 run_id 重试前清除该轮部分账；旧的 NULL-run 存量不受影响。"""
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    return execute(
+        "DELETE FROM voc_unclassified_evidence WHERE run_id = %s",
+        [run_id],
+    )
+
+
+def save_terminal_evidence(
+    evidence_rows: Iterable[Mapping[str, object]],
+    week: str,
+    reason: str,
+    run_id: str,
+) -> int:
+    """按快照扇出键写本轮终态，一条事实的多个 SPU 必须保留为多行。"""
+    if reason not in TERMINAL_REASONS:
+        raise ValueError(f"未知终态原因：{reason!r}")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    by_key: dict[tuple[str, int, str], dict] = {}
+    for item in evidence_rows:
+        message_id = item.get("message_id")
+        seq = item.get("seq", 0)
+        assigned_spu = item.get("assigned_spu")
+        if not isinstance(message_id, str) or not message_id:
+            raise ValueError(f"终态行缺少 message_id：{message_id!r}")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            raise ValueError(f"终态行 seq 必须是整数：{seq!r}")
+        if (not isinstance(assigned_spu, str) or not assigned_spu
+                or assigned_spu != assigned_spu.strip()):
+            raise ValueError(
+                f"终态行缺少冻结 assigned_spu：{assigned_spu!r}")
+        key = (message_id, seq, assigned_spu)
+        by_key[key] = {
+            "message_id": message_id,
+            "seq": seq,
+            "week": week,
+            "reason": reason,
+            "run_id": run_id,
+            "assigned_spu": assigned_spu,
+        }
+    if not by_key:
+        return 0
+    return upsert(
+        "voc_unclassified_evidence", list(by_key.values()),
+        ["run_id", "message_id", "seq", "assigned_spu"],
+        update_cols=["week", "reason"],
+    )
 
 
 # ---------------------------------------------------------------- 领域查询

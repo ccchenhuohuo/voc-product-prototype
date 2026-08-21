@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""守恒等式实测：在全量 G5 池上算 U / F / R，并给出 v3 分桶分布。
+"""守恒等式实测：物理快照算 F、实际路由算 R，并给出双向差集。
 
 只读。G4 判定读 voc_social_gate 缓存，不调 LLM、不写库。
 走的是生产代码的 generation_pool() 与 route_social_value_evidence()，
@@ -9,9 +9,9 @@
 
 规格 §5 定义：
   U = 唯一事实数 count(DISTINCT (message_id, seq))
-  F = 扇出后应有行数 Σ count(DISTINCT assigned_spu)
+  F = voc_assign_snapshot 当前 run_id 的物理扇出键行数
   R = 路由实际产出行数（进入 L1 分桶的行数）
-守恒要求 R = F。
+守恒要求行数相等、无重复，且两侧键的双向差集均为空。
 """
 from __future__ import annotations
 
@@ -22,9 +22,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from voc_analytics import db  # noqa: E402
+from voc_analytics import db, pipeline  # noqa: E402
 from voc_analytics.routing import (  # noqa: E402
     classify_evidence_by_lifecycle,
+    route_classified_evidence,
     route_social_value_evidence,
 )
 
@@ -33,13 +34,59 @@ GATES = """SELECT message_id, cls FROM voc_social_gate
                                  ORDER BY judged_at DESC LIMIT 1)"""
 
 
-def main() -> None:
+def print_conservation(
+    snapshot_rows: list[dict],
+    routed_rows: list[dict],
+    *,
+    emit=print,
+) -> dict:
+    """打印可证伪的 F/R 对账；纯内存入口供离线注入测试复用。"""
+    stat = pipeline.assignment_route_reconciliation(
+        snapshot_rows, routed_rows)
+    fan: dict[tuple[str, int], set[str]] = {}
+    for row in snapshot_rows:
+        key = (row["message_id"], row["seq"])
+        fan.setdefault(key, set()).add(row["assigned_spu"])
+    unique_facts = len(fan)
+    multi = sum(1 for spus in fan.values() if len(spus) > 1)
+
+    emit("\n" + "=" * 54)
+    emit("守恒等式（老品迭代，全量池）")
+    emit("=" * 54)
+    emit(f"  U 唯一事实数      {unique_facts:>6}")
+    emit(f"  F 物理快照行数    {stat['snapshot_rows']:>6}")
+    outcome = "✓ 键集合一致" if stat["complete"] else "✗ 守恒破坏"
+    emit(f"  R 路由产出行数    {stat['routed_rows']:>6}   {outcome}")
+    emit("  snapshot EXCEPT routed "
+         f"{stat['snapshot_except_routed_rows']:>6}  "
+         f"samples={stat['snapshot_except_routed_samples']}")
+    emit("  routed EXCEPT snapshot "
+         f"{stat['routed_except_snapshot_rows']:>6}  "
+         f"samples={stat['routed_except_snapshot_samples']}")
+    emit("  重复行（快照/路由） "
+         f"{stat['snapshot_duplicate_rows']:>5} / "
+         f"{stat['routed_duplicate_rows']}")
+    ratio = stat["snapshot_rows"] / unique_facts if unique_facts else 0.0
+    emit(f"  F/U 扇出倍率      {ratio:>6.3f}")
+    multi_ratio = 100.0 * multi / unique_facts if unique_facts else 0.0
+    emit(f"  多 SPU 证据       {multi:>6}  ({multi_ratio:.1f}%)")
+    emit(f"  单条最多 SPU 数   "
+         f"{max((len(v) for v in fan.values()), default=0):>6}")
+    return stat
+
+
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", required=True,
                         help="已由 voc_prepare_assign_snapshot 准备的运行 ID")
     args = parser.parse_args()
 
-    db.verify_assign_snapshot(args.run_id)
+    verified_snapshot_rows = db.verify_assign_snapshot(args.run_id)
+    snapshot_rows = db.load_assign_snapshot_rows(args.run_id)
+    if len(snapshot_rows) != verified_snapshot_rows:
+        print("✗ 快照物理读取与指纹计数不一致："
+              f"verified={verified_snapshot_rows}, loaded={len(snapshot_rows)}")
+        return 1
     rows = db.generation_pool(assign_run_id=args.run_id)
     gate = {r["message_id"]: r["cls"] for r in db.q(GATES)}
     print(f"[池] generation_pool 全量 {len(rows)} 行")
@@ -77,33 +124,18 @@ def main() -> None:
     print(f"\n[生命周期] 老品迭代 {len(old)}  新品创新 {len(new)}"
           f"  无效 {len(ec_invalid)}")
 
-    # ---- 守恒等式：只对老品有意义（新品无 SPU）----
-    U = len({(r["message_id"], r["seq"]) for r in old})
-    fan: dict[tuple, set[str]] = {}
-    for r in old:
-        key = (r["message_id"], r["seq"])
-        assigned_spu = (r.get("assigned_spu") or "").strip()
-        if assigned_spu:
-            fan.setdefault(key, set()).add(assigned_spu)
-    F = sum(len(v) for v in fan.values())
-    R = len(old)
-    multi = sum(1 for v in fan.values() if len(v) > 1)
-
-    print("\n" + "=" * 54)
-    print("守恒等式（老品迭代，全量池）")
-    print("=" * 54)
-    print(f"  U 唯一事实数      {U:>6}")
-    print(f"  F 扇出后应有行数  {F:>6}")
-    print(f"  R 路由产出行数    {R:>6}   {'✓ R = F' if R == F else '✗ 守恒破坏'}")
-    print(f"  F/U 扇出倍率      {F/U:>6.3f}")
-    print(f"  多 SPU 证据       {multi:>6}  ({100.0*multi/U:.1f}%)")
-    print(f"  单条最多 SPU 数   {max((len(v) for v in fan.values()), default=0):>6}")
+    # ---- 守恒等式：F 与 R 必须来自独立来源 ----
+    old_routing = route_classified_evidence(old)
+    routed_old_rows = [
+        row
+        for bucket, items in old_routing.buckets.items()
+        if bucket.opp_type == "老品迭代"
+        for row in items
+    ]
+    conservation = print_conservation(snapshot_rows, routed_old_rows)
 
     # ---- v3 分桶分布 ----
-    buckets = Counter()
-    for key, spus in fan.items():
-        for spu in spus:
-            buckets[spu] += 1
+    buckets = Counter(row["assigned_spu"] for row in routed_old_rows)
     sizes = sorted(buckets.values(), reverse=True)
     n = len(sizes)
 
@@ -120,7 +152,8 @@ def main() -> None:
     print(f"  >50 行的热门桶    {sum(1 for s in sizes if s > 50):>6}")
     print(f"  Stage1 批次       {batches:>6}")
     print()
+    return 0 if conservation["complete"] else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib, json, re, unicodedata
 from collections import Counter
-from typing import Sequence
+from typing import Iterable, Mapping, Sequence
 
 from psycopg.types.json import Jsonb
 
@@ -11,6 +11,171 @@ from .stages import generate, precluster, stage1, validate, value_gate
 
 
 _IDENTITY_SEP = re.compile(r"[\s\-_—–/|，,。.;；:：()（）\[\]【】]+")
+
+AssignmentKey = tuple[str, int, str]
+
+
+def _assignment_key(row: Mapping[str, object]) -> AssignmentKey:
+    """从快照、路由、关系或终态行提取同一份扇出键。"""
+    message_id = row.get("message_id")
+    seq = row.get("seq", 0)
+    assigned_spu = row.get("assigned_spu")
+    if not isinstance(message_id, str) or not message_id:
+        raise ValueError(f"归属键缺少 message_id：{message_id!r}")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        raise ValueError(f"归属键 seq 必须是整数：{seq!r}")
+    if (not isinstance(assigned_spu, str) or not assigned_spu
+            or assigned_spu != assigned_spu.strip()):
+        raise ValueError(f"归属键 assigned_spu 非法：{assigned_spu!r}")
+    return message_id, seq, assigned_spu
+
+
+def _sample_assignment_keys(keys: Iterable[AssignmentKey]) -> list[str]:
+    """错误与 run log 共用的稳定样例；最多 10 个，避免巨量日志。"""
+    return [repr(key) for key in sorted(set(keys))[:10]]
+
+
+def assignment_route_reconciliation(
+    snapshot_rows: Iterable[Mapping[str, object]],
+    routed_rows: Iterable[Mapping[str, object]],
+) -> dict:
+    """对物理快照与实际路由行同时做计数和双向键差集。"""
+    snapshot_keys = [_assignment_key(row) for row in snapshot_rows]
+    routed_keys = [_assignment_key(row) for row in routed_rows]
+    snapshot_set = set(snapshot_keys)
+    routed_set = set(routed_keys)
+    snapshot_only = snapshot_set - routed_set
+    routed_only = routed_set - snapshot_set
+    snapshot_duplicates = len(snapshot_keys) - len(snapshot_set)
+    routed_duplicates = len(routed_keys) - len(routed_set)
+    complete = (
+        not snapshot_only
+        and not routed_only
+        and snapshot_duplicates == 0
+        and routed_duplicates == 0
+        and len(snapshot_keys) == len(routed_keys)
+    )
+    return {
+        "complete": complete,
+        "snapshot_rows": len(snapshot_keys),
+        "snapshot_distinct_rows": len(snapshot_set),
+        "routed_rows": len(routed_keys),
+        "routed_distinct_rows": len(routed_set),
+        "snapshot_duplicate_rows": snapshot_duplicates,
+        "routed_duplicate_rows": routed_duplicates,
+        "snapshot_except_routed_rows": len(snapshot_only),
+        "routed_except_snapshot_rows": len(routed_only),
+        "snapshot_except_routed_samples": _sample_assignment_keys(snapshot_only),
+        "routed_except_snapshot_samples": _sample_assignment_keys(routed_only),
+    }
+
+
+def _assignment_route_error(stat: Mapping[str, object]) -> str:
+    return (
+        "归属路由守恒失败："
+        f"F={stat['snapshot_rows']}, R={stat['routed_rows']}; "
+        "snapshot EXCEPT routed="
+        f"{stat['snapshot_except_routed_rows']} "
+        f"samples={stat['snapshot_except_routed_samples']}; "
+        "routed EXCEPT snapshot="
+        f"{stat['routed_except_snapshot_rows']} "
+        f"samples={stat['routed_except_snapshot_samples']}; "
+        f"snapshot_duplicates={stat['snapshot_duplicate_rows']}, "
+        f"routed_duplicates={stat['routed_duplicate_rows']}"
+    )
+
+
+def assignment_projection_reconciliation(
+    snapshot_rows: Iterable[Mapping[str, object]],
+    relation_rows: Iterable[Mapping[str, object]],
+    terminal_rows: Iterable[Mapping[str, object]],
+    *,
+    max_terminal_loss_ratio: float,
+) -> dict:
+    """计算终态等式及投影双向差集；输入是物理键行而非手工 metrics。"""
+    if not 0.0 <= max_terminal_loss_ratio <= 1.0:
+        raise ValueError(
+            "终态损耗率阈值必须位于 [0, 1]："
+            f"{max_terminal_loss_ratio!r}")
+
+    snapshot_keys = [_assignment_key(row) for row in snapshot_rows]
+    relation_keys = {_assignment_key(row) for row in relation_rows}
+    terminal_keys = {_assignment_key(row) for row in terminal_rows}
+    snapshot_set = set(snapshot_keys)
+
+    snapshot_except_relation = snapshot_set - relation_keys
+    relation_except_snapshot = relation_keys - snapshot_set
+    unaccounted = snapshot_set - relation_keys - terminal_keys
+    terminal_except_snapshot = terminal_keys - snapshot_set
+    relation_terminal_overlap = relation_keys & terminal_keys
+
+    fanout_rows = len(snapshot_keys)
+    projected_unique_rows = len(relation_keys)
+    terminal_distinct_rows = len(terminal_keys)
+    terminal_loss_ratio = (
+        terminal_distinct_rows / fanout_rows if fanout_rows else 0.0
+    )
+    equation_complete = (
+        fanout_rows == projected_unique_rows + terminal_distinct_rows
+    )
+    complete = (
+        len(snapshot_set) == fanout_rows
+        and not relation_except_snapshot
+        and not unaccounted
+        and not terminal_except_snapshot
+        and not relation_terminal_overlap
+        and equation_complete
+        and terminal_loss_ratio <= max_terminal_loss_ratio
+    )
+    return {
+        "complete": complete,
+        "snapshot_rows": fanout_rows,
+        "snapshot_distinct_rows": len(snapshot_set),
+        "projected_distinct_rows": projected_unique_rows,
+        "terminal_distinct_rows": terminal_distinct_rows,
+        "equation_complete": equation_complete,
+        "terminal_loss_ratio": terminal_loss_ratio,
+        "max_terminal_loss_ratio": max_terminal_loss_ratio,
+        "snapshot_except_relation_rows": len(snapshot_except_relation),
+        "relation_except_snapshot_rows": len(relation_except_snapshot),
+        "unaccounted_rows": len(unaccounted),
+        "terminal_except_snapshot_rows": len(terminal_except_snapshot),
+        "relation_terminal_overlap_rows": len(relation_terminal_overlap),
+        "snapshot_except_relation_samples": _sample_assignment_keys(
+            snapshot_except_relation),
+        "relation_except_snapshot_samples": _sample_assignment_keys(
+            relation_except_snapshot),
+        "unaccounted_samples": _sample_assignment_keys(unaccounted),
+        "terminal_except_snapshot_samples": _sample_assignment_keys(
+            terminal_except_snapshot),
+        "relation_terminal_overlap_samples": _sample_assignment_keys(
+            relation_terminal_overlap),
+    }
+
+
+def _assignment_projection_error(stat: Mapping[str, object]) -> str:
+    return (
+        "v3 终态守恒自检失败："
+        f"F={stat['snapshot_rows']}, "
+        f"P_unique={stat['projected_distinct_rows']}, "
+        f"D={stat['terminal_distinct_rows']}, "
+        f"D/F={stat['terminal_loss_ratio']:.4f} "
+        f"(上限 {stat['max_terminal_loss_ratio']:.4f}); "
+        "snapshot EXCEPT relation="
+        f"{stat['snapshot_except_relation_rows']} "
+        f"samples={stat['snapshot_except_relation_samples']}; "
+        "relation EXCEPT snapshot="
+        f"{stat['relation_except_snapshot_rows']} "
+        f"samples={stat['relation_except_snapshot_samples']}; "
+        "既不在关系也不在终态="
+        f"{stat['unaccounted_rows']} samples={stat['unaccounted_samples']}; "
+        "terminal EXCEPT snapshot="
+        f"{stat['terminal_except_snapshot_rows']} "
+        f"samples={stat['terminal_except_snapshot_samples']}; "
+        "relation INTERSECT terminal="
+        f"{stat['relation_terminal_overlap_rows']} "
+        f"samples={stat['relation_terminal_overlap_samples']}"
+    )
 
 
 def _identity_text(value: str | None) -> str:
@@ -141,6 +306,11 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
 
     structural = db.social_structural_gate_counts(week_start, week_end)
     snapshot_rows = db.verify_assign_snapshot(ctx.run_id)
+    snapshot_assignment_rows = db.load_assign_snapshot_rows(ctx.run_id)
+    if len(snapshot_assignment_rows) != snapshot_rows:
+        raise RuntimeError(
+            "归属快照物理读取行数与指纹校验不一致："
+            f"verified={snapshot_rows}, loaded={len(snapshot_assignment_rows)}")
     rows = db.generation_pool(
         week_start, week_end, assign_run_id=ctx.run_id)
     ecommerce_rows = [row for row in rows if row.get("src_line") == "电商"]
@@ -230,46 +400,55 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         )
         routed = route_classified_evidence(scoped_rows)
 
-    old_rows = [
-        row for row in scoped_rows if row.get("_opp_type") == "老品迭代"
+    routed_old_items = [
+        row
+        for bucket, items in routed.buckets.items()
+        if bucket.opp_type == "老品迭代"
+        for row in items
     ]
-    expected_assignment_keys = {
-        (row.get("message_id"), row.get("seq", 0), row.get("assigned_spu"))
-        for row in old_rows
-    }
-    if len(expected_assignment_keys) != len(old_rows):
-        raise RuntimeError(
-            "归属扇出出现重复 (message_id, seq, assigned_spu)："
-            f"rows={len(old_rows)}, distinct={len(expected_assignment_keys)}")
     if any(
         not row.get("assigned_spu")
         or row.get("assignment_source") not in {"fact", "root"}
         or row.get("assign_run_id") != ctx.run_id
-        for row in old_rows
+        for row in routed_old_items
     ):
         raise RuntimeError("老品路由行缺少当前 run_id 的完整归属投影")
 
-    routed_old_rows = sum(
-        len(items)
-        for bucket, items in routed.buckets.items()
-        if bucket.opp_type == "老品迭代"
-    )
-    assignment_fanout = len(expected_assignment_keys)
+    old_scope_enabled = opp_types is None or "老品迭代" in opp_types
+    if old_scope_enabled:
+        assignment_route = assignment_route_reconciliation(
+            snapshot_assignment_rows, routed_old_items)
+        ctx.metric_update(
+            ("generation", "assignment_route"), **assignment_route)
+        if not assignment_route["complete"]:
+            raise RuntimeError(_assignment_route_error(assignment_route))
+        assignment_fanout = int(assignment_route["snapshot_rows"])
+        routed_old_rows = int(assignment_route["routed_rows"])
+        assignment_scope = "checked"
+    else:
+        # rerun_both 的新品进程与老品进程共用 run_id；快照只定义老品 F，
+        # 新品进程不声称证明它，真正的检查由老品进程完成。
+        assignment_fanout = 0
+        routed_old_rows = 0
+        assignment_scope = "not-requested"
     assignment_unique_facts = len({
-        (message_id, seq)
-        for message_id, seq, _assigned_spu in expected_assignment_keys
+        (row["message_id"], row["seq"])
+        for row in snapshot_assignment_rows
     })
-    if routed_old_rows != assignment_fanout:
-        raise RuntimeError(
-            f"归属守恒失败：R={routed_old_rows}, F={assignment_fanout}")
     ctx.metric_update(
         ("generation",),
         assignment_snapshot_rows=snapshot_rows,
         assignment_unique_facts=assignment_unique_facts,
         assignment_expected_rows=assignment_fanout,
         assignment_routed_rows=routed_old_rows,
+        assignment_conservation_scope=assignment_scope,
         assignment_conservation=True,
     )
+
+    if old_scope_enabled:
+        cleared_terminal_rows = db.clear_terminal_evidence(ctx.run_id)
+        ctx.metric_update(
+            ("generation",), terminal_ledger_reset_rows=cleared_terminal_rows)
 
     selected = list(routed.buckets.items())
     selected.sort(key=lambda pair: (-len(pair[1]), pair[0].opp_type,
@@ -277,7 +456,10 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
     available_buckets = len(selected)
     scoped_evidence_rows = len(scoped_rows)
     truncated_bucket_rows = 0
+    truncated_items: list[dict] = []
     if limit_buckets:
+        truncated_items.extend(
+            row for _, items in selected[limit_buckets:] for row in items)
         truncated_bucket_rows = sum(len(items) for _, items in selected[limit_buckets:])
         selected = selected[:limit_buckets]
     truncated_buckets = available_buckets - len(selected)
@@ -285,6 +467,9 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         sum(max(len(items) - limit_rows, 0) for _, items in selected)
         if limit_rows else 0
     )
+    if limit_rows:
+        truncated_items.extend(
+            row for _, items in selected for row in items[limit_rows:])
     truncated_rows = truncated_bucket_rows + truncated_row_limit
     selected_stage1_rows = sum(
         min(len(items), limit_rows) if limit_rows else len(items)
@@ -315,9 +500,16 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
 
     # 限制参数可用来确认「是否会截断」，但生产入口不允许把
     # 子集写入后冒充全量成功。语义簇本身决定桶数，因此必须在诉求门与
-    # 预聚类后才能判定截断；仍保证在 Stage1 和任何数据库写入前失败。
-    # 同时把未启动桶记为 cancelled，run log 可明确看出不完整范围。
+    # 预聚类后才能判定截断；未启动的老品扇出键先进入显式终态账，随后
+    # 整轮仍失败。同时把未启动桶记为 cancelled，run log 可看出不完整范围。
     if truncated_buckets or truncated_rows:
+        truncated_old_items = [
+            row for row in truncated_items
+            if row.get("_opp_type") == "老品迭代"
+        ]
+        if truncated_old_items:
+            db.save_terminal_evidence(
+                truncated_old_items, week, "truncated", ctx.run_id)
         ctx.metric_update(("generation",), cancelled_buckets=len(selected))
         raise RuntimeError(
             "生成范围被限制参数截断："
@@ -351,12 +543,19 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
                      "members": [index]}
                     for index in split["unclassified"]]
             else:
-                db.save_unclassified(
-                    [(items[index]["message_id"], items[index]["seq"])
-                     for index in split["unclassified"]], week, "unclassified")
-            db.save_unclassified(
-                [(items[index]["message_id"], items[index]["seq"])
-                 for index in split["dropped"]], week, "vote_dropped")
+                db.save_terminal_evidence(
+                    [items[index] for index in split["unclassified"]],
+                    week, "unclassified", ctx.run_id)
+            if split["dropped"]:
+                if bucket.opp_type == "老品迭代":
+                    db.save_terminal_evidence(
+                        [items[index] for index in split["dropped"]],
+                        week, "vote_dropped", ctx.run_id)
+                else:
+                    db.save_unclassified(
+                        [(items[index]["message_id"], items[index]["seq"])
+                         for index in split["dropped"]],
+                        week, "vote_dropped")
             ctx.metric_incr(
                 ("generation",), planned_groups=len(groups),
                 unclassified_rows=len(split["unclassified"]),
@@ -389,6 +588,19 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
             built_raw = llm.parallel_map(build, groups)
             built = [obj for obj in built_raw if not isinstance(obj, BaseException)]
             dropped_groups = [obj for obj in built_raw if isinstance(obj, BaseException)]
+            if bucket.opp_type == "老品迭代":
+                for group, outcome in zip(groups, built_raw):
+                    if not isinstance(outcome, BaseException):
+                        continue
+                    terminal_reason = (
+                        "grounding_rejected"
+                        if str(outcome).startswith(
+                            "Stage2 grounding 三次校验仍失败")
+                        else "generation_failed"
+                    )
+                    db.save_terminal_evidence(
+                        [items[index] for index in group["members"]],
+                        week, terminal_reason, ctx.run_id)
             if dropped_groups:
                 ratio = len(dropped_groups) / max(len(groups), 1)
                 # 比例阈值对小样本没有意义：2 条里坏 1 条是 50%，但它只是 1 条。
@@ -733,18 +945,22 @@ def validate_lifecycle_sources(row: dict) -> tuple[str, list[str]]:
 
 
 def validate_assignment_projection(run_id: str, ctx) -> dict:
-    """校验 v3 关系归属、快照来源与每卡唯一 SPU，并记录守恒分量。"""
-    snapshot_rows = db.verify_assign_snapshot(run_id)
+    """校验关系/终态对快照的完整投影，并执行 F=P_unique+D。"""
+    verified_snapshot_rows = db.verify_assign_snapshot(run_id)
+    snapshot_key_rows = db.load_assign_snapshot_rows(run_id)
+    if len(snapshot_key_rows) != verified_snapshot_rows:
+        raise RuntimeError(
+            "归属快照物理读取行数与指纹校验不一致："
+            f"verified={verified_snapshot_rows}, "
+            f"loaded={len(snapshot_key_rows)}")
+    relation_key_rows = db.load_relation_assignment_rows(run_id)
+    terminal_key_rows = db.load_terminal_assignment_rows(run_id)
     rows = db.q("""
       SELECT
         count(*) FILTER (
           WHERE o.opp_type = '老品迭代'
             AND oe.assign_run_id = %s
         )::bigint AS projected_rows,
-        count(DISTINCT (oe.message_id, oe.seq, oe.assigned_spu)) FILTER (
-          WHERE o.opp_type = '老品迭代'
-            AND oe.assign_run_id = %s
-        )::bigint AS projected_distinct_rows,
         count(*) FILTER (
           WHERE o.opp_type = '老品迭代'
             AND (oe.assigned_spu IS NULL
@@ -781,18 +997,19 @@ def validate_assignment_projection(run_id: str, ctx) -> dict:
         FROM voc_opp_evidence oe
         JOIN voc_opportunity o ON o.opp_id = oe.opp_id
        WHERE o.opp_id LIKE 'OPP2-%%'
-    """, [run_id, run_id])
+    """, [run_id])
     raw = rows[0] if rows else {}
-    stat = {
-        "snapshot_rows": int(snapshot_rows),
+    stat = assignment_projection_reconciliation(
+        snapshot_key_rows, relation_key_rows, terminal_key_rows,
+        max_terminal_loss_ratio=C.TERMINAL_LOSS_MAX_RATIO)
+    stat.update({
         "projected_rows": int(raw.get("projected_rows", 0)),
-        "projected_distinct_rows": int(raw.get("projected_distinct_rows", 0)),
         "bad_old_assignment_rows": int(raw.get("bad_old_assignment_rows", 0)),
         "bad_innovation_assignment_rows": int(
             raw.get("bad_innovation_assignment_rows", 0)),
         "missing_snapshot_rows": int(raw.get("missing_snapshot_rows", 0)),
         "cross_spu_rows": int(raw.get("cross_spu_rows", 0)),
-    }
+    })
     ctx.metric_update(("finalize",), assignment_projection=stat)
     bad = (
         stat["bad_old_assignment_rows"]
@@ -800,10 +1017,17 @@ def validate_assignment_projection(run_id: str, ctx) -> dict:
         + stat["missing_snapshot_rows"]
         + stat["cross_spu_rows"]
     )
-    if bad:
-        raise RuntimeError(f"v3 归属投影自检失败：{stat}")
-    if stat["projected_distinct_rows"] > stat["snapshot_rows"]:
-        raise RuntimeError(f"v3 关系投影超出冻结快照：{stat}")
+    if bad or not stat["complete"]:
+        detail = _assignment_projection_error(stat)
+        if bad:
+            detail += (
+                "; assignment_metadata_errors="
+                f"{{'bad_old': {stat['bad_old_assignment_rows']}, "
+                f"'bad_innovation': {stat['bad_innovation_assignment_rows']}, "
+                f"'missing_snapshot_source': {stat['missing_snapshot_rows']}, "
+                f"'cross_spu': {stat['cross_spu_rows']}}}"
+            )
+        raise RuntimeError(detail)
     return stat
 
 

@@ -159,3 +159,26 @@ def test_033_snapshot_prepare_is_single_writer_idempotent_and_fingerprinted() ->
     assert "p_run_id || ':assign_snapshot'" in text
     assert "voc_verify_assign_snapshot(p_run_id text)" in text
     assert "IS DISTINCT FROM" in text
+
+
+def test_035_preserves_legacy_rows_and_adds_run_spu_terminal_grain() -> None:
+    text = (SQL / "035_terminal_ledger.sql").read_text(encoding="utf-8")
+
+    assert "BEGIN;" in text and "COMMIT;" in text
+    assert "SET LOCAL search_path = public, pg_temp" in text
+    assert "035 必须以 voc_admin 执行" in text
+    assert "ADD COLUMN IF NOT EXISTS terminal_id bigint" in text
+    assert "ADD COLUMN IF NOT EXISTS run_id text" in text
+    assert "ADD COLUMN IF NOT EXISTS assigned_spu text" in text
+    assert "PRIMARY KEY (terminal_id)" in text
+    assert "UNIQUE (run_id, message_id, seq, assigned_spu)" in text
+    assert "WHERE run_id IS NULL" in text
+    for reason in (
+        "unclassified", "vote_dropped", "truncated",
+        "generation_failed", "grounding_rejected",
+    ):
+        assert f"'{reason}'" in text
+    assert "DELETE FROM public.voc_unclassified_evidence" not in text
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE" in text
+    assert "TO voc_writer" in text
+    assert "TO voc_human, voc_reader" in text
