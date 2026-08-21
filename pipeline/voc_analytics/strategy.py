@@ -685,6 +685,8 @@ def run_strategy(
             cache = _cache_index(repository.load_cached_verdicts(
                 policy, [card.opp_id for card in cards]))
             new_verdicts: list[dict] = []
+            judged_before = int(metrics["llm_judged"])
+            failed_before = int(metrics["llm_failed"])
             clusters = _greedy_clusters(
                 cards,
                 pairs_by_type[current_type],
@@ -697,6 +699,15 @@ def run_strategy(
             )
             if not dry_run:
                 repository.save_pair_verdicts(new_verdicts)
+            type_judged = int(metrics["llm_judged"]) - judged_before
+            type_failed = int(metrics["llm_failed"]) - failed_before
+            failed_ratio = type_failed / max(type_judged, 1)
+            if failed_ratio > C.STRATEGY_MAX_FAILED_RATIO:
+                raise StrategyError(
+                    f"{current_type}战略判定失败率过高: "
+                    f"{type_failed}/{type_judged} ({failed_ratio:.1%} > "
+                    f"{C.STRATEGY_MAX_FAILED_RATIO:.1%})"
+                )
             clusters_out[current_type] = [
                 [card.opp_id for card in cluster] for cluster in clusters
             ]

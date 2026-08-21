@@ -18,7 +18,11 @@ from _offline_imports import ensure_psycopg_importable  # noqa: E402
 ensure_psycopg_importable()
 
 from voc_analytics import config as C, prompts  # noqa: E402
-from voc_analytics.strategy import MaxPairsExceeded, run_strategy  # noqa: E402
+from voc_analytics.strategy import (  # noqa: E402
+    MaxPairsExceeded,
+    StrategyError,
+    run_strategy,
+)
 
 
 def make_card(opp_id: str, *, axis_type: str = "通病", evi: int = 10,
@@ -290,6 +294,33 @@ def test_uncached_candidates_for_one_leader_are_judged_concurrently():
     assert result["metrics"]["llm_failed"] == 0
 
 
+def test_strategy_rejects_systemic_judge_failures_before_axis_replace(
+        monkeypatch):
+    def broken_judge(axis_type, left, right, prompt):
+        del axis_type, left, right, prompt
+        raise RuntimeError("provider unavailable")
+
+    old_axis = {"axis_id": "old", "generation": "OPP2-", "axis_type": "通病"}
+    store = MemoryStore(
+        cards=[make_card("OPP2-A", evi=30), make_card("OPP2-B", evi=20),
+               make_card("OPP2-C", evi=10)],
+        recalls={"通病": [pair("OPP2-A", "OPP2-B"),
+                            pair("OPP2-A", "OPP2-C")]},
+        axes=[old_axis],
+    )
+    monkeypatch.setattr(C, "STRATEGY_MAX_FAILED_RATIO", 0.05)
+
+    with pytest.raises(StrategyError, match="2/2"):
+        run_strategy(
+            axis_type="通病", store=store, judge=broken_judge,
+            namer=stable_namer)
+
+    assert store.axes == [old_axis]
+    assert store.replace_calls == 0
+    assert store.cache_writes == []
+    assert store.logs[-1]["status"] == "failed"
+
+
 def test_06_max_pairs_aborts_without_any_table_write_and_cli_is_nonzero(
         monkeypatch, capsys):
     store = MemoryStore(
@@ -459,13 +490,15 @@ def test_13_judge_failure_is_not_cached_as_false_verdict():
         del axis_type, left, right, prompt
         raise RuntimeError("fake retry exhausted")
 
-    result = run_strategy(
-        axis_type="通病", store=store, judge=failed_judge, namer=stable_namer)
+    with pytest.raises(StrategyError, match="1/1"):
+        run_strategy(
+            axis_type="通病", store=store, judge=failed_judge,
+            namer=stable_namer)
 
     assert store.verdicts == {} and store.cache_writes == []
-    assert result["metrics"]["llm_judged"] == 1
-    assert result["metrics"]["llm_failed"] == 1
-    assert result["clusters"]["通病"] == [["OPP2-A"], ["OPP2-B"]]
+    metrics = store.logs[-1]["metrics"]["strategy"]
+    assert metrics["llm_judged"] == 1
+    assert metrics["llm_failed"] == 1
 
 
 def test_14_prompt_change_changes_judge_policy_and_misses_old_cache(monkeypatch):
