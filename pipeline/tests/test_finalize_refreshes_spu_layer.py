@@ -23,7 +23,7 @@ from _offline_imports import ensure_psycopg_importable  # noqa: E402
 
 ensure_psycopg_importable()
 
-from voc_analytics import pipeline  # noqa: E402
+from voc_analytics import explode, pipeline  # noqa: E402
 
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "run_generate.py"
@@ -76,6 +76,31 @@ def test_refresh_helper_calls_the_database_function() -> None:
         "scope_pending_count",
     ):
         assert key in text, f"刷新统计缺少 {key}，收尾日志无法自证"
+
+
+def test_refresh_helper_allows_v2_view_to_be_retired(monkeypatch) -> None:
+    executed: list[str] = []
+    queried: list[str] = []
+    monkeypatch.setattr(
+        explode.db, "execute", lambda sql, _params=None: executed.append(sql) or 0)
+    monkeypatch.setattr(
+        explode.db, "q1", lambda sql, _params=None: queried.append(sql) or None)
+    monkeypatch.setattr(
+        explode.db, "q",
+        lambda sql, _params=None: [{
+            "spu_count": 285,
+            "issue_count": 1581,
+            "v3_issue_count": 1581,
+            "scope_pending_count": 0,
+        }],
+    )
+
+    stat = explode.refresh("2026-W34")
+
+    assert executed == ["SELECT voc_refresh_spu_layer()"]
+    assert queried == ["SELECT to_regclass('public.voc_spu_issue_v2')"]
+    assert stat["v2_issue_count"] == 0
+    assert stat["v3_issue_count"] == 1581
 
 
 class _Ctx:
