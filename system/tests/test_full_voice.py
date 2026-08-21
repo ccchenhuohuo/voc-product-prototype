@@ -78,6 +78,13 @@ def test_innovation_query_groups_by_message_and_keeps_all_hits() -> None:
     assert "limit 3" not in sql
 
 
+def test_opp2_like_wildcards_are_escaped_for_psycopg_parameters() -> None:
+    """带 %s 参数的查询里，LIKE 通配符必须写成 %% 才不会被当占位符。"""
+    source = Path(Q.__file__).read_text(encoding="utf-8")
+    assert "LIKE 'OPP2-%'" not in source
+    assert "LIKE 'OPP2-%%'" in Q.INNOVATION_DETAIL
+
+
 def test_message_highlights_multiple_unique_and_overlapping_snippets() -> None:
     rows = [{
         "message_id": "M1",

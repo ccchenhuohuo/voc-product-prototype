@@ -50,7 +50,7 @@ def test_status_defaults_missing_manual_rows_to_considering():
     sql = compact(Q.HOME2_STATUS)
     assert sql.count("coalesce(m.status, '考虑中')") >= 4
     assert "from voc_spu_issue i" in sql
-    assert "where o.opp_id like 'opp2-%'" in sql
+    assert "where o.opp_id like 'opp2-%%'" in sql
     assert "and o.opp_type = '新品创新'" in sql
     for status in ("考虑中", "在跟进", "项目中", "已完成", "不考虑"):
         assert status in Q.HOME2_STATUS

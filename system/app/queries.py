@@ -43,7 +43,7 @@ SELECT
       AND o.merged_into IS NULL) AS iter,
   (SELECT count(*)::int
     FROM voc_opportunity o
-    WHERE o.opp_id LIKE 'OPP2-%'
+    WHERE o.opp_id LIKE 'OPP2-%%'
       AND o.opp_type = '新品创新'
       AND o.classification_state = '确定'
       AND o.merged_into IS NULL) AS inno,
@@ -130,7 +130,7 @@ WITH label_defs(label_order, label) AS (
     JOIN voc_opportunity o ON o.opp_id = x.opp_id
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
-     AND o.opp_id LIKE 'OPP2-%'
+     AND o.opp_id LIKE 'OPP2-%%'
      AND o.opp_type IN ('老品迭代', '新品创新')
    GROUP BY x.message_id
 ), aggregated AS (
@@ -188,7 +188,7 @@ WITH primary_evidence AS MATERIALIZED (
     JOIN voc_opportunity o ON o.opp_id = x.opp_id
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
-     AND o.opp_id LIKE 'OPP2-%'
+     AND o.opp_id LIKE 'OPP2-%%'
      AND o.opp_type IN ('老品迭代', '新品创新')
    GROUP BY x.message_id
 ), tag_counts AS (
@@ -268,7 +268,7 @@ WITH statuses(status_order, status) AS (
          count(*)::bigint AS item_count
     FROM voc_opportunity o
     LEFT JOIN voc_opportunity_manual m ON m.opp_id = o.opp_id
-   WHERE o.opp_id LIKE 'OPP2-%'
+   WHERE o.opp_id LIKE 'OPP2-%%'
      AND o.opp_type = '新品创新'
    GROUP BY COALESCE(m.status, '考虑中')
 ), lifecycle_rows AS (
@@ -294,7 +294,7 @@ WITH statuses(status_order, status) AS (
              count(*) FILTER (WHERE COALESCE(o.backlog, true))::bigint
                AS unreleased_count
         FROM voc_opportunity o
-       WHERE o.opp_id LIKE 'OPP2-%'
+       WHERE o.opp_id LIKE 'OPP2-%%'
     ) c
    CROSS JOIN LATERAL (
      VALUES (1, '已放行'::text, c.released_count),
@@ -759,7 +759,7 @@ SELECT o.opp_id, o.title, o.prod_line, o.core_tag,
   LEFT JOIN voc_opportunity_manual m ON m.opp_id = o.opp_id
   LEFT JOIN evidence_agg a ON a.opp_id = o.opp_id
   LEFT JOIN brand_agg b ON b.opp_id = o.opp_id
- WHERE o.opp_id LIKE 'OPP2-%'
+ WHERE o.opp_id LIKE 'OPP2-%%'
    AND o.opp_type = '新品创新'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
@@ -854,7 +854,7 @@ WITH keys AS (
     FROM voc_spu_issue_manual m
     JOIN voc_opportunity o ON o.opp_id = m.opp_id
    WHERE m.spu = %s
-     AND o.opp_id LIKE 'OPP2-%'
+     AND o.opp_id LIKE 'OPP2-%%'
      AND o.classification_state = '确定'
      AND o.opp_type = '老品迭代'
 ), evidence_agg AS (
@@ -1034,7 +1034,7 @@ SELECT o.opp_id, o.opp_type, o.prod_line, o.core_tag, o.title,
   LEFT JOIN evidence_agg a ON a.opp_id = o.opp_id
   LEFT JOIN brand_agg b ON b.opp_id = o.opp_id
  WHERE o.opp_id = %s
-   AND o.opp_id LIKE 'OPP2-%'
+   AND o.opp_id LIKE 'OPP2-%%'
    AND o.opp_type = '新品创新'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
@@ -1232,7 +1232,7 @@ SELECT m.spu, m.opp_id, m.baseline_evi_count,
   JOIN voc_opp_evidence oe ON oe.opp_id = m.opp_id
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE m.status = '已完成'
-   AND o.opp_id LIKE 'OPP2-%'
+   AND o.opp_id LIKE 'OPP2-%%'
    AND o.classification_state = '确定'
    AND o.opp_type = '老品迭代'
    AND m.release_date IS NOT NULL
@@ -1428,7 +1428,7 @@ WITH args AS (
    CROSS JOIN settings h
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
-     AND o.opp_id LIKE 'OPP2-%'
+     AND o.opp_id LIKE 'OPP2-%%'
      AND o.mode_vec IS NOT NULL
      AND (
        NOT a.exclude_generic
@@ -1504,7 +1504,7 @@ WITH args AS (
    CROSS JOIN args a
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
-     AND o.opp_id LIKE 'OPP2-%'
+     AND o.opp_id LIKE 'OPP2-%%'
      AND (a.opp_type = '' OR o.opp_type = a.opp_type)
      AND (a.src_line = '' OR o.src_line = a.src_line)
      AND (a.category = '' OR o.category = a.category)
@@ -1588,7 +1588,7 @@ SELECT o.opp_id, o.opp_type, o.src_line, o.prod_line, o.category,
  CROSS JOIN args a
  WHERE o.classification_state = '确定'
    AND o.merged_into IS NULL
-   AND o.opp_id LIKE 'OPP2-%'
+   AND o.opp_id LIKE 'OPP2-%%'
    AND (o.title ILIKE a.pattern ESCAPE E'\\'
         OR o.problem_mode ILIKE a.pattern ESCAPE E'\\'
         OR o.core_tag ILIKE a.pattern ESCAPE E'\\')
@@ -1684,7 +1684,7 @@ WITH args AS (
           WHERE i.spu = s.spu
             AND o.classification_state = '确定'
             AND o.merged_into IS NULL
-            AND o.opp_id LIKE 'OPP2-%'
+            AND o.opp_id LIKE 'OPP2-%%'
             AND (a.opp_type = '' OR o.opp_type = a.opp_type)
             AND (a.src_line = '' OR o.src_line = a.src_line)
             AND (a.week_from = '' OR o.last_week >= a.week_from)
@@ -1744,7 +1744,7 @@ SELECT oe.opp_id AS via_opp_id, oe.message_id, oe.seq, oe.attach_week,
  WHERE e.snippet ILIKE a.pattern ESCAPE E'\\'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
-   AND o.opp_id LIKE 'OPP2-%'
+   AND o.opp_id LIKE 'OPP2-%%'
    AND (a.opp_type = '' OR o.opp_type = a.opp_type)
    AND (msg.retention_until IS NULL OR msg.retention_until >= current_date)
    AND (a.src_line = '' OR msg.src_line = a.src_line)
@@ -1800,7 +1800,7 @@ SELECT count(*) FILTER (
  WHERE e.snippet ILIKE a.pattern ESCAPE E'\\'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
-   AND o.opp_id LIKE 'OPP2-%'
+   AND o.opp_id LIKE 'OPP2-%%'
    AND (a.opp_type = '' OR o.opp_type = a.opp_type)
    AND (a.src_line = '' OR msg.src_line = a.src_line)
    AND (a.category = '' OR o.category = a.category)
