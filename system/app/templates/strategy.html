@@ -1,31 +1,66 @@
 {% extends "base.html" %}
+{% import "macros.html" as M with context %}
 {% block title %}战略视图 · VOC{% endblock %}
 {% block body_class %}strategy-page{% endblock %}
 {% block content %}
 <header class="head">
   <h1>战略视图</h1>
-  <nav class="tabs" aria-label="扩散范围">
-    {% for value in ['品线级', '多品', '单品', '全部'] %}
-      {% set count = total_count if value == '全部' else (counts[value] or 0) %}
-      <a class="tab{% if (selected_scope or scope) == value %} on{% endif %}" href="/strategy?scope={{ value }}">{{ value }} <span class="n">{{ count }}</span></a>
-    {% endfor %}
+  <nav class="tabs" aria-label="战略轴类型">
+    <a class="tab{% if axis_type == '通病' %} on{% endif %}" href="/strategy?type=通病">跨SPU通病 <span class="n">{{ problem_count }}</span></a>
+    <a class="tab{% if axis_type == '诉求' %} on{% endif %}" href="/strategy?type=诉求">核心诉求 <span class="n">{{ theme_count }}</span></a>
   </nav>
 </header>
 <div class="scroll">
+  {% if axis_type == '通病' %}
   <table>
-    <thead><tr><th>共性问题</th><th class="r" style="width:150px">涉及 SPU</th><th class="r" style="width:78px">集中度</th><th class="r" style="width:70px">证据</th></tr></thead>
+    <thead><tr>
+      <th style="width:32%">轴名</th>
+      {{ M.sort_header(request, sorting, '扩散面', 'n_spu', width='205px') }}
+      <th class="r" style="width:64px">卡数</th>
+      {{ M.sort_header(request, sorting, '证据数', 'evidence', align='r', width='78px') }}
+      <th style="width:180px">头部 SPU</th>
+    </tr></thead>
     <tbody>
-    {% for row in opportunities %}
-      <tr>
-        <td><div class="nm">{{ row.title }}</div><div class="sub">{{ row.prod_line or row.core_tag or '—' }} · {{ row.scope or '未分类' }}</div></td>
-        <td class="r"><span class="bar" style="--w:{{ row.spu_bar_pct or 0 }}"><span class="n-lg">{{ row.spu_count or 0 }}</span></span><div class="sub">个产品</div></td>
-        <td class="r n dim">{{ row.n_eff|num }}</td>
-        <td class="r n dim">{{ (row.evi_total or 0)|num }}</td>
+    {% for row in axes %}
+      <tr tabindex="0" data-href="/strategy/axis/{{ row.axis_id }}">
+        <td><div class="nm">{{ row.axis_name }}</div>{% if row.summary %}<div class="sub">{{ row.summary }}</div>{% endif %}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="position:relative;display:inline-block;width:118px;height:10px">
+              <i style="position:absolute;inset:1px auto 1px 0;width:{{ row.spu_bar_pct }}%;background:var(--rule-strong);border-radius:2px"></i>
+              <b style="position:absolute;inset:1px auto 1px 0;width:{{ row.eff_bar_pct }}%;background:var(--ink-2);border-radius:2px"></b>
+            </span>
+            <span class="n" style="font-size:11px">{{ row.n_spu or 0 }} / {{ row.n_eff|num }}</span>
+          </div>
+        </td>
+        <td class="r n dim">{{ row.n_cards|num }}</td>
+        <td class="r n dim">{{ row.evi_total|num }}</td>
+        <td>{% for item in row.top_spus[:2] %}<span class="code" style="font-size:11px">{{ item.spu }}</span>{% if not loop.last %}<span class="dim"> · </span>{% endif %}{% else %}<span class="dim">—</span>{% endfor %}</td>
       </tr>
     {% else %}
-      <tr><td class="empty" colspan="4">{% if scope_unavailable %}v3 战略口径尚未计算，当前不展示旧版扩散结果。{% else %}当前范围下没有战略机会。{% endif %}</td></tr>
+      <tr><td class="empty" colspan="5">战略轴尚未计算，等待首次聚合运行。</td></tr>
     {% endfor %}
     </tbody>
   </table>
+  {% else %}
+  <table>
+    <thead><tr>
+      <th style="width:55%">主题名</th>
+      {{ M.sort_header(request, sorting, '声量', 'evidence', width='210px') }}
+      <th class="r" style="width:76px">卡数</th>
+    </tr></thead>
+    <tbody>
+    {% for row in axes %}
+      <tr tabindex="0" data-href="/strategy/axis/{{ row.axis_id }}">
+        <td><div class="nm">{{ row.axis_name }}</div>{% if row.summary %}<div class="sub">{{ row.summary }}</div>{% endif %}</td>
+        <td><span class="bar" style="--w:{{ row.voice_bar_pct }};min-width:150px"><span class="n">{{ row.evi_total|num }}</span></span></td>
+        <td class="r n dim">{{ row.n_cards|num }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="3">战略轴尚未计算，等待首次聚合运行。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 </div>
 {% endblock %}

@@ -48,12 +48,7 @@ SELECT
       AND o.classification_state = '确定'
       AND o.merged_into IS NULL) AS inno,
   (SELECT count(*)::int
-    FROM voc_opportunity o
-    WHERE o.opp_id LIKE 'OPP2-%'
-      AND o.scope_source IS DISTINCT FROM 'v3-未计算'
-      AND o.scope = '品线级'
-      AND o.classification_state = '确定'
-      AND o.merged_into IS NULL) AS strategy,
+     FROM voc_strategy_axis) AS strategy,
   (SELECT count(DISTINCT m.spu)::int
      FROM voc_spu_issue_manual m
      JOIN voc_spu_issue i
@@ -1066,24 +1061,98 @@ SELECT oe.message_id, oe.seq,
 """
 
 
-STRATEGY_OPPORTUNITIES = """
-WITH spread AS (
-  SELECT i.opp_id, count(DISTINCT i.spu)::int AS spu_count
-    FROM voc_spu_issue i
-   GROUP BY i.opp_id
+STRATEGY_AXES = """
+WITH ordering AS (
+  SELECT %s::text AS sort_key, %s::text AS sort_dir
 )
-SELECT o.opp_id, o.title, o.prod_line, o.core_tag, o.n_eff, o.scope,
-       o.scope_source,
-       o.evi_total, o.released_at,
-       COALESCE(s.spu_count, 0)::int AS spu_count
-  FROM voc_opportunity o
-  LEFT JOIN spread s ON s.opp_id = o.opp_id
- WHERE o.merged_into IS NULL
-   AND o.opp_id LIKE 'OPP2-%'
-   AND o.classification_state = '确定'
-   AND o.scope_source IS DISTINCT FROM 'v3-未计算'
-   AND o.scope IN ('品线级', '多品', '单品')
- ORDER BY o.n_eff DESC NULLS LAST, o.evi_total DESC, o.opp_id
+SELECT a.axis_id, a.generation, a.axis_type, a.axis_name, a.summary,
+       a.n_cards, a.n_spu, a.n_eff, a.evi_total,
+       a.top_spus, a.run_id, a.computed_at
+  FROM voc_strategy_axis a
+ CROSS JOIN ordering
+ WHERE a.generation = %s
+   AND a.axis_type = %s
+ ORDER BY CASE WHEN ordering.sort_key = 'n_spu'
+                         AND ordering.sort_dir = 'asc'
+                    THEN a.n_spu END ASC NULLS LAST,
+          CASE WHEN ordering.sort_key = 'n_spu'
+                         AND ordering.sort_dir = 'desc'
+                    THEN a.n_spu END DESC NULLS LAST,
+          CASE WHEN ordering.sort_key = 'evidence'
+                         AND ordering.sort_dir = 'asc'
+                    THEN a.evi_total END ASC NULLS LAST,
+          CASE WHEN ordering.sort_key = 'evidence'
+                         AND ordering.sort_dir = 'desc'
+                    THEN a.evi_total END DESC NULLS LAST,
+          CASE WHEN ordering.sort_key = '' AND a.axis_type = '通病'
+                    THEN a.n_eff END DESC NULLS LAST,
+          CASE WHEN ordering.sort_key = '' AND a.axis_type = '诉求'
+                    THEN a.evi_total END DESC NULLS LAST,
+          a.n_eff DESC NULLS LAST, a.evi_total DESC, a.axis_id
+"""
+
+
+STRATEGY_AXIS = """
+SELECT a.axis_id, a.generation, a.axis_type, a.axis_name, a.summary,
+       a.n_cards, a.n_spu, a.n_eff, a.evi_total,
+       a.top_spus, a.run_id, a.computed_at
+  FROM voc_strategy_axis a
+ WHERE a.generation = %s
+   AND a.axis_id = %s
+"""
+
+
+STRATEGY_AXIS_MEMBERS = """
+WITH member_keys AS (
+  SELECT m.axis_id, m.generation, m.axis_type, m.opp_id,
+         m.role, m.cos_to_leader, m.link_spu
+    FROM voc_strategy_axis_member m
+    JOIN voc_strategy_axis a
+      ON a.axis_id = m.axis_id
+     AND a.generation = m.generation
+     AND a.axis_type = m.axis_type
+   WHERE a.generation = %s
+     AND a.axis_id = %s
+), old_evidence AS (
+  SELECT i.opp_id, sum(i.evi_count)::int AS evi_total
+    FROM voc_spu_issue i
+    JOIN member_keys k ON k.opp_id = i.opp_id AND k.axis_type = '通病'
+   GROUP BY i.opp_id
+), new_evidence AS (
+  SELECT oe.opp_id, count(*)::int AS evi_total
+    FROM voc_opp_evidence oe
+    JOIN member_keys k ON k.opp_id = oe.opp_id AND k.axis_type = '诉求'
+   GROUP BY oe.opp_id
+)
+SELECT k.axis_id, k.generation, k.axis_type, k.opp_id,
+       k.role, k.cos_to_leader, k.link_spu,
+       o.problem_mode, o.title,
+       CASE WHEN k.axis_type = '通病'
+            THEN COALESCE(old_e.evi_total, 0)
+            ELSE COALESCE(new_e.evi_total, 0)
+        END::int AS evi_total,
+       CASE WHEN k.axis_type = '通病'
+            THEN COALESCE(issue_manual.status, '考虑中')
+            ELSE COALESCE(opp_manual.status, '考虑中')
+        END AS status,
+       CASE WHEN k.axis_type = '通病'
+            THEN issue_manual.revived_at END AS revived_at,
+       product.product_names
+  FROM member_keys k
+  JOIN voc_opportunity o ON o.opp_id = k.opp_id
+  LEFT JOIN old_evidence old_e ON old_e.opp_id = k.opp_id
+  LEFT JOIN new_evidence new_e ON new_e.opp_id = k.opp_id
+  LEFT JOIN voc_spu_issue_manual issue_manual
+    ON issue_manual.opp_id = k.opp_id
+   AND issue_manual.spu = k.link_spu
+   AND k.axis_type = '通病'
+  LEFT JOIN voc_opportunity_manual opp_manual
+    ON opp_manual.opp_id = k.opp_id
+   AND k.axis_type = '诉求'
+  LEFT JOIN voc_spu product
+    ON product.spu = k.link_spu
+ ORDER BY CASE WHEN k.role = 'leader' THEN 0 ELSE 1 END,
+          evi_total DESC, k.opp_id
 """
 
 

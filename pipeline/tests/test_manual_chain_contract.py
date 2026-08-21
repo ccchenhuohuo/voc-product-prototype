@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -140,3 +141,34 @@ def test_retired_scheduler_cannot_be_loaded_or_redeployed() -> None:
     assert "dagster" not in (ROOT / "pyproject.toml").read_text().casefold()
     assert "--dagster" not in (ROOT / "scripts" / "smoke.py").read_text()
     assert "voc_dagster" not in (ROOT / "scripts" / "m0_deploy_pg.sh").read_text()
+
+
+def test_strategy_hook_runs_after_finalize_and_failure_is_non_blocking(monkeypatch) -> None:
+    module = _load_script()
+    ctx = module.C.RunCtx(run_id="offline-generate", week="2026-W34")
+    saved = []
+    monkeypatch.setattr(
+        module.llm, "usage", lambda: {"calls": 3, "tokens": 30, "by_model": {}})
+
+    def fail_strategy(**kwargs):
+        del kwargs
+        raise RuntimeError("offline strategy failure")
+
+    monkeypatch.setattr(module.strategy, "run_strategy", fail_strategy)
+    monkeypatch.setattr(
+        module.db, "save_run_log",
+        lambda _ctx, stage, **kwargs: saved.append((stage, kwargs)),
+    )
+
+    result = module._run_strategy_after_finalize(
+        SimpleNamespace(skip_strategy=False, week="2026-W34"), ctx)
+
+    assert result is None
+    assert ctx.metrics["strategy_hook"]["status"] == "failed"
+    assert ctx.metrics["strategy_hook"]["failure"]["exception_type"] == "RuntimeError"
+    assert saved[0][0] == "strategy_hook" and saved[0][1]["status"] == "failed"
+
+    text = SCRIPT.read_text()
+    assert 'parser.add_argument("--skip-strategy"' in text
+    # 一处函数定义 + finalize-only/常规生成两处成功收尾调用。
+    assert text.count("_run_strategy_after_finalize(args, ctx)") == 3

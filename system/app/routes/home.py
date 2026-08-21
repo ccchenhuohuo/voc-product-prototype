@@ -32,6 +32,8 @@ def home(request: Request):
         weekly_rows=db.query(Q.HOME2_WEEKLY),
         dist_rows=db.query(Q.HOME2_DIST, ("社媒", "语种")),
     )
+    # strategy 读数已切到纯派生轴表；首页一次取齐侧栏，避免再读旧 scope。
+    dashboard["nav_counts"] = db.query_one(Q.SHELL_COUNTS) or {}
     return templates.TemplateResponse(request, "home.html", dashboard)
 
 

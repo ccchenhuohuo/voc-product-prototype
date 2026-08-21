@@ -188,6 +188,17 @@ PRECLUSTER_MAX = MAX_GROUP_SIZE
 L2_TOPK_MIN, L2_TOPK_MAX, L2_TOPK_RATIO = 3, 10, 0.3
 MODE_MERGE_COS = 0.75      # 三档探针选定；仅召回，判定仍交 L3
 
+# 战略层跨卡聚合。2026-08-20 在真实 mode_vec 上预演后冻结：0.80 会碎裂，
+# 0.75 由 LLM 挡住「缺陷 vs 增强诉求」等几何误合；top-K 是单向召回，
+# 去重对数上界不能再除以 2。战略输入代次必须与 voc_spu_issue 当前指向同步。
+STRATEGY_GENERATION = os.environ.get("VOC_STRATEGY_GENERATION", "OPP2-").strip()
+STRATEGY_MERGE_COS = 0.75
+STRATEGY_TOPK = 15
+STRATEGY_MAX_PAIRS = 20000
+STRATEGY_MIN_SPU = 2
+STRATEGY_MIN_CARDS = 2
+STRATEGY_TOP_SPUS = 10
+
 # 冷启动放行（§12.2）
 BACKLOG_TOP_N = 50
 WEEKLY_PUSH_CAP = 15

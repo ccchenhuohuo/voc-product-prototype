@@ -14,7 +14,8 @@ from datetime import datetime
 
 sys.path.insert(0, "/home/sdy/voc-analytics")
 from voc_analytics import (  # noqa: E402
-    config as C, db, execute, explode, ingest, lifecycle, llm, pipeline, resolve)
+    config as C, db, execute, explode, ingest, lifecycle, llm, pipeline, resolve,
+    strategy)
 
 
 LIFECYCLE_ARGS = {
@@ -40,7 +41,14 @@ def _raise_on_termination(signum, _frame) -> None:
 
 def _save_log(ctx, stage: str, status: str, started: float,
               error: BaseException | None = None) -> None:
-    usage = pipeline.sync_llm_usage(ctx)
+    # finalize 后的战略重算使用同一进程，但有自己的 run log。先冻结主管线
+    # 用量，避免战略调用被重复算进 generate/finalize 台账。
+    frozen_usage = ctx.metrics.get("pipeline_llm_usage")
+    if isinstance(frozen_usage, dict):
+        usage = frozen_usage
+        ctx.set_llm_usage(int(usage.get("calls", 0)), int(usage.get("tokens", 0)))
+    else:
+        usage = pipeline.sync_llm_usage(ctx)
     # 费用进 metrics 才能事后按 run 复盘；只留一行 print 的话，日志一转就没了。
     ctx.metric_update(("cost",), **llm.cost(usage))
     generation = ctx.metrics.get("generation", {})
@@ -84,6 +92,74 @@ def _check_revive(week: str, ctx) -> int:
     ctx.metric_update(("finalize",), revive_proposals=count)
     print(f"[复活检测] 新增 {count} 条 REVIVE 提案", flush=True)
     return count
+
+
+def _run_strategy_after_finalize(args, ctx) -> dict | None:
+    """收尾成功后的独立派生层；任何失败都不得改变主管线退出码。"""
+    if args.skip_strategy:
+        ctx.metric_update(("strategy_hook",), status="skipped")
+        print("[战略层] 已按 --skip-strategy 跳过", flush=True)
+        return None
+
+    # 主管线尚未调用 _save_log，必须在战略 LLM 调用前冻结它自己的用量。
+    pipeline_usage = llm.usage()
+    ctx.metrics["pipeline_llm_usage"] = pipeline_usage
+    strategy_started = datetime.now()
+    ctx.metric_update(
+        ("strategy_hook",), status="running",
+        generation=C.STRATEGY_GENERATION, stage="strategy",
+    )
+    try:
+        result = strategy.run_strategy(
+            axis_type="all",
+            generation=C.STRATEGY_GENERATION,
+            run_id=ctx.run_id,
+        )
+        metrics = result["metrics"]
+        ctx.metric_update(
+            ("strategy_hook",), status="completed", stage="strategy",
+            axes_written=metrics["axes_written"],
+            members_written=metrics["members_written"],
+            pairs_recalled=metrics["pairs_recalled"],
+            pairs_evaluated=metrics["pairs_evaluated"],
+        )
+        print(
+            f"[战略层] 轴 {metrics['axes_written']} 根 / "
+            f"成员 {metrics['members_written']} 行",
+            flush=True,
+        )
+        return result
+    except BaseException as error:
+        failure = {
+            "exception_type": type(error).__name__,
+            "stage": "strategy",
+            "message": str(error)[:500],
+        }
+        ctx.metric_update(
+            ("strategy_hook",), status="failed", stage="strategy",
+            failure=failure,
+        )
+        # run_strategy 会先写 parent:strategy；再补一个 hook 段，覆盖连
+        # strategy 台账本身都写不成的失败路径。两段都与主管线账本隔离。
+        fallback_ctx = C.RunCtx(run_id=ctx.run_id, week=args.week)
+        fallback_ctx.metric_update(("strategy_hook",), **failure)
+        try:
+            db.save_run_log(
+                fallback_ctx,
+                "strategy_hook",
+                status="failed",
+                error_message=f"{type(error).__name__}: {error}"[:1000],
+                started_at=strategy_started,
+                finished_at=datetime.now(),
+            )
+        except Exception as log_error:
+            print(f"!! strategy 独立失败台账写入也失败：{log_error}", file=sys.stderr)
+        print(
+            f"!! strategy 失败（主管线继续成功退出）："
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+        )
+        return None
 
 
 def _finalize(args, ctx) -> dict:
@@ -221,6 +297,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-rows", "--limit", dest="limit_rows", type=int, default=0)
     parser.add_argument("--no-vote", action="store_true")
     parser.add_argument("--skip-finalize", action="store_true")
+    parser.add_argument("--skip-strategy", action="store_true")
     parser.add_argument("--finalize-only", action="store_true")
     # 默认按 --week 的窗口取池，服务周度增量。全量重建必须显式打开本开关：
     # 机会点层是【跨周去重】的结构，逐周分别生成得到的结果与一次全量生成
@@ -247,6 +324,7 @@ def main() -> int:
         if args.finalize_only:
             result = _finalize(args, ctx)
             print(f"收尾完成：{result}")
+            _run_strategy_after_finalize(args, ctx)
         else:
             if args.full_history:
                 window_start = window_end = None
@@ -264,6 +342,7 @@ def main() -> int:
             if not args.skip_finalize:
                 finalized = _finalize(args, ctx)
                 print(f"收尾完成：{finalized}")
+                _run_strategy_after_finalize(args, ctx)
         _save_log(ctx, stage, "success", started)
         return 0
     except BaseException as error:  # 顶层必须把所有失败变成非零进程状态

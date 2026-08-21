@@ -70,8 +70,41 @@ INNO = {
     "last_week": "2026-W02",
 }
 
+PROBLEM_AXIS = {
+    "axis_id": "axis-problem",
+    "generation": "OPP2-",
+    "axis_type": "通病",
+    "axis_name": "锁定机构失效",
+    "summary": "多个承力锁定部位出现松脱。",
+    "n_cards": 2,
+    "n_spu": 3,
+    "n_eff": 2.4,
+    "evi_total": 12,
+    "top_spus": [{"spu": "SPU-1", "evi": 7}, {"spu": "SPU-2", "evi": 5}],
+    "run_id": "strategy-test",
+    "computed_at": "2026-08-21 10:00",
+}
+
+THEME_AXIS = {
+    "axis_id": "axis-theme",
+    "generation": "OPP2-",
+    "axis_type": "诉求",
+    "axis_name": "便携支撑快速适配",
+    "summary": "用户希望减少携行与转接负担。",
+    "n_cards": 2,
+    "n_spu": None,
+    "n_eff": None,
+    "evi_total": 9,
+    "top_spus": None,
+    "run_id": "strategy-test",
+    "computed_at": "2026-08-21 10:00",
+}
+
 
 class PageDatabase:
+    def __init__(self):
+        self.empty_strategy = False
+
     def query_one(self, sql, params=None):
         if sql == Q.SHELL_COUNTS:
             return {"products": 1, "iter": 1, "inno": 1, "strategy": 1, "revived": 0}
@@ -81,6 +114,13 @@ class PageDatabase:
             return dict(ISSUE)
         if sql == Q.INNOVATION_DETAIL:
             return dict(INNO)
+        if sql == Q.STRATEGY_AXIS:
+            axis_id = params[1]
+            if axis_id == PROBLEM_AXIS["axis_id"]:
+                return dict(PROBLEM_AXIS)
+            if axis_id == THEME_AXIS["axis_id"]:
+                return dict(THEME_AXIS)
+            return None
         raise AssertionError("unexpected query_one")
 
     def query(self, sql, params=None):
@@ -122,15 +162,31 @@ class PageDatabase:
                 "interactions": 18,
                 "publish_time": "2026-08-01",
             }]
-        if sql == Q.STRATEGY_OPPORTUNITIES:
+        if sql == Q.STRATEGY_AXES:
+            if self.empty_strategy:
+                return []
+            return [dict(PROBLEM_AXIS if params[-1] == "通病" else THEME_AXIS)]
+        if sql == Q.STRATEGY_AXIS_MEMBERS:
+            if params[1] == PROBLEM_AXIS["axis_id"]:
+                return [{
+                    "axis_id": PROBLEM_AXIS["axis_id"],
+                    "generation": "OPP2-", "axis_type": "通病",
+                    "opp_id": "OPP-1", "role": "leader",
+                    "cos_to_leader": 1.0, "link_spu": "SPU-1",
+                    "problem_mode": "车载支架锁定后持续松动",
+                    "title": "车载支架易松动", "evi_total": 7,
+                    "status": "考虑中", "revived_at": None,
+                    "product_names": ["测试产品"],
+                }]
             return [{
-                "opp_id": "OPP-1",
-                "title": "支架稳定性",
-                "prod_line": "支撑",
-                "scope": "品线级",
-                "spu_count": 7,
-                "n_eff": 4.2,
-                "evi_total": 20,
+                "axis_id": THEME_AXIS["axis_id"],
+                "generation": "OPP2-", "axis_type": "诉求",
+                "opp_id": "INNO-1", "role": "leader",
+                "cos_to_leader": 1.0, "link_spu": None,
+                "problem_mode": "便携支撑需要快速适配不同设备",
+                "title": "新场景创新需求", "evi_total": 9,
+                "status": "考虑中", "revived_at": None,
+                "product_names": [],
             }]
         raise AssertionError("unexpected query")
 
@@ -154,7 +210,9 @@ def page_client(monkeypatch):
         architecture.router,
     ):
         app.include_router(router)
-    return TestClient(app)
+    client = TestClient(app)
+    client.app.state.page_db = fake
+    return client
 
 
 @pytest.mark.parametrize(
@@ -165,7 +223,7 @@ def page_client(monkeypatch):
         ("/issue/SPU-1/OPP-1", "原声内容"),
         ("/inno", "共享池"),
         ("/inno/INNO-1", "建议 · 市面缺口"),
-        ("/strategy", "涉及 SPU"),
+        ("/strategy", "扩散面"),
         ("/architecture", "数据架构"),
     ],
 )
@@ -195,6 +253,44 @@ def test_spu_detail_renders_unclaimed_social_voices(page_client):
     assert "未入机会点原声" in response.text
     assert "希望支持更稳的固定方式" in response.text
     assert "诉求缺口" in response.text
+
+
+def test_strategy_two_tabs_axis_detail_404_and_empty_state(page_client):
+    overview = page_client.get("/strategy")
+    assert overview.status_code == 200
+    assert "跨SPU通病" in overview.text and "核心诉求" in overview.text
+
+    theme = page_client.get("/strategy?type=诉求")
+    assert theme.status_code == 200 and THEME_AXIS["axis_name"] in theme.text
+
+    detail = page_client.get(f"/strategy/axis/{PROBLEM_AXIS['axis_id']}")
+    assert detail.status_code == 200 and PROBLEM_AXIS["summary"] in detail.text
+    assert page_client.get("/strategy/axis/missing-axis").status_code == 404
+
+    page_client.app.state.page_db.empty_strategy = True
+    try:
+        empty = page_client.get("/strategy")
+    finally:
+        page_client.app.state.page_db.empty_strategy = False
+    assert "战略轴尚未计算，等待首次聚合运行。" in empty.text
+
+
+def test_strategy_member_links_are_followed_and_resolve_non_404(page_client):
+    problem = page_client.get(f"/strategy/axis/{PROBLEM_AXIS['axis_id']}")
+    problem_links = re.findall(r'data-href="(/issue/[^"]+)"', problem.text)
+    assert problem_links
+    assert page_client.get(problem_links[0]).status_code != 404
+
+    theme = page_client.get(f"/strategy/axis/{THEME_AXIS['axis_id']}")
+    theme_links = re.findall(r'data-href="(/inno/[^"]+)"', theme.text)
+    assert theme_links
+    assert page_client.get(theme_links[0]).status_code != 404
+
+
+def test_home_strategy_count_reads_derived_axis_table():
+    compact = " ".join(Q.SHELL_COUNTS.split()).lower()
+    assert "select count(*)::int from voc_strategy_axis" in compact
+    assert "scope_source" not in compact
 
 
 def test_architecture_page_is_static_and_self_contained(page_client):

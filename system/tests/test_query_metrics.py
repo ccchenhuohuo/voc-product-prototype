@@ -143,23 +143,29 @@ def test_innovation_rollups_use_all_evidence_without_brand_multiplication():
         assert text.index("brand_agg as") > text.index("evidence_agg as")
 
 
-def test_strategy_counts_distinct_spus():
-    text = compact(Q.STRATEGY_OPPORTUNITIES)
-    assert "count(distinct i.spu)" in text
-    assert "o.scope_source" in text
-    assert "o.scope_source is distinct from 'v3-未计算'" in text
-    assert "o.opp_id like 'opp2-%'" in text
+def test_strategy_queries_read_axis_partitions_and_member_statuses():
+    axes = compact(Q.STRATEGY_AXES)
+    detail = compact(Q.STRATEGY_AXIS)
+    members = compact(Q.STRATEGY_AXIS_MEMBERS)
+    assert not hasattr(Q, "STRATEGY_OPPORTUNITIES")
+    assert "from voc_strategy_axis a" in axes
+    assert "a.generation = %s" in axes and "a.axis_type = %s" in axes
+    assert "a.n_eff" in axes and "a.evi_total" in axes
+    assert "from voc_strategy_axis a" in detail
+    assert "from voc_strategy_axis_member m" in members
+    assert "voc_spu_issue_manual" in members
+    assert "voc_opportunity_manual" in members
 
 
-def test_v3_strategy_empty_state_and_issue_readout_contract():
+def test_strategy_axis_empty_state_and_old_scope_retirement_contract():
     root = __import__("pathlib").Path(__file__).resolve().parents[1] / "app"
     strategy = (root / "templates" / "strategy.html").read_text(encoding="utf-8")
     voices = (root / "templates" / "issue-voices.html").read_text(encoding="utf-8")
     route = (root / "routes" / "strategy.py").read_text(encoding="utf-8")
 
-    assert "scope_unavailable" in route
-    assert "v3 战略口径尚未计算" in strategy
-    assert "不展示旧版扩散结果" in strategy
+    assert "scope_unavailable" not in route
+    assert "战略轴尚未计算，等待首次聚合运行。" in strategy
+    assert "品线级" not in strategy and "scope" not in route
     assert "有效产品数" not in voices
 
 
@@ -170,7 +176,6 @@ def test_opportunity_boards_exclude_invalid_classifications():
         Q.SPU_ISSUES,
         Q.ISSUE_DETAIL,
         Q.INNOVATION_DETAIL,
-        Q.STRATEGY_OPPORTUNITIES,
     ):
         assert "classification_state = '确定'" in compact(sql)
 
@@ -188,7 +193,9 @@ def test_new_read_queries_use_explicit_join_conditions():
         Q.ISSUE_VOICES,
         Q.INNOVATION_DETAIL,
         Q.INNOVATION_EVIDENCE,
-        Q.STRATEGY_OPPORTUNITIES,
+        Q.STRATEGY_AXES,
+        Q.STRATEGY_AXIS,
+        Q.STRATEGY_AXIS_MEMBERS,
     ):
         assert " using " not in compact(sql)
 

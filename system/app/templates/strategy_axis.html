@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% import "macros.html" as M with context %}
+{% block title %}{{ axis.axis_name }} · 战略视图{% endblock %}
+{% block body_class %}strategy-detail-page{% endblock %}
+{% block body_attrs %}data-back-url="/strategy?type={{ axis.axis_type }}"{% endblock %}
+{% block content %}
+<header class="head">
+  <nav class="trail" aria-label="面包屑"><a href="/strategy?type={{ axis.axis_type }}">战略视图</a><i>/</i><span>{{ axis.axis_type }}</span></nav>
+  <h1 class="detail-title">{{ axis.axis_name }}</h1>
+  {% if axis.summary %}<p class="lede">{{ axis.summary }}</p>{% endif %}
+  <p class="lede"><span class="code">{{ axis.axis_type }}</span>{% if axis.computed_at %} · {{ axis.computed_at }}{% endif %}</p>
+</header>
+<div class="scroll">
+  <div class="readout">
+    {% if axis.axis_type == '通病' %}<div class="ro"><div class="v">{{ axis.n_spu|num }}</div><div class="k">跨 SPU</div></div>{% endif %}
+    <div class="ro"><div class="v">{{ axis.n_cards|num }}</div><div class="k">卡</div></div>
+    <div class="ro"><div class="v">{{ axis.evi_total|num }}</div><div class="k">证据</div></div>
+    {% if axis.axis_type == '通病' %}<div class="ro"><div class="v">{{ axis.n_eff|num }}</div><div class="k">n_eff</div></div>{% endif %}
+  </div>
+
+  {% if axis.axis_type == '通病' %}
+  <div class="grp"><h2>SPU 证据分布</h2><span class="c">{{ axis.top_spus|length }}</span></div>
+  <table>
+    <thead><tr><th>SPU</th><th style="width:55%">证据</th><th class="r" style="width:72px">条数</th></tr></thead>
+    <tbody>
+    {% for row in axis.top_spus %}
+      <tr tabindex="0" data-href="/spu/{{ row.spu }}">
+        <td><a class="code" href="/spu/{{ row.spu }}">{{ row.spu }}</a></td>
+        <td><span class="bar" style="--w:{{ row.bar_pct }};min-width:180px"><span></span></span></td>
+        <td class="r n dim">{{ row.evi|num }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="3">当前条件下没有记录。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class="grp"><h2>成员卡</h2><span class="c">{{ members|length }}</span></div>
+  <table>
+    <thead><tr>
+      <th>问题 / 诉求</th>
+      {% if axis.axis_type == '通病' %}<th style="width:190px">SPU / 品名</th>{% endif %}
+      <th class="r" style="width:72px">证据</th>
+      <th style="width:92px">当前状态</th>
+      <th class="r" style="width:92px">cos</th>
+    </tr></thead>
+    <tbody>
+    {% for row in members %}
+      {% if row.axis_type == '诉求' %}{% set href = '/inno/' ~ row.opp_id %}{% elif row.link_spu %}{% set href = '/issue/' ~ row.link_spu ~ '/' ~ row.opp_id %}{% else %}{% set href = none %}{% endif %}
+      <tr{% if href %} tabindex="0" data-href="{{ href }}"{% endif %}>
+        <td><div class="nm">{{ row.problem_mode or row.title }}</div>{% if row.title and row.title != row.problem_mode %}<div class="sub">{{ row.title }}</div>{% endif %}</td>
+        {% if axis.axis_type == '通病' %}<td>{% if row.link_spu %}<span class="code">{{ row.link_spu }}</span>{% if row.product_names %}<div class="sub">{{ row.product_names[0] }}</div>{% endif %}{% else %}<span class="dim">—</span>{% endif %}</td>{% endif %}
+        <td class="r n dim">{{ row.evi_total|num }}</td>
+        <td>{{ M.status_label(row.status, row.revived_at) }}</td>
+        <td class="r n dim">{{ '%.2f'|format(row.cos_to_leader|float) if row.cos_to_leader is not none else '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td class="empty" colspan="{{ 5 if axis.axis_type == '通病' else 4 }}">当前条件下没有记录。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
