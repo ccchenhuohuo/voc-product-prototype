@@ -409,6 +409,8 @@ def _greedy_clusters(
         if leader.opp_id in merged:
             continue
         cluster = [leader]
+        evaluations: list[tuple[Card, tuple[str, ...], bool | None]] = []
+        uncached: list[tuple[Card, tuple[str, ...]]] = []
         for candidate in ordered[index + 1:]:
             if candidate.opp_id in merged:
                 continue
@@ -418,17 +420,37 @@ def _greedy_clusters(
             metrics["pairs_evaluated"] += 1
             key = _verdict_key(leader, candidate, policy)
             if key in cache:
-                same = cache[key]
                 metrics["verdict_cache_hits"] += 1
+                evaluations.append((candidate, key, cache[key]))
             else:
-                metrics["llm_judged"] += 1
-                prompt = template.format(
-                    a=leader.problem_mode, b=candidate.problem_mode)
-                try:
-                    same = bool(judge(axis_type, leader, candidate, prompt))
-                except Exception:  # 判定失败只影响本对，不落正常缓存
+                evaluations.append((candidate, key, None))
+                uncached.append((candidate, key))
+
+        # 同一个 leader 对各候选的二元判断彼此独立；并发取回后仍按原始
+        # candidate 顺序应用结果，因此不会改变贪心 leader/merged 语义。
+        # 真实全量有数千候选对，逐对串行会把战略层拖到数小时。
+        def _judge_one(item: tuple[Card, tuple[str, ...]]):
+            candidate, key = item
+            prompt = template.format(
+                a=leader.problem_mode, b=candidate.problem_mode)
+            try:
+                return key, bool(judge(axis_type, leader, candidate, prompt)), None
+            except Exception as error:  # 单对失败仍沿用既有 fail-soft 语义
+                return key, False, error
+
+        judged = {
+            key: (same, error)
+            for key, same, error in llm.parallel_map(_judge_one, uncached)
+        }
+        metrics["llm_judged"] += len(uncached)
+
+        for candidate, key, cached_same in evaluations:
+            if cached_same is not None:
+                same = cached_same
+            else:
+                same, error = judged[key]
+                if error is not None:
                     metrics["llm_failed"] += 1
-                    same = False
                 else:
                     verdict = {
                         "opp_a": key[0], "opp_b": key[1],

@@ -6,6 +6,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import sys
+import threading
 
 import pytest
 
@@ -261,6 +262,32 @@ def test_05_problem_mode_change_invalidates_related_cache_key():
     assert second["metrics"]["llm_judged"] == 1
     assert second["metrics"]["verdict_cache_hits"] == 0
     assert len(store.verdicts) == 2
+
+
+def test_uncached_candidates_for_one_leader_are_judged_concurrently():
+    barrier = threading.Barrier(2)
+
+    def synchronized_judge(axis_type, left, right, prompt):
+        del axis_type, left, right, prompt
+        barrier.wait(timeout=1)
+        return True
+
+    store = MemoryStore(
+        cards=[make_card("OPP2-A", evi=30), make_card("OPP2-B", evi=20),
+               make_card("OPP2-C", evi=10)],
+        recalls={"通病": [pair("OPP2-A", "OPP2-B"),
+                            pair("OPP2-A", "OPP2-C")]},
+        spu_rows=[spu("OPP2-A", "SPU-A", 3), spu("OPP2-B", "SPU-B", 2),
+                  spu("OPP2-C", "SPU-C", 1)],
+    )
+
+    result = run_strategy(
+        axis_type="通病", store=store, judge=synchronized_judge,
+        namer=stable_namer)
+
+    assert result["clusters"]["通病"] == [["OPP2-A", "OPP2-B", "OPP2-C"]]
+    assert result["metrics"]["llm_judged"] == 2
+    assert result["metrics"]["llm_failed"] == 0
 
 
 def test_06_max_pairs_aborts_without_any_table_write_and_cli_is_nonzero(
