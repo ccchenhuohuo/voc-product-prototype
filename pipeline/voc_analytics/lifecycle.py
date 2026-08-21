@@ -32,7 +32,7 @@ def release_to_pm(*, opp_id_prefix: str | None = None) -> dict:
       WITH ranked AS (
         SELECT opp_id, row_number() OVER (ORDER BY rank_score DESC NULLS LAST) rn
           FROM voc_opportunity
-         WHERE backlog AND (%s IS NULL OR opp_id LIKE %s))
+         WHERE backlog AND (%s::text IS NULL OR opp_id LIKE %s))
       UPDATE voc_opportunity o SET backlog = false, released_at = now()
         FROM ranked r WHERE o.opp_id = r.opp_id
          AND (o.safety_flag OR o.dual_source OR r.rn <= %s)""",
@@ -40,16 +40,16 @@ def release_to_pm(*, opp_id_prefix: str | None = None) -> dict:
     return {
         "已放行": db.q1(
             "SELECT count(*) FROM voc_opportunity WHERE NOT backlog "
-            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+            "AND (%s::text IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
         "留 backlog": db.q1(
             "SELECT count(*) FROM voc_opportunity WHERE backlog "
-            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+            "AND (%s::text IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
         "其中安全类": db.q1(
             "SELECT count(*) FROM voc_opportunity WHERE NOT backlog AND safety_flag "
-            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+            "AND (%s::text IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
         "其中待复核": db.q1(
             "SELECT count(*) FROM voc_opportunity WHERE NOT backlog AND needs_review "
-            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+            "AND (%s::text IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
     }
 
 

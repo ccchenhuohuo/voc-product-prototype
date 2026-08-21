@@ -105,7 +105,7 @@ def run_auto(week: str, *, opp_id_prefix: str | None = None) -> dict:
                             WHERE m.opp_id = ANY(p.opp_ids))
            AND NOT EXISTS (SELECT 1 FROM voc_opportunity o
                             WHERE o.opp_id = ANY(p.opp_ids) AND o.safety_flag)
-           AND (%s IS NULL OR NOT EXISTS (
+           AND (%s::text IS NULL OR NOT EXISTS (
                  SELECT 1 FROM unnest(p.opp_ids) x(opp_id)
                   WHERE x.opp_id NOT LIKE %s
                ))""", [pattern, pattern])
@@ -119,7 +119,7 @@ def run(week: str, *, opp_id_prefix: str | None = None) -> dict:
     rows = db.q("""SELECT proposal_id
                      FROM voc_proposal
                     WHERE status='accepted' AND op_type IN ('MERGE','SPLIT')
-                      AND (%s IS NULL OR NOT EXISTS (
+                      AND (%s::text IS NULL OR NOT EXISTS (
                             SELECT 1 FROM unnest(opp_ids) x(opp_id)
                              WHERE x.opp_id NOT LIKE %s
                           ))
