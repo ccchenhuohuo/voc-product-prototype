@@ -518,7 +518,7 @@ def generation_pool(week_start: str | None = None,
                    ) ORDER BY s.assigned_spu, s.source
                  ) AS spu_assignments
             FROM voc_assign_snapshot s
-           WHERE %(assign_run_id)s IS NOT NULL
+           WHERE %(assign_run_id)s::text IS NOT NULL
              AND s.run_id = %(assign_run_id)s
              AND s.message_id = e.message_id
              AND s.seq = e.seq

@@ -2,7 +2,8 @@
 # 默认不清库：两个生命周期并行追加 v3 命名空间，再统一收尾。
 # 用法：bash ~/voc-analytics/scripts/rerun_both.sh
 # 前置条件：~/voc-analytics 下已有 .env、.venv 与事实层数据；voc-postgres 正常；
-#   百炼/LLM 凭据与配额可用。目标周当前固定为 2026-W33；
+#   百炼/LLM 凭据与配额可用。目标周默认取服务器本地当前 ISO 周，
+#   可用 WEEK=2026-W33 覆盖以重算历史周；
 #   PER_PROC_CONCURRENCY 可调整并发。BUCKETS 默认 0（全量），若设置后实际
 #   截断了桶，生成程序会在调用 LLM 前失败，绝不以子集冒充全量。
 # 脚本会终止匹配 run_generate.py 的进程。只有显式设置
@@ -87,7 +88,19 @@ fi
 # 全局闸门 _GATE 是【进程内】的信号量，两个进程各持一份，所以每个进程分一半。
 # 2026-08-17 复测拐点由 64 上移到 96（128 起连接被对端掐断），故每进程 48。
 PER_PROC_CONCURRENCY="${PER_PROC_CONCURRENCY:-48}"
-RUN_ID="${RUN_ID:-gen_2026W33_$(date -u +%Y%m%dT%H%M%SZ)_$$}"
+# 目标周：脚本启动时算一次并冻结，warm / 两个生成进程 / 统一收尾共用同一个值。
+# 绝不能各处现算 date —— 跨周边界（周日深夜起跑、周一收尾）会把同一轮的
+# attach_week / last_week / snapshot.week 写成两个不同的周。
+# 按本地时区取而非 -u：服务器是 Asia/Shanghai，周一 00:00-08:00 CST 落在
+# UTC 的上一周，用 -u 会给这一轮打上错误的周标签。
+# 重算历史周：WEEK=2026-W33 bash scripts/rerun_both.sh
+WEEK="${WEEK:-$(date +%G-W%V)}"
+if [[ ! "$WEEK" =~ ^[0-9]{4}-W[0-9]{2}$ ]]; then
+  echo "!! WEEK 格式非法：'$WEEK'（应形如 2026-W34）" >&2
+  exit 2
+fi
+echo "== 本轮目标周：$WEEK =="
+RUN_ID="${RUN_ID:-gen_${WEEK//-/}_$(date -u +%Y%m%dT%H%M%SZ)_$$}"
 # 两个 Python 进程共享首个 fatal；文件路径按本次 supervisor PID 隔离。
 # llm.py 用原子发布保留首因，另一进程每次请求前都会检查。
 VOC_LLM_CIRCUIT_FILE="${VOC_LLM_CIRCUIT_FILE:-/tmp/voc_llm_circuit_$$}"
@@ -316,7 +329,7 @@ fi
 # 预热后两个进程全部命中缓存、都不写入，三个问题一起消失。
 export VOC_LLM_CONCURRENCY=$(( PER_PROC_CONCURRENCY * 2 ))
 echo "== 阶段零：G4 判定预热（并发 ${VOC_LLM_CONCURRENCY}，run_id=${RUN_ID}）=="
-.venv/bin/python -u scripts/warm_value_gate.py --week 2026-W33 --full-history \
+.venv/bin/python -u scripts/warm_value_gate.py --week "$WEEK" --full-history \
       --run-id "$RUN_ID" 2>&1 | tee /tmp/warm_gate.log || {
   echo "!! G4 预热失败，中止重跑（机会层尚未清空，无损失）"; exit 1
 }
@@ -359,11 +372,11 @@ export VOC_LLM_CONCURRENCY="$PER_PROC_CONCURRENCY"
 # 进程会在快照后执行 REVIVE 检测。
 echo "== 阶段一：两个生命周期并行生成（每进程并发 ${PER_PROC_CONCURRENCY}，run_id=${RUN_ID}）=="
 CHILDREN_DRAINED=0
-nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --full-history \
+nohup .venv/bin/python -u scripts/run_generate.py --week "$WEEK" --full-history \
       --lifecycle existing --run-id "$RUN_ID" --limit-buckets "${BUCKETS:-0}" \
       --skip-finalize > /tmp/gen_existing.log 2>&1 &
 PID_EXISTING=$!
-nohup .venv/bin/python -u scripts/run_generate.py --week 2026-W33 --full-history \
+nohup .venv/bin/python -u scripts/run_generate.py --week "$WEEK" --full-history \
       --lifecycle innovation --run-id "$RUN_ID" --limit-buckets "${BUCKETS:-0}" \
       --skip-finalize > /tmp/gen_innovation.log 2>&1 &
 PID_INNOVATION=$!
@@ -441,7 +454,7 @@ export VOC_LLM_CONCURRENCY=64
 RC_FINALIZE=0
 CHILDREN_DRAINED=0
 # 收尾不取生成池，故不带 --full-history。
-.venv/bin/python -u scripts/run_generate.py --week 2026-W33 \
+.venv/bin/python -u scripts/run_generate.py --week "$WEEK" \
       --lifecycle both --run-id "$RUN_ID" --finalize-only \
       > /tmp/gen_finalize.log 2>&1 &
 PID_FINALIZE=$!
