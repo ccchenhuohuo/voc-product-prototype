@@ -1,0 +1,200 @@
+<section id="arch-03" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">03</span>
+    <div>
+      <div class="arch-kicker">来源 → 消息 → 证据</div>
+      <h2>事实层先保真，再谈价值判断</h2>
+      <p>消息保存“用户说了什么和它来自哪里”；证据保存云听切出的标签位置。两者的身份粒度不同，模型产物不能反向覆盖原始事实。</p>
+    </div>
+  </header>
+
+  <div class="arch-source-grid" data-arch-visual="source-capability-map">
+    <article class="arch-source live">
+      <div><span class="arch-state is-live">已接入</span><code>COMMENT</code></div>
+      <h3>电商评论</h3>
+      <p>商品语境强，当前来源策略 <code>requires_spu=true</code>。必须有事实 SPU 才能成为确定机会。</p>
+      <dl><dt>抽取切片</dt><dd>30 天</dd><dt>核心上下文</dt><dd>商品、星级、国家、原文</dd><dt>可去向</dt><dd>老品迭代 / 无效终态</dd></dl>
+    </article>
+    <article class="arch-source live">
+      <div><span class="arch-state is-live">已接入</span><code>SOCIAL</code></div>
+      <h3>社媒内容</h3>
+      <p>帖子结构和噪音复杂，当前来源策略 <code>requires_spu=false</code>，经 G1–G5 后可进入两个生命周期。</p>
+      <dl><dt>抽取切片</dt><dd>15 天</dd><dt>核心上下文</dt><dd>组、父帖、作者、标题、互动</dd><dt>可去向</dt><dd>老品 / 新品 / 多种终态</dd></dl>
+    </article>
+    <article class="arch-source plan">
+      <div><span class="arch-state is-plan">未接入生成</span><code>SERVICE</code></div>
+      <h3>客服与其他来源</h3>
+      <p>数据库有来源策略和探针扩展点，但统一生成池与快照 SQL 仍含电商 / 社媒特定逻辑，登记策略并不等于自动接通。</p>
+      <dl><dt>当前能力</dt><dd>探针 / schema 占位</dd><dt>缺少</dt><dd>连接器、字段契约、门控标定</dd><dt>可去向</dt><dd>规划中</dd></dl>
+    </article>
+  </div>
+
+  <figure class="arch-visual arch-ingest-flow" data-arch-visual="ingest-clean-flow" aria-labelledby="arch-ingest-caption">
+    <ol class="arch-flow compact">
+      <li><span>01</span><b>查询与探测</b><p>按周入口<br>按来源切片</p></li>
+      <li><span>02</span><b>导出保护</b><p>5000 条硬上限<br>递归二分重切</p></li>
+      <li><span>03</span><b>字段校验</b><p>社媒必需列<br>消息 ID 与来源</p></li>
+      <li><span>04</span><b>无损清洗</b><p>NFKC · SPU 规范化<br>原值与未匹配留痕</p></li>
+      <li><span>05</span><b>原位炸开</b><p>标签 / 情感 / 片段<br>按 seq 保持位置</p></li>
+      <li><span>06</span><b>幂等写入</b><p>message 主键<br>evidence 复合主键</p></li>
+      <li><span>07</span><b>根帖继承</b><p>只从同组根帖推断<br>不改事实 SPU</p></li>
+    </ol>
+    <div class="arch-warning-row">
+      <b>迟到数据现实：</b><span>代码里存在重叠窗函数，但当前 <code>run_ingest.py</code> 实际调用整周 <code>week_bounds()</code>。主键能防重复，不能据此宣称入口已覆盖迟到数据重叠拉取。</span>
+    </div>
+    <figcaption id="arch-ingest-caption">抽取与清洗链。消息、证据和继承更新并非整个时间窗的单一事务，失败后依靠稳定主键与幂等重跑修复。</figcaption>
+  </figure>
+
+  <div class="arch-entity-anatomy">
+    <div class="arch-entity message">
+      <header><code>voc_message</code><span>1 条用户消息</span></header>
+      <div class="arch-field-groups">
+        <p><b>身份</b><span>message_id · src_line · platform</span></p>
+        <p><b>内容</b><span>content · content_zh · url · publish_time</span></p>
+        <p><b>产品事实</b><span>spu · sku · model · spu_raw · spu_unmatched</span></p>
+        <p><b>社媒线程</b><span>group · type · parent · author · title · spu_inherited</span></p>
+      </div>
+    </div>
+    <div class="arch-cardinality"><b>1</b><span>消息切片</span><b>N</b></div>
+    <div class="arch-entity evidence">
+      <header><code>voc_evidence</code><span>最小可追溯证据</span></header>
+      <div class="arch-field-groups">
+        <p><b>身份</b><span>(message_id, seq)</span></p>
+        <p><b>原始切片</b><span>tag_raw · snippet_raw · sentiment</span></p>
+        <p><b>清洗语义</b><span>tag · snippet · 四级 taxonomy</span></p>
+        <p><b>机器标记</b><span>is_product · is_scene · low_conf</span></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="arch-callout quiet">
+    <b>为什么 seq 不能“补齐”？</b>
+    <span>云听把标签、情感、片段作为三条平行数组返回。某个位置是 <code>null</code> 时只把该位置归一化为 SQL NULL，不能把后面的值左移，否则证据会与错误标签配对。</span>
+  </div>
+
+  <details class="arch-detail">
+    <summary>摄取层仍需治理的边界</summary>
+    <div class="arch-detail-body arch-two-col">
+      <div><b>完整性检查并非全覆盖</b><p>当前错位指标主要比较标签与情感长度，没有同等验证 snippet 数量；错位会记指标但不硬阻断。</p></div>
+      <div><b>重灌不删除旧高 seq</b><p>同一消息后来返回更少标签时，既有较高 seq 证据不会自动删除，需要独立清理契约。</p></div>
+      <div><b>事实子集不是原始数据湖</b><p>云听查询已经带本品 / 品牌过滤，入库的是项目范围内的事实子集，不是上游全量归档。</p></div>
+      <div><b>保留期尚未自动执行</b><p>retention_until 是软到期字段，仓库未发现定时物理删除或匿名化任务。</p></div>
+    </div>
+  </details>
+</section>
+
+<section id="arch-04" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">04</span>
+    <div>
+      <div class="arch-kicker">价值判断与生命周期</div>
+      <h2>先挡噪音，再回答“能否落到产品”</h2>
+      <p>电商用一个结构契约；社媒依次经过 G1–G5。G 系列解决准入与归属，R0–R3 再给统一证据集一个封闭的分类结果。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-gate-map" data-arch-visual="social-gates" aria-labelledby="arch-gates-caption">
+    <div class="arch-gate-rail">
+      <div><span>G1</span><b>品牌白名单</b><p>只保留本品牌</p><small>失败 → 品牌终态</small></div>
+      <div><span>G1b</span><b>同组污染</b><p>竞品根帖整组排除</p><small>失败 → 组终态</small></div>
+      <div><span>G2</span><b>内容标签</b><p>咨询 / 使用体验</p><small>广告、评测等终止</small></div>
+      <div><span>G3</span><b>官方账号</b><p>排除自有官号</p><small>失败 → 官号终态</small></div>
+      <div class="ai"><span>G4</span><b>价值门</b><p>诉求 / 缺陷 / 无价值</p><small>低置信或缺陷可三票</small></div>
+      <div class="route"><span>G5</span><b>归属路由</b><p>fact / root / 无 SPU</p><small>决定老品、新品或终态</small></div>
+    </div>
+    <div class="arch-route-outcomes">
+      <div class="iter"><b>有冻结 SPU</b><span>产品缺陷或有效诉求</span><strong>→ 老品迭代</strong></div>
+      <div class="inno"><b>无 SPU · 来源允许</b><span>有效且具体的诉求缺口</span><strong>→ 新品创新</strong></div>
+      <div class="terminal"><b>无 SPU 的缺陷</b><span>知道坏了，但不知道改哪个产品</span><strong>→ 缺陷不可归属</strong></div>
+      <div class="terminal"><b>无价值 / 诉求过泛</b><span>不制造勉强的机会卡</span><strong>→ 合法业务终态</strong></div>
+    </div>
+    <figcaption id="arch-gates-caption">社媒门控是串联关系。G4 按消息判一次并按提示词版本缓存；父帖标题仅作为评论 / 回复的上下文。</figcaption>
+  </figure>
+
+  <div class="arch-route-matrix" data-arch-visual="classification-matrix">
+    <div class="arch-matrix-head"><span>规则</span><b>封闭条件</b><b>分类结果</b></div>
+    <div class="arch-matrix-row">
+      <b><code>R0</code></b>
+      <div><strong>证据数为 0</strong><span>没有进入分类的有效证据</span></div>
+      <div class="terminal"><strong>无效</strong><span>opp_type = NULL</span></div>
+    </div>
+    <div class="arch-matrix-row">
+      <b><code>R1</code></b>
+      <div><strong>任一证据有冻结 SPU</strong><span>以 assigned_spu 为准</span></div>
+      <div class="iter"><strong>老品迭代 · 确定</strong><span>一张卡进入单一 SPU 身份域</span></div>
+    </div>
+    <div class="arch-matrix-row">
+      <b><code>R2</code></b>
+      <div><strong>无 SPU，且来源允许无 SPU</strong><span>存在 requires_spu=false</span></div>
+      <div class="inno"><strong>新品创新 · 确定</strong><span>core_tag = NULL</span></div>
+    </div>
+    <div class="arch-matrix-row">
+      <b><code>R3</code></b>
+      <div><strong>无 SPU，且所有来源都要求 SPU</strong><span>无法形成可归属机会</span></div>
+      <div class="terminal"><strong>无效</strong><span>opp_type = NULL</span></div>
+    </div>
+  </div>
+
+  <div class="arch-two-col">
+    <article class="arch-panel">
+      <h3>两个“终态”不要混为一谈</h3>
+      <ul class="arch-list">
+        <li><b>业务门终态</b><span>品牌、竞品组、内容标签、官号、无价值、诉求过泛、缺陷不可归属等，主要进入运行指标。</span></li>
+        <li><b>证据终态账</b><span><code>voc_unclassified_evidence</code> 记录 unclassified、vote_dropped、truncated、generation_failed、grounding_rejected。</span></li>
+        <li><b>分类无效</b><span>R0 / R3 是机会分类结果，不是第三种机会类型。</span></li>
+      </ul>
+    </article>
+    <article class="arch-panel">
+      <h3>来源与产品归属正交</h3>
+      <ul class="arch-list">
+        <li><b>fact</b><span>云听直接标注的 SPU，属于事实。</span></li>
+        <li><b>root</b><span>同组根帖唯一指向的 SPU，只用于推断挂载。</span></li>
+        <li><b>特殊规则</b><span>社媒诉求若只有 root 继承 SPU，会降为无 SPU 进入创新；避免把泛诉求绑死到帖子背景产品。</span></li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section id="arch-05" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">05</span>
+    <div>
+      <div class="arch-kicker">v3 的守恒锚点</div>
+      <h2>把每轮归属冻结成不可变快照</h2>
+      <p>所有下游都读取同一个 <code>run_id</code> 快照，而不是在不同阶段重新展开会变化的 message.spu 数组。这是路由、机会关系、终态账和 SPU 派生能对上账的前提。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-snapshot-map" data-arch-visual="assignment-snapshot" aria-labelledby="arch-snapshot-caption">
+    <div class="arch-snapshot-source">
+      <span>一条证据事实</span>
+      <b><code>(M-1042, seq=3)</code></b>
+      <p>fact SPU = {A, B}</p>
+    </div>
+    <div class="arch-snapshot-fanout"><span>按本轮口径冻结</span><b>→</b></div>
+    <div class="arch-snapshot-rows">
+      <div><code>run_2026W33</code><b>M-1042 · 3 · A</b><span>source = fact</span></div>
+      <div><code>run_2026W33</code><b>M-1042 · 3 · B</b><span>source = fact</span></div>
+    </div>
+    <div class="arch-snapshot-fanout"><span>只读此基线</span><b>→</b></div>
+    <div class="arch-snapshot-consumers">
+      <span>路由 R</span><span>机会关系 P</span><span>终态账 D</span><span>SPU v3 派生</span>
+    </div>
+    <figcaption id="arch-snapshot-caption">多 SPU 不是一行数组，而是两个独立扇出键；终态唯一粒度同样包含 assigned_spu，不能把 A 与 B 折叠。</figcaption>
+  </figure>
+
+  <div class="arch-contract-grid">
+    <article><span>单写者</span><b>advisory lock</b><p><code>voc_prepare_assign_snapshot()</code> 串行准备同一轮快照，重复调用幂等。</p></article>
+    <article><span>不可变</span><b>禁止 UPDATE</b><p>删除必须按整个 run_id 处理；writer 不能绕过准备函数直接写入。</p></article>
+    <article><span>可验证</span><b>三项指纹</b><p>行数、不同事实数与内容 MD5 写入 run log，finalize 前重新计算。</p></article>
+    <article><span>可追溯</span><b>关系保留归属</b><p><code>voc_opp_evidence</code> 写 assigned_spu、assignment_source、assign_run_id。</p></article>
+  </div>
+
+  <details class="arch-detail" open>
+    <summary>冻结快照解决了什么问题</summary>
+    <div class="arch-detail-body arch-two-col">
+      <div><b>旧风险：二次展开</b><p>如果生成、关系写入和派生刷新分别读取可变数组，同一证据可能在不同阶段得到不同 SPU 集合，造成错挂、漏挂和不可解释的四象限差异。</p></div>
+      <div><b>当前契约：单一投影</b><p>路由集合与快照双向差集必须为空；关系行也必须来自同一快照。机器事实以后变化，只影响下一轮，不污染本轮。</p></div>
+    </div>
+  </details>
+</section>

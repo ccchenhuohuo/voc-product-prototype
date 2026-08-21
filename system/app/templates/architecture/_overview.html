@@ -1,0 +1,187 @@
+<section id="arch-00" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">00</span>
+    <div>
+      <div class="arch-kicker">先建立共同口径</div>
+      <h2>这页怎么读</h2>
+      <p>它不是一张“未来蓝图”，而是把当前仓库事实、尚待环境核验的能力、默认关闭的代码和下一阶段产品规划放在同一张地图上。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-status-legend" data-arch-visual="status-legend" aria-labelledby="arch-status-caption">
+    <div class="arch-status-item live">
+      <span class="arch-state is-live">仓库已实现</span>
+      <b>代码与离线契约存在</b>
+      <p>Python、SQL、模板或测试已经形成闭环；仍不代表目标库已执行到同一版本。</p>
+    </div>
+    <div class="arch-status-item check">
+      <span class="arch-state is-check">环境待核验</span>
+      <b>需要连接目标环境确认</b>
+      <p>迁移版本、真实数据量、外部 API、权限实权与部署状态不能从仓库静态推断。</p>
+    </div>
+    <div class="arch-status-item off">
+      <span class="arch-state is-off">已实现 · 默认关闭</span>
+      <b>代码存在但当前开关不生效</b>
+      <p>如 grounding 硬拦截、Stage1 投票和自动接受融合 / 拆分提案；不能等同于线上默认行为。</p>
+    </div>
+    <div class="arch-status-item plan">
+      <span class="arch-state is-plan">产品规划</span>
+      <b>目标闭环，尚未落库</b>
+      <p>如有限必阅推荐、首次批阅 SLA、飞书加急、打标前后不同的融合规则。</p>
+    </div>
+    <div class="arch-status-item retired">
+      <span class="arch-state is-retired">历史已替代</span>
+      <b>只用于理解演进</b>
+      <p>Dagster 入口、v2/v3 双物化灰度等旧设计不再代表当前仓库目标。</p>
+    </div>
+    <figcaption id="arch-status-caption">全页状态图例。颜色只是辅助编码，文字标签才是权威含义。</figcaption>
+  </figure>
+
+  <div class="arch-reading-paths" aria-label="推荐阅读路径">
+    <a href="#arch-01"><span>产品与业务</span><b>全链路 → PM 闭环 → 战略层</b><small>先看 01、12、13</small></a>
+    <a href="#arch-03"><span>数据与算法</span><b>事实层 → 路由 → 双生命周期</b><small>重点看 03–10</small></a>
+    <a href="#arch-11"><span>工程与运维</span><b>运行控制 → 权限 → 故障边界</b><small>重点看 11、14–16</small></a>
+  </div>
+
+  <div class="arch-callout">
+    <b>正文静态，壳层仍读库。</b>
+    <span><code>/architecture</code> 路由不查询业务数据，但共享侧栏会读取页面计数。因此这是一份可版本控制的架构说明，不是数据库故障时的离线手册。</span>
+  </div>
+</section>
+
+<section id="arch-01" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">01</span>
+    <div>
+      <div class="arch-kicker">一分钟看懂全系统</div>
+      <h2>一条 VOC 如何变成可行动的产品机会</h2>
+      <p>系统的核心不是“让模型写一张卡”，而是让每条声音沿着同一份事实、同一轮冻结归属和可对账的终态，最终进入机器机会层或明确停止。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-overview-map" data-arch-visual="end-to-end-map" aria-labelledby="arch-overview-caption">
+    <ol class="arch-flow arch-flow-main">
+      <li class="source">
+        <span class="arch-node-index">01</span>
+        <b>云听来源</b>
+        <p>电商评论<br>社媒帖子 / 评论</p>
+        <small>外部输入</small>
+      </li>
+      <li class="fact">
+        <span class="arch-node-index">02</span>
+        <b>消息与证据</b>
+        <p><code>message_id</code><br><code>(message_id, seq)</code></p>
+        <small>可追溯事实层</small>
+      </li>
+      <li class="rule">
+        <span class="arch-node-index">03</span>
+        <b>门控与分类</b>
+        <p>电商结构契约<br>社媒 G1–G5 · R0–R3</p>
+        <small>价值与生命周期</small>
+      </li>
+      <li class="snapshot">
+        <span class="arch-node-index">04</span>
+        <b>冻结归属</b>
+        <p><code>run_id</code> 快照<br>fact / root / 多 SPU 扇出</p>
+        <small>全轮唯一基线</small>
+      </li>
+      <li class="split">
+        <span class="arch-node-index">05</span>
+        <b>双生命周期</b>
+        <div class="arch-fork">
+          <span class="iter">老品 · 按 SPU</span>
+          <span class="inno">新品 · 按诉求</span>
+        </div>
+        <small>互斥加工，不跨线消解</small>
+      </li>
+      <li class="machine">
+        <span class="arch-node-index">06</span>
+        <b>机会与终态</b>
+        <p>OPP2 卡片 + 证据关系<br>或合法终态账</p>
+        <small>不允许静默消失</small>
+      </li>
+      <li class="derived">
+        <span class="arch-node-index">07</span>
+        <b>派生与发布</b>
+        <p>SPU 问题 · 近邻<br>周快照 · 战略轴</p>
+        <small>读模型与 PM 放行</small>
+      </li>
+      <li class="human">
+        <span class="arch-node-index">08</span>
+        <b>产品经理决策</b>
+        <p>五状态 · 负责人<br>理由 · 备注 · 目标时间</p>
+        <small>人工层单独存储</small>
+      </li>
+    </ol>
+
+    <div class="arch-control-lane">
+      <span>控制面</span>
+      <b>run log</b>
+      <i>→</i><b>归属指纹</b>
+      <i>→</i><b>守恒账本</b>
+      <i>→</i><b>fatal 熔断</b>
+      <i>→</i><b>双成功才 finalize</b>
+    </div>
+    <div class="arch-feedback-lane">
+      <span>反馈面</span>
+      <b>人工状态与锁定</b>
+      <i>→</i><b>MERGE / SPLIT / REVIVE / REWRITE 提案</b>
+      <i>→</i><b>下轮执行与血缘</b>
+    </div>
+    <figcaption id="arch-overview-caption">端到端主河道：事实先于模型，归属先于聚合，终态与机会共同闭合整轮数据。</figcaption>
+  </figure>
+
+  <div class="arch-principles">
+    <div><span>01</span><b>来源不决定生命周期</b><p><code>src_line</code> 只表示在哪里发现；是否必须有 SPU 由来源策略决定。</p></div>
+    <div><span>02</span><b>模型不改写事实</b><p>根帖继承是推断归属，始终与云听直接标注的 fact 分开保存。</p></div>
+    <div><span>03</span><b>同卡与共性是两层问题</b><p>基础机会身份不跨 SPU；跨产品规律由战略派生层表达。</p></div>
+    <div><span>04</span><b>人工语义不被机器覆盖</b><p>机器层、人工层和审计日志分离；状态受数据库触发器约束。</p></div>
+  </div>
+</section>
+
+<section id="arch-02" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">02</span>
+    <div>
+      <div class="arch-kicker">系统上下文</div>
+      <h2>五个组件，只通过明确边界交接</h2>
+      <p><code>pipeline</code> 与 <code>system</code> 是两个 Python 项目，不经 HTTP 互调；PostgreSQL 是机器生成、派生读取和人工回写的唯一交接面。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-context-map" data-arch-visual="system-context" aria-labelledby="arch-context-caption">
+    <div class="arch-context-row upstream">
+      <div class="arch-context-node external"><span>外部来源</span><b>云听 CEM</b><p>COMMENT / SOCIAL 导出任务</p></div>
+      <div class="arch-context-node external"><span>AI 服务</span><b>阿里百炼</b><p>qwen-plus · text-embedding-v4</p></div>
+      <div class="arch-context-node external"><span>身份服务</span><b>飞书开放平台</b><p>当前只做 OAuth 登录与用户资料</p></div>
+    </div>
+    <div class="arch-context-link"><span>导出文件 / API</span><i>↓</i><span>chat / embedding</span><i>↓</i><span>OAuth</span></div>
+    <div class="arch-context-row core">
+      <div class="arch-context-node pipeline"><span>机器生产</span><b>pipeline/</b><p>抽取、清洗、门控、生成、守恒、派生、战略</p></div>
+      <div class="arch-context-db"><span>唯一交接面</span><b>PostgreSQL 18</b><p>pgvector · pg_trgm · SQL 001–036</p></div>
+      <div class="arch-context-node system"><span>人工消费</span><b>system/</b><p>FastAPI · Jinja · HTMX · 原生 SQL</p></div>
+    </div>
+    <div class="arch-no-direct-call"><span>pipeline 写机器层</span><b>→ 数据库 ←</b><span>system 读机器层、写人工层</span><em>两项目没有运行时 HTTP 调用</em></div>
+    <figcaption id="arch-context-caption">系统上下文图。Web 运行期不调用 LLM，AI 成本与失败只发生在离线管道。</figcaption>
+  </figure>
+
+  <div class="arch-table-wrap">
+    <table class="arch-table">
+      <caption>组件职责与失败边界</caption>
+      <thead><tr><th>组件</th><th>输入</th><th>负责</th><th>输出 / 边界</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td><b>云听 CEM</b></td><td>查询条件与时间窗</td><td>外部检索、导出 XLSX</td><td>原始消息、标签与产品字段</td><td><span class="arch-state is-live">已接入</span></td></tr>
+        <tr><td><b>pipeline</b></td><td>导出文件、数据库、百炼</td><td>事实入库、机会生成、派生刷新</td><td>机器表、运行账、战略轴</td><td><span class="arch-state is-live">仓库已实现</span></td></tr>
+        <tr><td><b>PostgreSQL</b></td><td>机器与人工写入</td><td>约束、触发器、物化视图、审计</td><td>唯一共享数据面</td><td><span class="arch-state is-check">实库待核验</span></td></tr>
+        <tr><td><b>system</b></td><td>数据库与飞书身份</td><td>列表、详情、状态更新、战略浏览</td><td>HTML / HTMX 页面</td><td><span class="arch-state is-live">仓库已实现</span></td></tr>
+        <tr><td><b>外部调度与提醒</b></td><td>计划任务、SLA 事件</td><td>定时运行、失败告警、PM 催办</td><td>当前没有内置实现</td><td><span class="arch-state is-plan">产品规划</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="arch-note-grid">
+    <div><b>不是微服务</b><p>没有队列、事件总线、Redis 或对象存储。复杂度集中在 PostgreSQL 契约与离线 supervisor。</p></div>
+    <div><b>不是实时流</b><p>当前是手工批处理；页面展示的是已经落库的结果，不订阅上游实时事件。</p></div>
+    <div><b>不是多租户</b><p>所有授权用户共享一个数据池；owner 是业务字段，不是行级权限边界。</p></div>
+  </div>
+</section>

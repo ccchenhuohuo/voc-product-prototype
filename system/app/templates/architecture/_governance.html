@@ -1,0 +1,207 @@
+<section id="arch-09" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">09</span>
+    <div>
+      <div class="arch-kicker">从事实到人工决策</div>
+      <h2>五层数据拓扑，各有唯一写入者</h2>
+      <p>事实、冻结基线、机器语义、派生读模型和人工决策物理分开。可重建的数据可以刷新，人工判断与审计不能被离线重算覆盖。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-layer-map" data-arch-visual="data-layers" aria-labelledby="arch-layers-caption">
+    <div class="arch-layer fact">
+      <header><span>01 · 事实与来源</span><b>上游发生了什么</b><small>pipeline 写 · 稳定主键</small></header>
+      <div><code>voc_source_policy</code><code>voc_message</code><code>voc_evidence</code><code>voc_tag_taxonomy</code><code>voc_social_gate</code><code>voc_source_probe</code></div>
+    </div>
+    <div class="arch-layer freeze">
+      <header><span>02 · 冻结与运行账</span><b>本轮按什么口径加工</b><small>受控函数 / supervisor 写</small></header>
+      <div><code>voc_assign_snapshot</code><code>voc_unclassified_evidence</code><code>voc_run_log</code></div>
+    </div>
+    <div class="arch-layer machine">
+      <header><span>03 · 机器机会</span><b>可重建的业务语义</b><small>pipeline 写 · OPP2 稳定身份</small></header>
+      <div><code>voc_opportunity</code><code>voc_opp_evidence</code><code>voc_opp_snapshot</code><code>voc_proposal</code><code>voc_opp_lineage</code><code>voc_opp_nn</code><code>voc_opp_id_map</code></div>
+    </div>
+    <div class="arch-layer derived">
+      <header><span>04 · 产品与战略读模型</span><b>为页面和横向洞察重组</b><small>finalize / strategy 刷新</small></header>
+      <div><code>voc_spu</code><code>voc_spu_issue_v3</code><code>voc_spu_issue</code><code>voc_board</code><code>voc_inbox</code><code>voc_safety_watch</code><code>voc_weekly_metrics</code><code>voc_strategy_axis</code><code>voc_strategy_axis_member</code><code>voc_strategy_pair_verdict</code></div>
+    </div>
+    <div class="arch-layer human">
+      <header><span>05 · 人工治理与审计</span><b>谁决定、何时决定、为什么</b><small>system 通过 voc_human 写</small></header>
+      <div><code>voc_spu_issue_manual</code><code>voc_opportunity_manual</code><code>voc_spu_issue_log</code><code>voc_status_log</code><code>voc_pm_pref</code></div>
+    </div>
+    <figcaption id="arch-layers-caption">五层堆叠图。提案由机器提出、执行后写血缘；人工状态独立于机器卡，避免重跑抹去产品经理判断。</figcaption>
+  </figure>
+
+  <div class="arch-callout important">
+    <b>当前产品问题层是 v3-only。</b>
+    <span>迁移 036 删除 v2/v3 双物化方案，只保留 <code>voc_spu_issue_v3</code>；普通兼容视图 <code>voc_spu_issue</code> 指向它。v3 只认关系行 <code>assigned_spu = core_tag</code>，并要求至少 2 个不同 message_id。目标库是否已经执行 036 仍需现场核验。</span>
+  </div>
+
+  <div class="arch-table-wrap">
+    <table class="arch-table">
+      <caption>关键实体、权威键与消费者</caption>
+      <thead><tr><th>对象</th><th>权威粒度 / 键</th><th>写入者</th><th>主要消费者</th><th>可否重建</th></tr></thead>
+      <tbody>
+        <tr><td><code>voc_message</code></td><td>message_id</td><td>ingest</td><td>证据池、社媒门、页面原声</td><td>可从上游重灌</td></tr>
+        <tr><td><code>voc_evidence</code></td><td>message_id + seq</td><td>ingest</td><td>生成、关系、终态</td><td>可从上游重灌</td></tr>
+        <tr><td><code>voc_assign_snapshot</code></td><td>run + message + seq + SPU</td><td>受控 SQL 函数</td><td>路由、持久化、守恒、v3 派生</td><td>只按整轮重建</td></tr>
+        <tr><td><code>voc_opportunity</code></td><td>OPP2 stable id</td><td>generation</td><td>老品 / 新品 / 战略 / 首页</td><td>可幂等再生</td></tr>
+        <tr><td><code>voc_opp_evidence</code></td><td>机会 + 证据</td><td>generation / merge</td><td>声量、详情、SPU v3</td><td>随机会重建</td></tr>
+        <tr><td><code>voc_spu_issue_v3</code></td><td>SPU + opportunity</td><td>物化刷新</td><td>老品看板与详情</td><td>完全派生</td></tr>
+        <tr><td><code>voc_strategy_axis*</code></td><td>generation + axis</td><td>strategy</td><td>战略页</td><td>分区替换</td></tr>
+        <tr><td><code>*_manual / *_log</code></td><td>业务对象 / 状态事件</td><td>产品经理</td><td>全部业务页面与审计</td><td><b>不可由机器重建</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="arch-10" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">10</span>
+    <div>
+      <div class="arch-kicker">每一行都必须有结局</div>
+      <h2>五套账本共同证明“没有静默丢数据”</h2>
+      <p>总数相等不够：必须验证身份集合、过程终态和最终投影。正常终止是一种业务结局；未记账的消失才是运行失败。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-ledger-map" data-arch-visual="conservation-ledgers" aria-labelledby="arch-ledger-caption">
+    <div class="arch-ledger primary">
+      <span>账本 A · 路由投影</span>
+      <code>snapshot EXCEPT routed = ∅</code>
+      <code>routed EXCEPT snapshot = ∅</code>
+      <b>R = F 只是最后一道总数检查</b>
+    </div>
+    <div class="arch-ledger primary">
+      <span>账本 B · 最终去向</span>
+      <code>F = P_unique + D</code>
+      <code>relation ∩ terminal = ∅</code>
+      <b>D / F ≤ 5%</b>
+    </div>
+    <div class="arch-ledger">
+      <span>账本 C · 新品预聚类</span>
+      <code>units = embedded + degraded</code>
+      <code>cluster members = all units</code>
+      <b>代表行必须展开回全部证据</b>
+    </div>
+    <div class="arch-ledger">
+      <span>账本 D · Stage1</span>
+      <code>planned batches = done + failed + cancelled</code>
+      <code>planned rows = classified + terminal</code>
+      <b>批数与证据行双账</b>
+    </div>
+    <div class="arch-ledger">
+      <span>账本 E · 生成与落库</span>
+      <code>planned = completed + failed + cancelled</code>
+      <b>桶、组、机会持久化分别闭合</b>
+    </div>
+    <figcaption id="arch-ledger-caption">守恒账不是一个漏斗数字，而是按同一 run_id 对身份集合、过程状态和最终关系分别验收。</figcaption>
+  </figure>
+
+  <div class="arch-table-wrap">
+    <table class="arch-table">
+      <caption>质量门与失败动作</caption>
+      <thead><tr><th>检查</th><th>当前阈值 / 契约</th><th>未通过时</th><th>是否允许 finalize</th></tr></thead>
+      <tbody>
+        <tr><td><b>归属指纹</b></td><td>行数、事实数、键 MD5 完全一致</td><td>整轮失败</td><td><span class="arch-state is-retired">禁止</span></td></tr>
+        <tr><td><b>双向集合差</b></td><td>snapshot ↔ routed 两边都为空</td><td>整轮失败</td><td><span class="arch-state is-retired">禁止</span></td></tr>
+        <tr><td><b>终态损耗</b></td><td>D / F ≤ 5%</td><td>超过阈值中止</td><td><span class="arch-state is-retired">禁止</span></td></tr>
+        <tr><td><b>普通组失败</b></td><td>失败数 ≤2 或失败率 ≤20%</td><td>明确记 failed / cancelled</td><td>阈值内可继续</td></tr>
+        <tr><td><b>Stage1 批失败</b></td><td>失败率 ≤20%</td><td>记批账并按既有降级语义处理</td><td>阈值内可继续</td></tr>
+        <tr><td><b>Grounding</b></td><td><code>VOC_GROUNDING_ENFORCE=0</code></td><td>默认报告；开启后可进入 grounding_rejected</td><td><span class="arch-state is-off">默认不阻断</span></td></tr>
+        <tr><td><b>Fatal LLM</b></td><td>鉴权、配额、余额等硬错误</td><td>发布共享熔断，终止兄弟</td><td><span class="arch-state is-retired">禁止</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="arch-failure-semantics">
+    <div><span>completed</span><b>已提交</b><p>后续桶失败不会把此前成功项重新记成失败。</p></div>
+    <div><span>failed</span><b>已尝试但失败</b><p>本项调用、校验或数据库边界失败，有明确原因。</p></div>
+    <div><span>cancelled</span><b>尚未启动</b><p>因同伴 fatal、共享取消或上游失败而没有执行。</p></div>
+    <div><span>terminal</span><b>合法业务终点</b><p>不是系统错误；表示证据不应或不能形成机会。</p></div>
+  </div>
+</section>
+
+<section id="arch-11" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">11</span>
+    <div>
+      <div class="arch-kicker">控制平面与发布屏障</div>
+      <h2>当前是一条人工启动的 supervisor 链</h2>
+      <p>生产口径不是 Dagster。抽取与生成分别手工启动；<code>rerun_both.sh</code> 负责预热、单写快照、双进程监督和“全部成功才收尾”的屏障。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-runtime-map" data-arch-visual="run-sequence" aria-labelledby="arch-runtime-caption">
+    <ol class="arch-runtime-steps">
+      <li><span>01</span><b>run_ingest.py</b><p>按周抽取、清洗、事实入库、taxonomy 快照</p><small>独立手工入口</small></li>
+      <li><span>02</span><b>前置探针</b><p>Bash 版本、额度 / 规模、环境与共享熔断文件</p><small>破坏性动作之前</small></li>
+      <li><span>03</span><b>G4 全池预热</b><p>单进程写 social_gate，避免老品 / 新品重复付费</p><small>共享价值缓存</small></li>
+      <li><span>04</span><b>准备归属快照</b><p>单写者 + advisory lock + 指纹</p><small>run_id 基线</small></li>
+      <li class="parallel"><span>05</span><b>双生命周期并行</b><p>各自先消费已接受提案，再运行老品 <i>∥</i> 新品 worker</p><small>任一失败即终止 / 回收兄弟</small></li>
+      <li><span>06</span><b>双成功屏障</b><p>两个退出码都为 0，且生命周期账本闭合</p><small>否则 finalize 不可达</small></li>
+      <li><span>07</span><b>finalize-only</b><p>投影校验、提案、周快照、派生刷新、放行</p><small>多事务顺序执行</small></li>
+      <li><span>08</span><b>strategy hook</b><p>独立构建战略轴；失败保留旧轴</p><small>不反改主管线成功</small></li>
+    </ol>
+    <figcaption id="arch-runtime-caption">当前正式生成入口的时序。直接运行 <code>run_generate.py</code> 不会替你准备归属快照，增量旁路不能描述成等价生产链。</figcaption>
+  </figure>
+
+  <div class="arch-inline-status"><span class="arch-state is-live">当前默认</span><code>rerun_both.sh</code> 以 full-history 生成，保留并 upsert 既有 OPP2；只有显式设置 <code>VOC_RESET_OPPORTUNITY_LAYER=1</code> 才清机器机会层。</div>
+
+  <div class="arch-finalize-grid">
+    <article><span>1</span><b>再次验快照指纹</b><p>排除生成期间归属漂移。</p></article>
+    <article><span>2</span><b>最终投影守恒</b><p>关系与终态共同覆盖全部扇出键。</p></article>
+    <article><span>3</span><b>生成变化提案</b><p>SPLIT 与 REVIVE 只建议，不偷改 PM 状态。</p></article>
+    <article><span>4</span><b>冻结周快照</b><p>保存声量、分母与内容版本。</p></article>
+    <article><span>5</span><b>刷新产品读模型</b><p><code>voc_spu</code>、v3 问题层与近邻缓存。</p></article>
+    <article><span>6</span><b>解除部分 backlog</b><p>安全、双源或全局 rank Top 50。</p></article>
+  </div>
+
+  <div class="arch-callout warning">
+    <b>“放行”还不是有限推荐。</b>
+    <span><code>release_to_pm()</code> 目前按安全、双来源和全局 Top 50 将卡设为 <code>backlog=false</code>；<code>WEEKLY_PUSH_CAP=15</code> 没有参与放行，现有业务列表也没有完整实现“冻结批次 → PM 处理 → 数量清零”的推荐契约。</span>
+  </div>
+
+  <div class="arch-transaction-bounds">
+    <div><b>机会级原子</b><p>机会、证据关系、提案与权威 recount 在单卡事务内提交。</p></div>
+    <div><b>整轮非原子</b><p>后续桶或 finalize 后段失败，不会回滚此前已提交卡；依靠幂等重跑。</p></div>
+    <div><b>战略分区原子</b><p>每类战略轴整体替换；pair cache 与轴发布是不同提交边界。</p></div>
+  </div>
+</section>
+
+<section id="arch-12" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">12</span>
+    <div>
+      <div class="arch-kicker">后置横向洞察</div>
+      <h2>战略层聚合“共性”，但不改基础机会身份</h2>
+      <p>老品卡在各自 SPU 内保持稳定，战略层再观察跨产品通病；新品卡保持独立，战略层再组织成更高层诉求主题。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-strategy-map" data-arch-visual="strategy-layer" aria-labelledby="arch-strategy-caption">
+    <div class="arch-strategy-input">
+      <div class="iter"><span>老品确定卡</span><b>跨 SPU 候选</b><small>至少覆盖 2 个 SPU</small></div>
+      <div class="inno"><span>新品确定卡</span><b>跨卡诉求候选</b><small>至少包含 2 张机会</small></div>
+    </div>
+    <ol class="arch-strategy-pipeline">
+      <li><span>召回</span><b>pgvector Top-K 15</b><small>cos ≥ 0.75 · 最多 20,000 对</small></li>
+      <li><span>裁决</span><b>LLM pair judge</b><small>文本哈希 + 策略 / 模型缓存</small></li>
+      <li><span>成组</span><b>高证据 leader 聚类</b><small>星形吸收，避免传递链污染</small></li>
+      <li><span>命名</span><b>生成轴名与摘要</b><small>分区整体替换</small></li>
+    </ol>
+    <div class="arch-strategy-output">
+      <div class="iter"><span>通病轴</span><b>多个 SPU 的共同问题</b><small>计算 Simpson n_eff</small></div>
+      <div class="inno"><span>诉求轴</span><b>多张创新卡的共同主题</b><small>成员卡仍拥有自身状态</small></div>
+    </div>
+    <figcaption id="arch-strategy-caption">战略轴是可重建读模型。成员机会的状态、证据和负责人仍属于成员卡，轴本身不成为新的 PM 状态实体。</figcaption>
+  </figure>
+
+  <div class="arch-note-grid">
+    <div><b>为什么不用连通分量</b><p>A 像 B、B 像 C，不代表 A 与 C 是同一战略问题。leader 只吸收被它直接判同的成员。</p></div>
+    <div><b>为什么与基础合并分层</b><p>战略共性是观察视角，不是机会同一性；把它反向写回会破坏产品责任与证据归属。</p></div>
+    <div><b>失败为什么不阻断主管线</b><p>战略可独立重算，失败时保留上一代已发布轴；产品机会与 PM 工作不应因此不可用。</p></div>
+  </div>
+
+  <div class="arch-inline-status"><span class="arch-state is-check">仓库已实现 · 环境待核验</span>SQL 034、生成代码和离线测试均存在；目标数据库迁移、真实向量效果和当前轴代次需要连接现场确认。</div>
+</section>

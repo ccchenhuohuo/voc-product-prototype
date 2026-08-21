@@ -1,0 +1,204 @@
+<section id="arch-06" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">06</span>
+    <div>
+      <div class="arch-kicker">两条互斥加工泳道</div>
+      <h2>老品按产品聚合，新品按诉求聚类</h2>
+      <p>两条线共享事实、分类与写卡质量框架，但组织单位和去重机制完全不同。基础机会不能跨生命周期或跨 SPU 强行合并。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-lifecycle-map" data-arch-visual="dual-lifecycle" aria-labelledby="arch-lifecycle-caption">
+    <div class="arch-swimlane shared">
+      <div class="arch-lane-label"><span>共享入口</span><b>确定机会证据</b></div>
+      <ol>
+        <li><span>分类</span><b>R1 / R2</b><small>生命周期确定</small></li>
+        <li><span>上下文</span><b>证据池</b><small>全文 + 片段 + 元数据</small></li>
+        <li><span>质量</span><b>Stage 1–4</b><small>分组、写卡、程序校验、grounding</small></li>
+      </ol>
+    </div>
+    <div class="arch-swimlane iter">
+      <div class="arch-lane-label"><span>老品迭代</span><b>一张卡只属于一个 SPU</b></div>
+      <ol>
+        <li><span>1</span><b>按 assigned_spu 分桶</b><small>同一证据可向 A、B 两桶扇出</small></li>
+        <li><span>2</span><b>Stage1 模式切分</b><small>每批 50；组上限 40</small></li>
+        <li><span>3</span><b>跨批模式归并</b><small>向量召回 + LLM 同义裁决</small></li>
+        <li><span>4</span><b>Stage2–4 写卡复核</b><small>标题、现象、归因、建议、problem_mode</small></li>
+        <li><span>5</span><b>L1 / L2 / L3 消解</b><small>同 SPU 候选 → 向量排序 → LLM 判同异</small></li>
+        <li><span>6</span><b>挂既有卡或新建</b><small>多命中与安全类转提案</small></li>
+      </ol>
+    </div>
+    <div class="arch-swimlane inno">
+      <div class="arch-lane-label"><span>新品创新</span><b>组织单位是归一化诉求</b></div>
+      <ol>
+        <li><span>1</span><b>G4 产出 claim</b><small>中文陈述句，最多 30 字</small></li>
+        <li><span>2</span><b>按 message_id 合单元</b><small>最小 seq 作代表，避免同消息重复向量化</small></li>
+        <li><span>3</span><b>kNN 图预聚类</b><small>距离 &lt; 0.10 · K=20 · 连通分量</small></li>
+        <li><span>4</span><b>大簇收紧与切分</b><small>簇上限 40；失败单元降级单例</small></li>
+        <li><span>5</span><b>展开全部证据再写卡</b><small>代表只用于聚类，成员一条不少</small></li>
+        <li><span>6</span><b>直接创建</b><small>不进入老品 L1 / L2 / L3</small></li>
+      </ol>
+    </div>
+    <figcaption id="arch-lifecycle-caption">双生命周期泳道。新品预聚类是它唯一的基础去重层；跨 SPU 共性只在后置战略层表达。</figcaption>
+  </figure>
+
+  <div class="arch-two-col">
+    <article class="arch-panel">
+      <h3>Stage 1–4 的公共质量框架</h3>
+      <ol class="arch-number-list">
+        <li><span>1</span><div><b>Stage1 模式切分</b><p>给模型桶上下文和逐条证据上下文，产出成员分组；失败批次单独记账。</p></div></li>
+        <li><span>2</span><div><b>Stage2 原型正文</b><p>生成标题、现象、归因与 problem_mode；同一步执行程序校验和 grounding。三轮仍有非 grounding 问题时可带 needs_review 落库。</p></div></li>
+        <li><span>3</span><div><b>Stage3 改进建议</b><p>读取本卡正文与固定 20 条历史上下文，单独生成建议并校验；三轮仍失败则整组作废。</p></div></li>
+        <li><span>4</span><div><b>Stage4 独立复核</b><p>LLM 作为旁路审阅者记录硬 / 软问题；它不决定 needs_review，非 fatal 调用失败降为提示。</p></div></li>
+      </ol>
+    </article>
+    <article class="arch-panel">
+      <h3>新品预聚类的四条守恒线</h3>
+      <div class="arch-equations small">
+        <code>目标证据行 = 实际输入行</code>
+        <code>输入单元 = embedding 成功 + 失败单元</code>
+        <code>簇成员单元 = 全部输入单元</code>
+        <code>计划新品桶数 = 实际簇数</code>
+      </div>
+      <p>普通 embedding 批失败会让该批每个消息单元成为单例簇；只有失败数 <b>&gt; 2</b> 且失败率 <b>&gt; 20%</b> 时才视为系统性失败。鉴权 / 配额类 fatal 从不降级。</p>
+    </article>
+  </div>
+
+  <figure class="arch-visual arch-worker-map" data-arch-visual="parallel-persistence" aria-labelledby="arch-worker-caption">
+    <div class="arch-worker-input"><span>冻结后的桶计划</span><b>planned buckets</b></div>
+    <div class="arch-workers">
+      <div><span>worker A</span><b>SPU-A 桶内串行</b><small>构建 → 消解 → 原子提交</small></div>
+      <div><span>worker B</span><b>SPU-B 桶内串行</b><small>构建 → 消解 → 原子提交</small></div>
+      <div><span>worker C</span><b>新品簇桶</b><small>构建 → 直接新建 → 原子提交</small></div>
+    </div>
+    <div class="arch-worker-total"><code>planned = completed + failed + cancelled</code><span>已提交机会不会因后续失败自动回滚；整轮靠稳定 ID、账本和幂等重跑恢复。</span></div>
+    <figcaption id="arch-worker-caption">桶内串行保证同一身份域语义稳定，桶间并行提升吞吐；持久化按机会记成功、失败与未启动取消。</figcaption>
+  </figure>
+</section>
+
+<section id="arch-07" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">07</span>
+    <div>
+      <div class="arch-kicker">规则、向量、模型、人工</div>
+      <h2>AI 只在它擅长的边界内做判断</h2>
+      <p>确定性规则负责资格与账本；向量负责缩小候选；LLM 读完整上下文做语义判断；高风险语义变更最终留给产品经理。</p>
+    </div>
+  </header>
+
+  <div class="arch-responsibility-grid" data-arch-visual="ai-responsibility">
+    <article class="rule"><span>确定性程序 / SQL</span><b>资格、身份与守恒</b><p>清洗、G1–G3、R0–R3、快照、稳定 ID、字段校验、触发器、集合差集。</p><small>结果必须可重复、可对账</small></article>
+    <article class="vector"><span>Embedding</span><b>召回与预聚类</b><p>新品 claim 图聚类；老品跨批模式与既有卡候选排序；战略候选召回。</p><small>相似不等于相同</small></article>
+    <article class="llm"><span>LLM</span><b>读上下文与判同异</b><p>社媒价值门、模式切分、写卡、grounding、老品消解与战略 pair judge。</p><small>输出必须过程序约束</small></article>
+    <article class="human"><span>产品经理</span><b>业务承诺与有限裁决</b><p>五状态、负责人、原因、下一步；合并 / 拆分 / 复活等语义变更。</p><small>机器不能替代责任归属</small></article>
+  </div>
+
+  <div class="arch-table-wrap">
+    <table class="arch-table">
+      <caption>模型调用的上下文、缓存和产出</caption>
+      <thead><tr><th>调用点</th><th>单位</th><th>模型看见什么</th><th>产出</th><th>复用 / 保护</th></tr></thead>
+      <tbody>
+        <tr><td><b>G4 价值门</b></td><td>消息</td><td>完整正文最多 4000 字、平台、评论的父帖标题</td><td>诉求缺口 / 产品缺陷 / 无价值；claim</td><td>按 message_id + prompt 版本缓存，未含正文 hash / 模型版本；低置信或缺陷可三票</td></tr>
+        <tr><td><b>Stage1 模式切分</b></td><td>桶内批次</td><td>品类 / 标签 / taxonomy、元数据、片段与生成用全文</td><td>模式与成员索引</td><td>每批 50；批账本；Stage1 三轮投票默认关闭</td></tr>
+        <tr><td><b>Stage2 原型正文</b></td><td>证据组</td><td>模式、分布画像、片段；全文为中译优先 / 原文兜底，最多 400 字</td><td>标题、现象、归因、problem_mode</td><td>程序校验 + grounding；最多三轮</td></tr>
+        <tr><td><b>Stage3 改进建议</b></td><td>机会草稿</td><td>标题、现象、归因与固定 20 条历史上下文</td><td>desc_suggestion 与 ctx_hash</td><td>建议校验最多三轮；仍失败则作废组</td></tr>
+        <tr><td><b>Stage4 独立复核</b></td><td>完整机会草稿</td><td>产出物与原证据回读</td><td>hard / soft issues</td><td>旁路提示，不决定 needs_review</td></tr>
+        <tr><td><b>老品 L3</b></td><td>候选对</td><td>新卡与同 SPU 候选卡语义</td><td>same / different</td><td>向量只排序 3–10 条候选</td></tr>
+        <tr><td><b>战略 pair judge</b></td><td>跨卡候选对</td><td>问题模式、标题与生命周期上下文</td><td>是否属于同一战略轴</td><td>文本哈希 + 策略 / 模型版本缓存</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="arch-ai-boundary">
+    <div class="arch-ai-config">
+      <span>当前仓库默认</span>
+      <b>qwen-plus</b>
+      <code>text-embedding-v4 · 1024d</code>
+      <code>batch = 10</code>
+      <code>concurrency = 96</code>
+      <small>模型、价格和吞吐会变；真实环境仍需核验。</small>
+    </div>
+    <div class="arch-ai-rule">
+      <b>向量负责召回，语义判定另行完成</b>
+      <p>老品相似度分布存在重叠，单阈值会同时误挂和误建。因此向量先把候选从数百条压到个位数，再由 LLM 逐对判定。</p>
+      <p>新品例外：claim 已被 G4 归一化，用严格距离构图作为唯一基础去重层，不再进入 L1–L3。</p>
+    </div>
+  </div>
+
+  <div class="arch-failure-strip">
+    <div><span>普通 embedding 批失败</span><b>降级为单例</b><small>受绝对数 + 比例门约束</small></div>
+    <div><span>单机会生成 / grounding 失败</span><b>写入终态账</b><small>不伪造卡，也不静默丢失</small></div>
+    <div class="fatal"><span>鉴权 / 配额 / 余额 fatal</span><b>共享熔断</b><small>取消兄弟进程，禁止 finalize</small></div>
+  </div>
+</section>
+
+<section id="arch-08" class="arch-section">
+  <header class="arch-section-head">
+    <span class="arch-chapter">08</span>
+    <div>
+      <div class="arch-kicker">稳定卡片，而不是每周重造</div>
+      <h2>OPP2 身份、证据关系与演进血缘</h2>
+      <p>身份只由长期稳定的业务语义决定；声量、来源、周次和模型变化只更新同一张卡的属性与证据，不应该制造新 ID。</p>
+    </div>
+  </header>
+
+  <figure class="arch-visual arch-identity-map" data-arch-visual="opportunity-identity" aria-labelledby="arch-identity-caption">
+    <div class="arch-identity-formula">
+      <span>统一格式</span>
+      <b><code>OPP2-</code> + SHA-256 前 128 bit</b>
+      <p>versioned normalized JSON</p>
+    </div>
+    <div class="arch-identity-branches">
+      <div class="iter"><span>老品迭代</span><code>("老品迭代", SPU, problem_mode)</code><p>同一问题跨 SPU 是不同基础卡</p></div>
+      <div class="inno"><span>新品创新</span><code>("新品创新", NULL, problem_mode)</code><p>新品身份不携带来源或临时主题</p></div>
+    </div>
+    <div class="arch-identity-excludes">
+      <span>不会换卡</span><b>来源</b><b>周次</b><b>品类</b><b>模型版本</b><b>温度</b><b>Stage1 临时名</b><b>声量变化</b>
+    </div>
+    <figcaption id="arch-identity-caption">OPP2 是当前身份命名空间。旧 OPP-* 可能作为历史工件存在，但当前 v3 生成与战略默认读取 OPP2。</figcaption>
+  </figure>
+
+  <div class="arch-evolution-map" data-arch-visual="opportunity-evolution">
+    <div class="arch-evolution-core">
+      <span>机器机会</span><b><code>voc_opportunity</code></b><p>稳定语义、统计、向量、运行生命周期</p>
+    </div>
+    <div class="arch-evolution-links">
+      <div><b>证据关系</b><code>voc_opp_evidence</code><span>多对多 + 冻结归属</span></div>
+      <div><b>周快照</b><code>voc_opp_snapshot</code><span>声量、分母、内容版本</span></div>
+      <div><b>人工层</b><code>*_manual</code><span>状态、负责人、理由、计划</span></div>
+      <div><b>提案</b><code>voc_proposal</code><span>MERGE / SPLIT / REVIVE / REWRITE</span></div>
+      <div><b>血缘</b><code>voc_opp_lineage</code><span>执行后的来源、目标与操作</span></div>
+    </div>
+  </div>
+
+  <div class="arch-two-col">
+    <article class="arch-panel">
+      <h3>机器变化如何进入人工语义</h3>
+      <ul class="arch-list">
+        <li><b>MERGE</b><span>多候选或安全类不自动挂接；即使开启自动接受，也只处理相关卡都没有 manual 行且非安全的提案。源卡保留 merged_into 与血缘。</span></li>
+        <li><b>SPLIT</b><span>当前执行器主要写血缘 / 解除抑制，并不完成证据的真实重切分。</span></li>
+        <li><b>REVIVE</b><span>已关闭机会出现显著新证据时生成复活建议，不自动改回进行中。</span></li>
+        <li><b>REWRITE</b><span>需要重写语义时进入有限提案，而不是覆盖 PM 已接管内容。</span></li>
+      </ul>
+      <p class="arch-inline-status"><span class="arch-state is-off">默认关闭</span><code>VOC_AUTO_MERGE</code> 不会自动把 pending MERGE / SPLIT 标成 accepted；已经人工接受的提案仍会在下一轮生成前执行。</p>
+    </article>
+    <article class="arch-panel">
+      <h3>当前五状态与人工写入</h3>
+      <div class="arch-status-machine">
+        <span>考虑中</span><i>↔</i><span>在跟进</span><i>↔</i><span>项目中</span><i>↔</i><span>已完成</span><i>↔</i><span>不考虑</span>
+      </div>
+      <ul class="arch-list">
+        <li><b>状态跳转</b><span>数据库校验合法枚举，但当前没有严格的状态转移矩阵，五种状态可直接切换。</span></li>
+        <li><b>不考虑</b><span>数据库触发器要求理由。</span></li>
+        <li><b>待复议</b><span>不是第六状态，而是“考虑中 + revived_at”的展示语义。</span></li>
+        <li><b>每次变化</b><span>写状态日志，保存 actor 与时间。</span></li>
+        <li><b>当前缺口</b><span>缺人工行也显示为“考虑中”，无法区分从未批阅和 PM 主动选择考虑中。</span></li>
+      </ul>
+      <p class="arch-inline-status"><span class="arch-state is-plan">待改造</span>“首次打任一状态即接管”需要独立 <code>first_reviewed_at</code>，现有锁定语义尚不满足。</p>
+    </article>
+  </div>
+  <div class="arch-callout quiet">
+    <b>复活目前有两条实现路径。</b>
+    <span>pipeline 的机会级检测只生成 REVIVE 提案；<code>system/scripts/check_revive.py</code> 是另一个 SPU 级人工 CLI，可直接把符合条件的问题改回考虑中。它没有内置调度，两套口径尚未合并为一个统一状态事件。</span>
+  </div>
+</section>

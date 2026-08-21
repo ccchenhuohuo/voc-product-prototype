@@ -16,7 +16,7 @@ from app.auth.config import AuthConfig, AuthConfigError, load_auth_config
 from app.auth.middleware import AuthMiddleware
 from app.auth.routes import origin_of, router as auth_router
 from app.auth.session import AuthenticatedUser, encode_oauth_state, encode_session
-from app.routes import board, home, innovation, issue, search, spu, strategy
+from app.routes import architecture, board, home, innovation, issue, search, spu, strategy
 
 
 READ_ID = "ou_reader_12345678"
@@ -89,6 +89,7 @@ def make_client(monkeypatch, config: AuthConfig | None = None):
         issue.router,
         innovation.router,
         strategy.router,
+        architecture.router,
         search.router,
     ):
         app.include_router(route)
@@ -118,6 +119,7 @@ BUSINESS_GETS = (
     "/inno",
     "/inno/INNO-1",
     "/strategy",
+    "/architecture",
     "/search",
 )
 
@@ -385,6 +387,16 @@ def test_anonymous_read_lets_viewers_in_without_a_session(monkeypatch):
     # 一条路径足以证明匿名 GET 能过闸。
     client, _ = make_client(monkeypatch, make_config(anonymous_read=True))
     assert client.get("/iter", follow_redirects=False).status_code == 200
+
+
+def test_anonymous_read_keeps_internal_architecture_behind_login(monkeypatch):
+    """完整系统蓝图不随匿名看板灰度一起暴露到公网。"""
+    client, _ = make_client(monkeypatch, make_config(anonymous_read=True))
+
+    response = client.get("/architecture", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/auth/login?next=/architecture"
 
 
 def test_anonymous_read_still_refuses_writes_without_a_session(monkeypatch):

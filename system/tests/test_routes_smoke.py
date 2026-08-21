@@ -312,19 +312,40 @@ def test_home_strategy_count_reads_derived_axis_table():
 
 
 def test_architecture_page_is_static_and_self_contained(page_client):
-    """说明页不查库、不引外部资源；三张图各自内联，口径文字都在页内。"""
+    """说明正文版本化在仓库内，章节、可视化和事实边界均自包含。"""
     page = page_client.get("/architecture").text.split('<main class="view">')[1]
-    for heading in ("总览", "G 系列 · 入池", "老品迭代管道", "新品创新管道", "关键取舍", "术语"):
+    for heading in (
+        "这页怎么读", "一条 VOC 如何变成可行动的产品机会", "事实层先保真",
+        "把每轮归属冻结成不可变快照", "老品按产品聚合，新品按诉求聚类",
+        "五层数据拓扑", "五套账本", "当前是一条人工启动的 supervisor 链",
+        "下一阶段 PM 闭环", "权限、身份与审计边界", "版本演进与代码索引",
+    ):
         assert heading in page
-    figures = page.count("<svg viewBox")
-    assert figures >= 3
-    # marker id 必须逐图唯一：同一文档内 id 冲突会让箭头只在首图渲染。
-    markers = re.findall(r'<marker id="([^"]+)"', page)
-    assert len(markers) == figures
-    assert len(set(markers)) == figures
-    # 图内联、无脚本、无外链，页面因此不依赖任何管道产出与外部资源。
+
+    sections = re.findall(r'<section id="(arch-\d{2})"', page)
+    toc_block = page.split('aria-label="数据架构章节目录"', 1)[1].split("</nav>", 1)[0]
+    toc = re.findall(r'href="#(arch-\d{2})"', toc_block)
+    assert sections == [f"arch-{n:02d}" for n in range(17)]
+    assert toc == sections
+
+    visuals = re.findall(r'data-arch-visual="([^"]+)"', page)
+    assert len(visuals) >= 18
+    assert len(set(visuals)) == len(visuals)
+
+    # 旧的手绘 SVG 已被语义化 HTML 图、表和泳道取代；正文仍无脚本和外链。
+    assert "<svg" not in page
     assert "<script" not in page
     assert "http://" not in page and "https://" not in page
+
+    # 防止最容易漂移的旧口径回流。
+    for fact in (
+        "迁移链 001–036", "voc_assign_snapshot", "OPP2-", "v3-only",
+        "飞书当前只负责身份", "WEEKLY_PUSH_CAP=15", "环境待核验",
+        "已实现 · 默认关闭", "阶段一产品规划",
+    ):
+        assert fact in page
+    assert "两条独立管道，只共享入池" not in page
+    assert "按周度上限把新问题推送给产品经理" not in page
 
 
 def test_architecture_entry_present_and_highlights_only_itself(page_client):

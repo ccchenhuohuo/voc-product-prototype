@@ -21,6 +21,7 @@ from .session import (
 )
 
 _PUBLIC_PREFIXES = ("/auth/", "/static/")
+_LOGIN_REQUIRED_READ_PATHS = frozenset({"/architecture"})
 _WRITE_PATH = re.compile(
     r"^(?:/issue/[^/]+/[^/]+/status|/inno/[^/]+/status)$"
 )
@@ -50,7 +51,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         if _is_public_path(path):
             response = await call_next(request)
-        elif self.config.anonymous_read and request.method in ("GET", "HEAD"):
+        elif (
+            self.config.anonymous_read
+            and request.method in ("GET", "HEAD")
+            and path not in _LOGIN_REQUIRED_READ_PATHS
+        ):
             # 灰度期：查看类请求免登录放行。
             # 写入是 POST，落不到这个分支，仍要走下面完整的
             # 会话 → 可读名单 → Origin → 可写名单 四道校验，
