@@ -389,14 +389,13 @@ def test_anonymous_read_lets_viewers_in_without_a_session(monkeypatch):
     assert client.get("/iter", follow_redirects=False).status_code == 200
 
 
-def test_anonymous_read_keeps_internal_architecture_behind_login(monkeypatch):
-    """完整系统蓝图不随匿名看板灰度一起暴露到公网。"""
+def test_anonymous_read_lets_viewers_open_architecture_without_login(monkeypatch):
     client, _ = make_client(monkeypatch, make_config(anonymous_read=True))
 
     response = client.get("/architecture", follow_redirects=False)
 
-    assert response.status_code == 302
-    assert response.headers["location"] == "/auth/login?next=/architecture"
+    assert response.status_code == 200
+    assert "一条 VOC 如何变成可行动的产品机会" in response.text
 
 
 def test_anonymous_read_still_refuses_writes_without_a_session(monkeypatch):
