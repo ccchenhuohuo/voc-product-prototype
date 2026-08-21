@@ -13,6 +13,7 @@ from .stages import generate, precluster, stage1, validate, value_gate
 _IDENTITY_SEP = re.compile(r"[\s\-_—–/|，,。.;；:：()（）\[\]【】]+")
 
 AssignmentKey = tuple[str, int, str]
+EvidenceKey = tuple[str, int]
 
 
 def _assignment_key(row: Mapping[str, object]) -> AssignmentKey:
@@ -28,6 +29,47 @@ def _assignment_key(row: Mapping[str, object]) -> AssignmentKey:
             or assigned_spu != assigned_spu.strip()):
         raise ValueError(f"归属键 assigned_spu 非法：{assigned_spu!r}")
     return message_id, seq, assigned_spu
+
+
+def _evidence_key(row: Mapping[str, object]) -> EvidenceKey:
+    """从生成池或路由行提取未扇出的事实键。"""
+    message_id = row.get("message_id")
+    seq = row.get("seq", 0)
+    if not isinstance(message_id, str) or not message_id:
+        raise ValueError(f"事实键缺少 message_id：{message_id!r}")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        raise ValueError(f"事实键 seq 必须是整数：{seq!r}")
+    return message_id, seq
+
+
+def _social_terminal_counts(social_routing) -> dict[str, int]:
+    """G5 终态账按原始事实计数，SPU 扇出量单独观测。"""
+    eligible_by_fact: dict[EvidenceKey, str] = {}
+    for row in social_routing.eligible:
+        key = _evidence_key(row)
+        lifecycle = row.get("_opp_type")
+        if lifecycle not in {"老品迭代", "新品创新"}:
+            raise ValueError(f"社媒可入池行缺少合法生命周期：{lifecycle!r}")
+        previous = eligible_by_fact.setdefault(key, lifecycle)
+        if previous != lifecycle:
+            raise ValueError(
+                f"同一社媒事实被路由到两个生命周期：{key!r}")
+
+    unassigned = {_evidence_key(row) for row in social_routing.unassigned_defects}
+    overlap = set(eligible_by_fact) & unassigned
+    if overlap:
+        raise ValueError(
+            "同一社媒事实同时进入可入池与不可归属终态："
+            f"{sorted(overlap)[:10]}")
+
+    lifecycle_counts = Counter(eligible_by_fact.values())
+    return {
+        "unassigned_defect_rows": len(unassigned),
+        "social_old_pool_rows": lifecycle_counts.get("老品迭代", 0),
+        "social_innovation_pool_rows": lifecycle_counts.get("新品创新", 0),
+        "social_assignment_fanout_rows": (
+            len(social_routing.eligible) - len(eligible_by_fact)),
+    }
 
 
 def _sample_assignment_keys(keys: Iterable[AssignmentKey]) -> list[str]:
@@ -291,6 +333,7 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         value_gate_failed_rows=0, g4_no_value_rows=0,
         generic_claim_rows=0, unassigned_defect_rows=0,
         social_old_pool_rows=0, social_innovation_pool_rows=0,
+        social_assignment_fanout_rows=0,
         precluster_enabled=C.PRECLUSTER_ENABLED,
         precluster_target_rows=0,
         precluster_input_rows=0, precluster_input_units=0,
@@ -327,9 +370,7 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
     social_routing = route_social_value_evidence(gate.passed_rows)
     classified = ecommerce_classified + social_routing.eligible
 
-    social_by_lifecycle = Counter(
-        row["_opp_type"] for row in social_routing.eligible
-    )
+    social_terminal = _social_terminal_counts(social_routing)
     ctx.metric_update(
         ("generation",),
         social_candidate_rows=int(structural.get("social_candidate_rows", 0)),
@@ -345,9 +386,7 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         value_gate_failed_rows=len(gate.failed_rows),
         g4_no_value_rows=len(gate.no_value_rows),
         generic_claim_rows=len(gate.generic_claim_rows),
-        unassigned_defect_rows=len(social_routing.unassigned_defects),
-        social_old_pool_rows=social_by_lifecycle.get("老品迭代", 0),
-        social_innovation_pool_rows=social_by_lifecycle.get("新品创新", 0),
+        **social_terminal,
     )
     if gate.failed_rows:
         raise llm.LLMError(
@@ -707,6 +746,8 @@ def generation_reconciliation(ctx) -> dict:
     unassigned_defect_rows = int(g.get("unassigned_defect_rows", 0))
     social_old_pool_rows = int(g.get("social_old_pool_rows", 0))
     social_innovation_pool_rows = int(g.get("social_innovation_pool_rows", 0))
+    social_assignment_fanout_rows = int(
+        g.get("social_assignment_fanout_rows", 0))
     precluster_enabled = bool(g.get("precluster_enabled", False))
     precluster_target_rows = int(g.get("precluster_target_rows", 0))
     precluster_input_rows = int(g.get("precluster_input_rows", 0))
@@ -879,6 +920,7 @@ def generation_reconciliation(ctx) -> dict:
         "unassigned_defect_rows": unassigned_defect_rows,
         "social_old_pool_rows": social_old_pool_rows,
         "social_innovation_pool_rows": social_innovation_pool_rows,
+        "social_assignment_fanout_rows": social_assignment_fanout_rows,
         "structural_gate_complete": structural_gate_complete,
         "social_terminal_complete": social_terminal_complete,
         "precluster_enabled": precluster_enabled,

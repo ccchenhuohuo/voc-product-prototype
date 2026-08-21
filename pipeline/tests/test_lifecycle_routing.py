@@ -6,8 +6,14 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from _offline_imports import ensure_psycopg_importable  # noqa: E402
+
+ensure_psycopg_importable()
 
 from voc_analytics.classification import Classification, classify_evidence  # noqa: E402
+from voc_analytics.pipeline import _social_terminal_counts  # noqa: E402
 from voc_analytics.routing import (  # noqa: E402
     LifecycleBucket,
     classify_evidence_by_lifecycle,
@@ -171,6 +177,26 @@ def test_multi_spu_snapshot_fans_out_once_per_spu() -> None:
     by_spu = {row["assigned_spu"]: row["assignment_source"]
               for rows in routed.buckets.values() for row in rows}
     assert by_spu == {"SPU-A": "fact", "SPU-B": "fact"}
+
+
+def test_social_terminal_ledger_counts_fact_once_before_spu_fanout() -> None:
+    """终态账与 G4 输入都按 (message_id, seq) 对账，不能把
+    同一事实的额外 SPU 关系误算成额外终态。
+    """
+    routed = route_social_value_evidence([
+        _social("产品缺陷", spu=["SPU-A", "SPU-B"]),
+        _social("诉求缺口", message_id="innovation",
+                _precluster_id="PCL-ABC123"),
+        _social("产品缺陷", message_id="unassigned"),
+    ])
+
+    assert len(routed.eligible) == 3  # 老品事实扇出为两个 SPU 关系行。
+    assert _social_terminal_counts(routed) == {
+        "unassigned_defect_rows": 1,
+        "social_old_pool_rows": 1,
+        "social_innovation_pool_rows": 1,
+        "social_assignment_fanout_rows": 1,
+    }
 
 
 def test_defect_with_inherited_spu_is_not_demoted() -> None:
