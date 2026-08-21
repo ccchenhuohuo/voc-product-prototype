@@ -435,6 +435,10 @@ def _greedy_clusters(
                 a=leader.problem_mode, b=candidate.problem_mode)
             try:
                 return key, bool(judge(axis_type, leader, candidate, prompt)), None
+            except llm.FatalLLMError:
+                # 鉴权/配额/显式取消已经打开全局熔断，不能伪装成普通的
+                # 单对 false；否则剩余数千对会瞬间被错误记为失败后仍落轴。
+                raise
             except Exception as error:  # 单对失败仍沿用既有 fail-soft 语义
                 return key, False, error
 

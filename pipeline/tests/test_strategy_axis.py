@@ -17,7 +17,7 @@ from _offline_imports import ensure_psycopg_importable  # noqa: E402
 
 ensure_psycopg_importable()
 
-from voc_analytics import config as C, prompts  # noqa: E402
+from voc_analytics import config as C, llm, prompts  # noqa: E402
 from voc_analytics.strategy import (  # noqa: E402
     MaxPairsExceeded,
     StrategyError,
@@ -318,6 +318,25 @@ def test_strategy_rejects_systemic_judge_failures_before_axis_replace(
     assert store.axes == [old_axis]
     assert store.replace_calls == 0
     assert store.cache_writes == []
+    assert store.logs[-1]["status"] == "failed"
+
+
+def test_fatal_judge_error_is_never_downgraded_to_false_verdict():
+    def fatal_judge(axis_type, left, right, prompt):
+        del axis_type, left, right, prompt
+        raise llm.FatalLLMError("cancelled")
+
+    store = MemoryStore(
+        cards=[make_card("OPP2-A", evi=5), make_card("OPP2-B", evi=4)],
+        recalls={"通病": [pair("OPP2-A", "OPP2-B")]},
+    )
+
+    with pytest.raises(llm.FatalLLMError, match="cancelled"):
+        run_strategy(
+            axis_type="通病", store=store, judge=fatal_judge,
+            namer=stable_namer)
+
+    assert store.replace_calls == 0
     assert store.logs[-1]["status"] == "failed"
 
 
