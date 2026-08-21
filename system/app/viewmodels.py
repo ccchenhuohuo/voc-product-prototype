@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
 from datetime import date, datetime
 from decimal import Decimal
@@ -28,6 +29,80 @@ def attach_full_voice(rows: Iterable[Mapping[str, Any]],
         if isinstance(full, str) and full.strip() and snip and snip in full:
             pre, _, post = full.partition(snip)
             item["full_pre"], item["full_hit"], item["full_post"] = pre, snip, post
+        out.append(item)
+    return out
+
+
+def _highlight_parts(text: str, snippets: Iterable[str]) -> list[dict[str, Any]]:
+    """把正文拆成安全的纯文本节点，并标记所有片段命中的区间。
+
+    相同片段只高亮一次；包含、交叠的片段合并为一个区间。返回纯文本而非
+    拼接 HTML，让模板继续负责转义，避免原生 VOC 绕过 Jinja autoescape。
+    """
+    if not text:
+        return []
+
+    ranges: list[tuple[int, int]] = []
+    seen: set[str] = set()
+    for value in snippets:
+        snippet = str(value or "").strip()
+        key = snippet.casefold()
+        if not snippet or key in seen:
+            continue
+        seen.add(key)
+        for match in re.finditer(re.escape(snippet), text, flags=re.IGNORECASE):
+            ranges.append(match.span())
+
+    if not ranges:
+        return [{"text": text, "highlighted": False}]
+
+    merged: list[list[int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    parts: list[dict[str, Any]] = []
+    cursor = 0
+    for start, end in merged:
+        if cursor < start:
+            parts.append({"text": text[cursor:start], "highlighted": False})
+        parts.append({"text": text[start:end], "highlighted": True})
+        cursor = end
+    if cursor < len(text):
+        parts.append({"text": text[cursor:], "highlighted": False})
+    return parts
+
+
+def attach_message_highlights(
+    rows: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """把新品灵感来源整理为「一条 message 一张卡，多片段高亮」。"""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        hits = list(item.get("hits") or [])
+        snippets: list[str] = []
+        for hit in hits:
+            if not isinstance(hit, Mapping):
+                continue
+            # snippet_raw 更适合在原文定位；snippet 可覆盖清洗后文本和译文。
+            for key in ("snippet_raw", "snippet"):
+                value = hit.get(key)
+                if isinstance(value, str) and value.strip():
+                    snippets.append(value.strip())
+
+        original = str(item.get("content") or "").strip()
+        translated = str(item.get("content_zh") or "").strip()
+        if not original:
+            original, translated = translated, ""
+        elif translated == original:
+            translated = ""
+
+        item["content_parts"] = _highlight_parts(original, snippets)
+        item["translation_parts"] = _highlight_parts(translated, snippets)
+        item["hit_count"] = int(item.get("hit_count") or len(hits))
         out.append(item)
     return out
 

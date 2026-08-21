@@ -6,8 +6,8 @@ from fastapi.responses import HTMLResponse
 from .. import queries as Q
 from ..auth import actor_for_request
 from ..db import DatabaseWriteError, db
-from ..viewmodels import (attach_full_voice, date_input, display_status,
-                          status_mark)
+from ..viewmodels import (attach_message_highlights, date_input,
+                          display_status, status_mark)
 from ..web import templates
 
 router = APIRouter(prefix="/inno")
@@ -38,9 +38,8 @@ def innovation_detail(request: Request, opp_id: str):
     if not raw:
         raise HTTPException(404, "未找到该新品创新条目")
     opportunity = _decorate(raw)
-    evidence = attach_full_voice(
-        db.query(Q.INNOVATION_EVIDENCE, (opp_id,)),
-        snippet_key="snippet", full_key="content")
+    evidence = attach_message_highlights(
+        db.query(Q.INNOVATION_EVIDENCE, (opp_id,)))
     return templates.TemplateResponse(request, "innovation-card.html", {
         "opportunity": opportunity,
         "evidence": evidence,

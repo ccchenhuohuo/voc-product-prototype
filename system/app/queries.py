@@ -1041,23 +1041,37 @@ SELECT o.opp_id, o.opp_type, o.prod_line, o.core_tag, o.title,
 """
 
 
-# 原型只展示三条「灵感来源」，按互动与发布时间取最有代表性的原声。
+# 证据统计按片段；原声展示按 message 聚合。同一条社媒消息命中的全部片段
+# 随消息一起下发，供视图模型在完整正文中做多处高亮。
 INNOVATION_EVIDENCE = """
-SELECT oe.message_id, oe.seq,
-       COALESCE(NULLIF(btrim(e.snippet), ''), NULLIF(btrim(msg.content_zh), ''),
-                msg.content) AS voice_text,
-       e.snippet, e.tax_stage, e.tax_domain, e.tax_sub, e.tax_leaf,
-       msg.platform, msg.publish_time, msg.interactions,
-       msg.brands, msg.content, msg.content_zh
-  FROM voc_opp_evidence oe
-  JOIN voc_evidence e
-    ON e.message_id = oe.message_id AND e.seq = oe.seq
-  JOIN voc_message msg ON msg.message_id = oe.message_id
- WHERE oe.opp_id = %s
+WITH message_hits AS (
+  SELECT oe.message_id,
+         count(*)::int AS hit_count,
+         jsonb_agg(
+           jsonb_build_object(
+             'seq', e.seq,
+             'snippet', e.snippet,
+             'snippet_raw', e.snippet_raw,
+             'tag', e.tag,
+             'tax_domain', e.tax_domain,
+             'tax_sub', e.tax_sub,
+             'tax_leaf', e.tax_leaf
+           ) ORDER BY e.seq
+         ) AS hits
+    FROM voc_opp_evidence oe
+    JOIN voc_evidence e
+      ON e.message_id = oe.message_id AND e.seq = oe.seq
+   WHERE oe.opp_id = %s
+   GROUP BY oe.message_id
+)
+SELECT msg.message_id, msg.platform, msg.publish_time, msg.interactions,
+       msg.brands, msg.content, msg.content_zh, msg.url,
+       h.hit_count, h.hits
+  FROM message_hits h
+  JOIN voc_message msg ON msg.message_id = h.message_id
  ORDER BY msg.interactions DESC NULLS LAST,
           msg.publish_time DESC NULLS LAST,
-          oe.message_id, oe.seq
- LIMIT 3
+          msg.message_id
 """
 
 

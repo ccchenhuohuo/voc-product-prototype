@@ -235,6 +235,23 @@ td.mark { width: 3px; padding: 0; }
 .social-only { color: var(--inno); background: var(--inno-wash); }
 .voice-count, .voice-cls { color: var(--iter); background: var(--iter-wash); }
 .voice-cls.defect { color: var(--alarm); background: var(--alarm-wash); }
+.inspiration-window { max-width: 76em; max-height: min(60vh, 640px); overflow-y: auto;
+  overscroll-behavior: contain; scrollbar-gutter: stable; background: var(--alt);
+  border: 1px solid var(--rule); border-radius: 6px; outline: 0; scrollbar-width: thin; }
+.inspiration-window:focus-visible { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 2px; }
+.inspiration-window::-webkit-scrollbar { width: 9px; }
+.inspiration-window::-webkit-scrollbar-thumb { background: var(--rule-strong); border: 2px solid var(--alt); border-radius: 5px; background-clip: padding-box; }
+.inspiration-window .social-voice { padding: 13px 15px; background: var(--row); }
+.inspiration-window .social-voice:last-child { border-bottom: 0; }
+.social-voice-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
+  margin-bottom: 7px; color: var(--ink-4); font-size: 11px; }
+.social-platform { color: var(--ink-2); font-weight: 600; }
+.hit-count { margin-left: auto; padding: 1px 6px; color: var(--inno); background: var(--inno-wash);
+  border-radius: 2px; font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.voice .social-message { color: var(--ink-2); font-size: 13.5px; line-height: 1.75; white-space: pre-wrap; }
+.social-message mark, .voice .translation mark { padding: 1px 2px; color: inherit;
+  background: var(--inno-wash); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.inspiration-empty { padding: 16px; }
 .clean-signal { color: var(--ink-4); font-size: 11px; white-space: nowrap; }
 .raw-voices { max-width: 76em; }
 .raw-voice-head { margin-bottom: 5px; }
@@ -363,6 +380,7 @@ td.mark { width: 3px; padding: 0; }
 }
 @media (max-width: 720px) {
   .st-grid { grid-template-columns: 1fr; }
+  .inspiration-window { max-height: none; overflow: visible; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -20,22 +20,31 @@
   {% if opportunity.desc_attribution %}<div class="grp"><h2>归因</h2></div><p class="prose">{{ opportunity.desc_attribution }}</p>{% endif %}
   {% if opportunity.desc_suggestion %}<div class="grp"><h2>建议 · 市面缺口</h2></div><p class="prose">{{ opportunity.desc_suggestion }}</p>{% endif %}
 
-  <div class="grp"><h2>灵感来源</h2><span class="c">{{ evidence[:3]|length }} / {{ opportunity.evi_total or 0 }}</span></div>
-  {% for row in evidence[:3] %}
-    <article class="voice">
-      <p>{{ row.voice_text or row.content }}</p>
-      {% if row.content and row.content.strip() != (row.voice_text or '').strip() %}
-      <p class="full-voice">原文：{% if row.full_hit %}{{ row.full_pre }}<mark>{{ row.full_hit }}</mark>{{ row.full_post }}{% else %}{{ row.content }}{% endif %}</p>
-      {% endif %}
-      {% if row.content_zh and row.content_zh.strip() != (row.content or '').strip()
-            and row.content_zh.strip() != (row.voice_text or '').strip() %}
-      <p class="translation">中文：{{ row.content_zh }}</p>
-      {% endif %}
-      <div class="meta"><span>{{ row.platform or '平台未知' }}</span><span class="s">互动 {{ (row.interactions or 0)|num }}</span><span class="s">{{ row.publish_time.date() if row.publish_time and row.publish_time.date is defined else (row.publish_time or '日期未知') }}</span></div>
-    </article>
-  {% else %}
-    <p class="empty">暂无可展示的证据原声。</p>
-  {% endfor %}
+  <div class="grp" id="inspiration-heading">
+    <h2>灵感来源</h2>
+    <span class="c">{{ evidence|length }} 条原声 · 命中 {{ opportunity.evi_total or 0 }} 个证据片段</span>
+  </div>
+  <div class="inspiration-window" role="region" aria-labelledby="inspiration-heading" tabindex="0">
+    {% for row in evidence %}
+      <article class="voice social-voice">
+        <header class="social-voice-head">
+          <span class="social-platform">{{ row.platform or '平台未知' }}</span>
+          <span>{{ row.publish_time.date() if row.publish_time and row.publish_time.date is defined else (row.publish_time or '日期未知') }}</span>
+          <span class="hit-count">命中 {{ row.hit_count or 0 }} 个片段</span>
+        </header>
+        <p class="social-message">{%- for part in row.content_parts -%}{% if part.highlighted %}<mark>{{ part.text }}</mark>{% else %}{{ part.text }}{% endif %}{%- endfor -%}</p>
+        {% if row.translation_parts %}
+        <p class="translation"><span>中文：</span>{%- for part in row.translation_parts -%}{% if part.highlighted %}<mark>{{ part.text }}</mark>{% else %}{{ part.text }}{% endif %}{%- endfor -%}</p>
+        {% endif %}
+        <footer class="meta">
+          <span class="s">互动 {{ (row.interactions or 0)|num }}</span>
+          {% if row.url %}<a href="{{ row.url }}" target="_blank" rel="noopener noreferrer">查看原帖</a>{% endif %}
+        </footer>
+      </article>
+    {% else %}
+      <p class="empty inspiration-empty">暂无可展示的证据原声。</p>
+    {% endfor %}
+  </div>
 
   <div class="grp"><h2>涉及品牌</h2></div>
   <p class="prose">{{ opportunity.brands|join(' · ') if opportunity.brands else '—' }}</p>

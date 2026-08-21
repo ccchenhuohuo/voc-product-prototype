@@ -157,10 +157,18 @@ class PageDatabase:
             return [dict(INNO)]
         if sql == Q.INNOVATION_EVIDENCE:
             return [{
-                "voice_text": "灵感原声",
+                "message_id": "MSG-INNO",
+                "content": "你们动作太慢了，适配 Luna 的产品已经上市了。",
+                "content_zh": None,
+                "hit_count": 2,
+                "hits": [
+                    {"seq": 0, "snippet": "你们动作太慢了", "snippet_raw": None},
+                    {"seq": 1, "snippet": "适配 Luna 的产品", "snippet_raw": None},
+                ],
                 "platform": "Reddit",
                 "interactions": 18,
                 "publish_time": "2026-08-01",
+                "url": "https://example.com/post",
             }]
         if sql == Q.STRATEGY_AXES:
             if self.empty_strategy:
@@ -240,6 +248,16 @@ def test_issue_voice_shows_inline_original_and_translation(page_client):
     assert "<mark>the tip constantly wobbles</mark>" in html
     assert "我买了它，但轻微使用时顶端也一直晃。" in html
     assert "<details" not in html          # 直显，不折叠
+
+
+def test_innovation_voice_groups_message_and_marks_all_fragments(page_client):
+    html = page_client.get("/inno/INNO-1").text
+    assert "1 条原声" in html
+    assert "命中 2 个片段" in html
+    assert "<mark>你们动作太慢了</mark>" in html
+    assert "<mark>适配 Luna 的产品</mark>" in html
+    assert html.count('class="voice social-voice"') == 1
+    assert "查看原帖" in html
 
 
 def test_legacy_search_route_is_a_permanent_redirect(page_client):
