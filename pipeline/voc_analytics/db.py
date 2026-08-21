@@ -139,6 +139,20 @@ def backfill_social_spu_inheritance() -> int:
     return int(q1("SELECT voc_backfill_social_spu_inheritance()") or 0)
 
 
+def prepare_assign_snapshot(run_id: str) -> int:
+    """单写者准备本轮归属快照；同一 ``run_id`` 重试直接返回既有行数。"""
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    return int(q1("SELECT voc_prepare_assign_snapshot(%s)", [run_id]) or 0)
+
+
+def verify_assign_snapshot(run_id: str) -> int:
+    """收尾前重算快照三指纹；内容变化由数据库函数直接阻断。"""
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise ValueError("run_id 不得为空")
+    return int(q1("SELECT voc_verify_assign_snapshot(%s)", [run_id]) or 0)
+
+
 def load_social_gates(message_ids: Sequence[str], prompt_ver: str) -> list[dict]:
     """只读取当前 prompt 版本的 G4 缓存；旧版本自动重判。"""
     ids = sorted(set(message_ids))
@@ -316,19 +330,43 @@ def social_structural_gate_counts(
 
 
 def generation_pool(week_start: str | None = None,
-                    week_end: str | None = None) -> list[dict]:
-    """统一证据池：电商口径不变；社媒只经 G1--G3 后送 G4。"""
+                    week_end: str | None = None,
+                    *, assign_run_id: str | None = None) -> list[dict]:
+    """统一证据池；v3 归属只投影指定运行的物理快照。
+
+    G4 预热在快照准备前调用本函数，因而允许 ``assign_run_id=None``；该路径
+    只读取内容与结构门字段，不做生命周期路由。正式生成必须传入 run_id。
+    """
     conditions = social_gate_conditions()
     params = _social_gate_params()
+    params["assign_run_id"] = assign_run_id
+    if assign_run_id is None:
+        ecommerce_assignment = (
+            "(NOT p.requires_spu OR voc_has_spu(m.message_id))"
+        )
+    else:
+        ecommerce_assignment = """(
+          NOT p.requires_spu
+          OR EXISTS (
+            SELECT 1
+              FROM voc_assign_snapshot fact_assignment
+             WHERE fact_assignment.run_id = %(assign_run_id)s
+               AND fact_assignment.message_id = e.message_id
+               AND fact_assignment.seq = e.seq
+               AND fact_assignment.source = 'fact'
+          )
+        )"""
     sql = f"""
       SELECT e.message_id, e.seq, e.tag, e.tag_raw, e.sentiment,
              e.snippet, e.tax_path, e.tax_stage, e.tax_domain,
              e.tax_sub, e.tax_leaf, e.is_product, e.low_conf,
              m.content, m.content_zh, m.category, m.star, m.country,
              m.product_name, m.platform, m.lang, m.interactions,
-             m.brands, m.content_type, m.url, m.src_line, m.spu,
-             m.spu_inherited, m.prod_line, m.message_group_id,
+             m.brands, m.content_type, m.url, m.src_line,
+             m.prod_line, m.message_group_id,
              m.message_type, m.parent_id, m.author_name, m.message_title,
+             %(assign_run_id)s::text AS assign_run_id,
+             COALESCE(a.spu_assignments, '[]'::jsonb) AS spu_assignments,
              CASE
                WHEN m.message_type IN ('评论','回复') THEN COALESCE((
                  SELECT NULLIF(btrim(parent.message_title), '')
@@ -354,6 +392,19 @@ def generation_pool(week_start: str | None = None,
         FROM voc_evidence e
         JOIN voc_message m USING (message_id)
         JOIN voc_source_policy p USING (src_line)
+        LEFT JOIN LATERAL (
+          SELECT jsonb_agg(
+                   jsonb_build_object(
+                     'assigned_spu', s.assigned_spu,
+                     'assignment_source', s.source
+                   ) ORDER BY s.assigned_spu, s.source
+                 ) AS spu_assignments
+            FROM voc_assign_snapshot s
+           WHERE %(assign_run_id)s IS NOT NULL
+             AND s.run_id = %(assign_run_id)s
+             AND s.message_id = e.message_id
+             AND s.seq = e.seq
+        ) a ON true
        WHERE (
          -- 电商入口保持：产品标签 + 负面 + 非空原声 +
          -- requires_spu 来源必须挂云听事实 SPU。
@@ -361,7 +412,7 @@ def generation_pool(week_start: str | None = None,
           AND e.is_product
           AND e.sentiment = '负面'
           AND NULLIF(btrim(e.snippet), '') IS NOT NULL
-          AND (NOT p.requires_spu OR COALESCE(cardinality(m.spu), 0) > 0))
+          AND {ecommerce_assignment})
          OR
          (m.src_line = '社媒'
           AND {conditions['g1']}

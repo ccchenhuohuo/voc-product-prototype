@@ -24,10 +24,12 @@ def strategy(
         row for row in all_rows if row.get("scope") == scope
     ]
     opportunities = normalize_strategy_rows(filtered)
+    scope_unavailable = not all_rows
     return templates.TemplateResponse(request, "strategy.html", {
         "opportunities": opportunities,
         "counts": counts,
         "total_count": len(all_rows),
         "scope": scope,
         "selected_scope": scope,
+        "scope_unavailable": scope_unavailable,
     })

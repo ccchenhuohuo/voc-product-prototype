@@ -52,8 +52,11 @@ def _merge(p: dict, c) -> dict | None:
 
     # 证据改挂到目标；主键冲突说明两侧本就共享该条证据，跳过即可
     c.execute("""
-        INSERT INTO voc_opp_evidence (opp_id, message_id, seq, attach_week, match_by, confidence)
-        SELECT %s, message_id, seq, attach_week, 'merge', confidence
+        INSERT INTO voc_opp_evidence
+               (opp_id, message_id, seq, attach_week, match_by, confidence,
+                assigned_spu, assignment_source, assign_run_id)
+        SELECT %s, message_id, seq, attach_week, 'merge', confidence,
+               assigned_spu, assignment_source, assign_run_id
           FROM voc_opp_evidence WHERE opp_id = ANY(%s)
         ON CONFLICT (opp_id, message_id, seq) DO NOTHING""", [target, sources])
     c.execute("DELETE FROM voc_opp_evidence WHERE opp_id = ANY(%s)", [sources])
@@ -83,7 +86,7 @@ def _split(p: dict, c) -> dict | None:
     return {"parent_ids": ids, "child_ids": ids}
 
 
-def run_auto(week: str) -> dict:
+def run_auto(week: str, *, opp_id_prefix: str | None = None) -> dict:
     """静默融合：双方都没被 PM 触碰过的 pending 提案，不值得打扰任何人
     （冻结设计稿 §3）。没有人工投入需要保护，融错的代价与生成期挂错同级，
     本来就在承受。安全类除外——写 lineage 时 trg_voc_guard_safety 兜底，
@@ -92,6 +95,7 @@ def run_auto(week: str) -> dict:
     做法：直接把提案置为 accepted（decided_by='machine:auto'，理由留痕），
     随后由 run() 走统一的执行路径——只有一条执行代码，不搞两套。
     """
+    pattern = f"{opp_id_prefix}%" if opp_id_prefix is not None else None
     n = db.execute("""
         UPDATE voc_proposal p
            SET status='accepted', decided_by='machine:auto', decided_at=now(),
@@ -100,17 +104,26 @@ def run_auto(week: str) -> dict:
            AND NOT EXISTS (SELECT 1 FROM voc_opportunity_manual m
                             WHERE m.opp_id = ANY(p.opp_ids))
            AND NOT EXISTS (SELECT 1 FROM voc_opportunity o
-                            WHERE o.opp_id = ANY(p.opp_ids) AND o.safety_flag)""")
+                            WHERE o.opp_id = ANY(p.opp_ids) AND o.safety_flag)
+           AND (%s IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM unnest(p.opp_ids) x(opp_id)
+                  WHERE x.opp_id NOT LIKE %s
+               ))""", [pattern, pattern])
     return {"auto_accepted": n or 0}
 
 
-def run(week: str) -> dict:
+def run(week: str, *, opp_id_prefix: str | None = None) -> dict:
     """消费全部 accepted 且未执行的提案。返回执行统计。"""
     stat = {"MERGE": 0, "SPLIT": 0, "skipped": 0, "failed": 0}
+    pattern = f"{opp_id_prefix}%" if opp_id_prefix is not None else None
     rows = db.q("""SELECT proposal_id
                      FROM voc_proposal
                     WHERE status='accepted' AND op_type IN ('MERGE','SPLIT')
-                    ORDER BY proposal_id""")
+                      AND (%s IS NULL OR NOT EXISTS (
+                            SELECT 1 FROM unnest(opp_ids) x(opp_id)
+                             WHERE x.opp_id NOT LIKE %s
+                          ))
+                    ORDER BY proposal_id""", [pattern, pattern])
     for queued in rows:
         proposal_id = queued["proposal_id"]
         try:

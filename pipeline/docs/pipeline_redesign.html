@@ -181,7 +181,7 @@
           <span class="box mono">voc_opportunity</span><span class="rt">= 共性问题（跨 SPU）与诉求</span></span></div>
         <div class="lane"><span class="lk">新建 ID</span><span class="lv">
           <code>OPP2-</code> + SHA-256 前 128 bit<span class="rt">老品与新品：<code>opp_type + core_tag + problem_mode</code>；不含来源、旧业务子类型、周次或模型版本</span></span></div>
-        <div class="cost"><b>刻意不按具体 SPU 分桶</b>：SPU 在生成前只用于判定生命周期，具体编码不进分桶键，仍可发现跨产品问题。存量 <code>OPP-*</code> 不重键，消解命中时继承已有 canonical ID。</div>
+        <div class="cost"><b>v3 按具体 SPU 分桶</b>：归属由本轮快照冻结，多 SPU 证据逐 SPU 扇出；存量 <code>OPP-*</code> 与本代 <code>OPP2-*</code> 在灰度期隔离。</div>
       </div>
     </div>
     <div class="arrow">↓</div>
@@ -192,7 +192,7 @@
         <div class="lane"><span class="lk">链路</span><span class="lv">
           L1 对两个生命周期都使用 <code>(opp_type, core_tag)</code>；来源和旧业务子类型不参与候选分区。L2 在桶内按向量余弦相似度排序，L3 LLM 裁决是否同一机会。</span></div>
         <div class="lane"><span class="lk">附带</span><span class="lv">
-          跨来源补证只在同一生命周期内进行 · 拆分检测 · 提案生成；<code>lifecycle.check_tombstone()</code> 当前仅定义、未接入生产流程</span></div>
+          老品按 SPU 候选键进行 L1/L2/L3 消解 · 新品直接创建 · 拆分检测 · 提案生成</span></div>
         <div class="cost"><b>失败即停</b>：Arrearage、鉴权失败、硬配额/余额不足立即打开熔断；同一 run 以原子共享文件把首因传播给另一生命周期进程。并行层传播原异常并取消未开始任务。Stage1 以计划/完成/失败/取消批次及其条数形成账本；任一生成进程非零退出时，终止兄弟进程并禁止收尾。监督脚本在任何停止/清库前验证 Bash ≥5.1。</div>
       </div>
     </div>

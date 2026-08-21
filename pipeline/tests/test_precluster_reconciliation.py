@@ -36,6 +36,11 @@ def _closed_ctx(*, stage1_rows: int = 0, **overrides) -> RunCtx:
         "precluster_cluster_member_units": 0,
         "precluster_cluster_member_rows": 0,
         "precluster_planned_buckets": 0,
+        "assignment_snapshot_rows": 0,
+        "assignment_unique_facts": 0,
+        "assignment_expected_rows": 0,
+        "assignment_routed_rows": 0,
+        "assignment_conservation": True,
     }
     values.update(overrides)
     ctx.metric_update(("generation",), **values)

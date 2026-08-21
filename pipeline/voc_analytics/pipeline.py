@@ -134,10 +134,15 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         precluster_oversized_clusters=0, precluster_claim_empty=0,
         precluster_cluster_member_units=0, precluster_cluster_member_rows=0,
         precluster_planned_buckets=0,
+        assignment_snapshot_rows=0, assignment_unique_facts=0,
+        assignment_expected_rows=0, assignment_routed_rows=0,
+        assignment_conservation=False,
         scope_truncated_buckets=0, scope_truncated_rows=0)
 
     structural = db.social_structural_gate_counts(week_start, week_end)
-    rows = db.generation_pool(week_start, week_end)
+    snapshot_rows = db.verify_assign_snapshot(ctx.run_id)
+    rows = db.generation_pool(
+        week_start, week_end, assign_run_id=ctx.run_id)
     ecommerce_rows = [row for row in rows if row.get("src_line") == "电商"]
     social_rows = [row for row in rows if row.get("src_line") == "社媒"]
 
@@ -225,6 +230,47 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
         )
         routed = route_classified_evidence(scoped_rows)
 
+    old_rows = [
+        row for row in scoped_rows if row.get("_opp_type") == "老品迭代"
+    ]
+    expected_assignment_keys = {
+        (row.get("message_id"), row.get("seq", 0), row.get("assigned_spu"))
+        for row in old_rows
+    }
+    if len(expected_assignment_keys) != len(old_rows):
+        raise RuntimeError(
+            "归属扇出出现重复 (message_id, seq, assigned_spu)："
+            f"rows={len(old_rows)}, distinct={len(expected_assignment_keys)}")
+    if any(
+        not row.get("assigned_spu")
+        or row.get("assignment_source") not in {"fact", "root"}
+        or row.get("assign_run_id") != ctx.run_id
+        for row in old_rows
+    ):
+        raise RuntimeError("老品路由行缺少当前 run_id 的完整归属投影")
+
+    routed_old_rows = sum(
+        len(items)
+        for bucket, items in routed.buckets.items()
+        if bucket.opp_type == "老品迭代"
+    )
+    assignment_fanout = len(expected_assignment_keys)
+    assignment_unique_facts = len({
+        (message_id, seq)
+        for message_id, seq, _assigned_spu in expected_assignment_keys
+    })
+    if routed_old_rows != assignment_fanout:
+        raise RuntimeError(
+            f"归属守恒失败：R={routed_old_rows}, F={assignment_fanout}")
+    ctx.metric_update(
+        ("generation",),
+        assignment_snapshot_rows=snapshot_rows,
+        assignment_unique_facts=assignment_unique_facts,
+        assignment_expected_rows=assignment_fanout,
+        assignment_routed_rows=routed_old_rows,
+        assignment_conservation=True,
+    )
+
     selected = list(routed.buckets.items())
     selected.sort(key=lambda pair: (-len(pair[1]), pair[0].opp_type,
                                     pair[0].topic))
@@ -280,7 +326,8 @@ def generate_opportunities(week: str, ctx, *, week_start=None, week_end=None,
     histories = {
         opp_type: [r["problem_mode"] for r in db.q(
             "SELECT problem_mode FROM voc_opportunity "
-            "WHERE opp_type=%s AND classification_state='确定' "
+            "WHERE opp_id LIKE 'OPP2-%%' "
+            "AND opp_type=%s AND classification_state='确定' "
             "AND merged_into IS NULL AND problem_mode IS NOT NULL "
             "ORDER BY opp_id LIMIT 20", [opp_type])]
         for opp_type in ({b.opp_type for b, _ in selected})
@@ -427,6 +474,11 @@ def generation_reconciliation(ctx) -> dict:
     scope_truncated_buckets = int(g.get("scope_truncated_buckets", 0))
     scope_truncated_rows = int(g.get("scope_truncated_rows", 0))
     selected_evidence_rows = int(g.get("selected_evidence_rows", 0))
+    assignment_snapshot_rows = int(g.get("assignment_snapshot_rows", 0))
+    assignment_unique_facts = int(g.get("assignment_unique_facts", 0))
+    assignment_expected_rows = int(g.get("assignment_expected_rows", 0))
+    assignment_routed_rows = int(g.get("assignment_routed_rows", 0))
+    assignment_conservation = bool(g.get("assignment_conservation", False))
     social_candidate_rows = int(g.get("social_candidate_rows", 0))
     g1_competitor_rows = int(g.get("g1_competitor_rows", 0))
     g2_dewater_rows = int(g.get("g2_dewater_rows", 0))
@@ -549,6 +601,8 @@ def generation_reconciliation(ctx) -> dict:
     )
     routing_complete = (
         selected_evidence_rows == s1_input
+        and assignment_conservation
+        and assignment_expected_rows == assignment_routed_rows
         and precluster_complete
         and structural_gate_complete
         and social_terminal_complete
@@ -592,6 +646,11 @@ def generation_reconciliation(ctx) -> dict:
         "scope_truncated_buckets": scope_truncated_buckets,
         "scope_truncated_rows": scope_truncated_rows,
         "selected_evidence_rows": selected_evidence_rows,
+        "assignment_snapshot_rows": assignment_snapshot_rows,
+        "assignment_unique_facts": assignment_unique_facts,
+        "assignment_expected_rows": assignment_expected_rows,
+        "assignment_routed_rows": assignment_routed_rows,
+        "assignment_conservation": assignment_conservation,
         "social_candidate_rows": social_candidate_rows,
         "g1_competitor_rows": g1_competitor_rows,
         "g2_dewater_rows": g2_dewater_rows,
@@ -673,6 +732,81 @@ def validate_lifecycle_sources(row: dict) -> tuple[str, list[str]]:
     return opp_type, sorted(sources)
 
 
+def validate_assignment_projection(run_id: str, ctx) -> dict:
+    """校验 v3 关系归属、快照来源与每卡唯一 SPU，并记录守恒分量。"""
+    snapshot_rows = db.verify_assign_snapshot(run_id)
+    rows = db.q("""
+      SELECT
+        count(*) FILTER (
+          WHERE o.opp_type = '老品迭代'
+            AND oe.assign_run_id = %s
+        )::bigint AS projected_rows,
+        count(DISTINCT (oe.message_id, oe.seq, oe.assigned_spu)) FILTER (
+          WHERE o.opp_type = '老品迭代'
+            AND oe.assign_run_id = %s
+        )::bigint AS projected_distinct_rows,
+        count(*) FILTER (
+          WHERE o.opp_type = '老品迭代'
+            AND (oe.assigned_spu IS NULL
+                 OR oe.assignment_source IS NULL
+                 OR oe.assign_run_id IS NULL
+                 OR oe.assigned_spu IS DISTINCT FROM o.core_tag)
+        )::bigint AS bad_old_assignment_rows,
+        count(*) FILTER (
+          WHERE o.opp_type = '新品创新'
+            AND (oe.assigned_spu IS NOT NULL
+                 OR oe.assignment_source IS NOT NULL)
+        )::bigint AS bad_innovation_assignment_rows,
+        count(*) FILTER (
+          WHERE o.opp_type = '老品迭代'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM voc_assign_snapshot s
+               WHERE s.run_id = oe.assign_run_id
+                 AND s.message_id = oe.message_id
+                 AND s.seq = oe.seq
+                 AND s.assigned_spu = oe.assigned_spu
+                 AND s.source = oe.assignment_source
+            )
+        )::bigint AS missing_snapshot_rows,
+        count(*) FILTER (
+          WHERE o.opp_type = '老品迭代'
+            AND EXISTS (
+              SELECT 1
+                FROM voc_opp_evidence sibling
+               WHERE sibling.opp_id = oe.opp_id
+                 AND sibling.assigned_spu IS DISTINCT FROM o.core_tag
+            )
+        )::bigint AS cross_spu_rows
+        FROM voc_opp_evidence oe
+        JOIN voc_opportunity o ON o.opp_id = oe.opp_id
+       WHERE o.opp_id LIKE 'OPP2-%%'
+    """, [run_id, run_id])
+    raw = rows[0] if rows else {}
+    stat = {
+        "snapshot_rows": int(snapshot_rows),
+        "projected_rows": int(raw.get("projected_rows", 0)),
+        "projected_distinct_rows": int(raw.get("projected_distinct_rows", 0)),
+        "bad_old_assignment_rows": int(raw.get("bad_old_assignment_rows", 0)),
+        "bad_innovation_assignment_rows": int(
+            raw.get("bad_innovation_assignment_rows", 0)),
+        "missing_snapshot_rows": int(raw.get("missing_snapshot_rows", 0)),
+        "cross_spu_rows": int(raw.get("cross_spu_rows", 0)),
+    }
+    ctx.metric_update(("finalize",), assignment_projection=stat)
+    bad = (
+        stat["bad_old_assignment_rows"]
+        + stat["bad_innovation_assignment_rows"]
+        + stat["missing_snapshot_rows"]
+        + stat["cross_spu_rows"]
+    )
+    if bad:
+        raise RuntimeError(f"v3 归属投影自检失败：{stat}")
+    if stat["projected_distinct_rows"] > stat["snapshot_rows"]:
+        raise RuntimeError(f"v3 关系投影超出冻结快照：{stat}")
+    return stat
+
+
 def refresh_opportunity_neighbors(ctx) -> dict:
     """收尾刷新最近邻缓存，并确保两端机会点均不悬空。"""
     db.execute("SELECT voc_refresh_opp_nn()")
@@ -711,6 +845,16 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
         raise ValueError(
             f"分组完整证据集分类与路由不一致："
             f"routed={opp_type}, classified={classification}")
+    assigned_spus = {
+        items[i].get("assigned_spu") for i in members
+        if items[i].get("assigned_spu") is not None
+    }
+    if opp_type == "老品迭代" and assigned_spus != {ctx_info.get("tag")}:
+        raise ValueError(
+            f"老品分组归属必须唯一等于桶 SPU：bucket={ctx_info.get('tag')!r}, "
+            f"assigned={sorted(assigned_spus)!r}")
+    if opp_type == "新品创新" and assigned_spus:
+        raise ValueError(f"新品分组不得携带 assigned_spu：{sorted(assigned_spus)!r}")
     # 兜底占位符不能进 prompt——模型会照抄进标题（实测产出过
     # 「摄影配件品类：填补未命名模式（用户自定义功能组合）」）。
     # 命名失败时让 Stage2 自己从证据里概括，比塞一个空洞的名字更好。
@@ -758,8 +902,7 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
     meta = obj.get("_meta") or {}
     source_counts = Counter(items[i]["src_line"] for i in members)
     source_lines = sorted(source_counts)
-    core_tag = (ctx_info.get("tag") if opp_type == "老品迭代"
-                else _no_placeholder(group["mode_name"]))
+    core_tag = ctx_info.get("tag") if opp_type == "老品迭代" else None
     problem_mode = _specific_mode(obj, group["mode_name"])
     return {
         "opp_id": make_opp_id(opp_type, core_tag, problem_mode),
@@ -777,6 +920,7 @@ def build_opportunity(items: list[dict], group: dict, opp_type: str, ctx_info: d
         # 兜底占位符不得落库：problem_mode 是向量化字段，写成「未命名模式」会让
         # 该条在 L2 召回里和什么都像，重演吸附器问题。
         "core_tag": core_tag,
+        "scope_source": "v3-未计算",
         "problem_mode": problem_mode,
         "title": obj.get("title"),
         "desc_phenomenon": obj.get("desc_phenomenon"),
@@ -831,7 +975,7 @@ def lock_opportunities(connection, opp_ids: Sequence[str]) -> None:
 def recount(opp_id: str, connection=None) -> None:
     """按已落库的完整证据集重算分类、计数与排序分。
 
-    build 阶段只看得到当前新组；attach 与 cross-line 都会改变最终
+    build 阶段只看得到当前新组；attach 与提案 MERGE 都会改变最终
     证据集。因此权威分类放在关系落库之后，不使用 ``src_line`` 参数。
     传入 connection 时，读取与回写和证据改挂共用同一事务。
     """
@@ -844,11 +988,17 @@ def recount(opp_id: str, connection=None) -> None:
     # save / attach / merge 路径在关系变更前已先取得这把锁。
     lock_opportunities(connection, [opp_id])
     rows = connection.execute("""
-      SELECT m.src_line, m.spu, m.spu_inherited, m.star,
+      SELECT m.src_line, m.star,
              p.requires_spu AS source_requires_spu
+             , CASE
+                 WHEN oe.assign_run_id IS NULL
+                      AND voc_has_spu(m.message_id) THEN '__legacy__'
+                 ELSE oe.assigned_spu
+               END AS assigned_spu
+             , oe.assignment_source, oe.assign_run_id
         FROM voc_opp_evidence oe
-        JOIN voc_message m USING (message_id)
-        JOIN voc_source_policy p USING (src_line)
+        JOIN voc_message m ON m.message_id = oe.message_id
+        JOIN voc_source_policy p ON p.src_line = m.src_line
        WHERE oe.opp_id=%s
        ORDER BY oe.message_id, oe.seq
     """, [opp_id]).fetchall()
@@ -979,12 +1129,37 @@ def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
                     [{k: v for k, v in opp.items() if not k.startswith("_")}],
                     ["opp_id"])
 
+        relation_rows = []
+        for i in members:
+            item = items[i]
+            assigned_spu = item.get("assigned_spu")
+            assignment_source = item.get("assignment_source")
+            assign_run_id = item.get("assign_run_id") or ctx.run_id
+            if opp["opp_type"] == "老品迭代":
+                if assigned_spu != opp.get("core_tag"):
+                    raise ValueError(
+                        f"老品关系归属 {assigned_spu!r} 不等于 core_tag "
+                        f"{opp.get('core_tag')!r}")
+                if assignment_source not in {"fact", "root"}:
+                    raise ValueError("老品关系缺少 fact/root assignment_source")
+                if assign_run_id != ctx.run_id:
+                    raise ValueError("老品关系 assign_run_id 与当前运行不一致")
+            elif assigned_spu is not None or assignment_source is not None:
+                raise ValueError("新品关系不得携带 SPU 归属")
+
+            relation_rows.append({
+                "opp_id": opp_id,
+                "message_id": item["message_id"],
+                "seq": item.get("seq", 0),
+                "attach_week": week,
+                "match_by": "rule" if action == "create" else "llm",
+                "confidence": round(dec.get("confidence", 1.0), 3),
+                "assigned_spu": assigned_spu,
+                "assignment_source": assignment_source,
+                "assign_run_id": assign_run_id,
+            })
         db.upsert_in_transaction(
-            c, "voc_opp_evidence",
-            [{"opp_id": opp_id, "message_id": items[i]["message_id"],
-              "seq": items[i].get("seq", 0), "attach_week": week,
-              "match_by": "rule" if action == "create" else "llm",
-              "confidence": round(dec.get("confidence", 1.0), 3)} for i in members],
+            c, "voc_opp_evidence", relation_rows,
             ["opp_id", "message_id", "seq"])
 
         for p in dec.get("proposals", []):
@@ -1012,7 +1187,7 @@ def save_opportunity(opp: dict, items: list[dict], week: str, ctx) -> str:
 
 
 def attach_evidence(opp_id: str, rows: list[dict]) -> int:
-    """cross-source 证据挂载与完整集合回算共用一个事务。"""
+    """额外证据挂载与完整集合回算共用一个事务。"""
     if not rows:
         return 0
     with db.conn() as c:

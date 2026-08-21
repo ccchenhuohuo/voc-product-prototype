@@ -10,7 +10,9 @@ def refresh(week: str) -> dict:
     stat = db.q("""
       SELECT (SELECT count(*) FROM voc_spu) AS spu_count,
              (SELECT count(*) FROM voc_spu_issue) AS issue_count,
-             (SELECT count(*) FROM voc_opportunity WHERE n_eff IS NOT NULL)
-               AS n_eff_count
+             (SELECT count(*) FROM voc_spu_issue_v2) AS v2_issue_count,
+             (SELECT count(*) FROM voc_spu_issue_v3) AS v3_issue_count,
+             (SELECT count(*) FROM voc_opportunity
+               WHERE scope_source = 'v3-未计算') AS scope_pending_count
     """)[0]
     return {"week": week, **stat}

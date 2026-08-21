@@ -46,10 +46,12 @@ def test_proposals_run_before_generation_and_respect_auto_merge_default(
     calls: list[str] = []
     monkeypatch.delenv("VOC_AUTO_MERGE", raising=False)
     monkeypatch.setattr(
-        module.execute, "run_auto", lambda _week: calls.append("auto") or {})
+        module.execute, "run_auto",
+        lambda _week, **_kw: calls.append("auto") or {})
     monkeypatch.setattr(
         module.execute, "run",
-        lambda week: calls.append(f"proposals:{week}") or {
+        lambda week, **kw: calls.append(
+            f"proposals:{week}:{kw.get('opp_id_prefix')}") or {
             "MERGE": 2, "SPLIT": 1, "skipped": 0, "failed": 0,
         },
     )
@@ -57,7 +59,7 @@ def test_proposals_run_before_generation_and_respect_auto_merge_default(
 
     stat = module._execute_proposals("2026-W34", ctx)
 
-    assert calls == ["proposals:2026-W34"]
+    assert calls == ["proposals:2026-W34:OPP2-"]
     assert stat["auto_accepted"] == "已关闭"
     assert ctx.metrics["finalize"]["proposal_execution"] == stat
 
@@ -73,18 +75,22 @@ def test_explicit_auto_merge_runs_before_accepted_proposals(monkeypatch) -> None
     monkeypatch.setenv("VOC_AUTO_MERGE", "1")
     monkeypatch.setattr(
         module.execute, "run_auto",
-        lambda week: calls.append(f"auto:{week}") or {"auto_accepted": 3},
+        lambda week, **kw: calls.append(
+            f"auto:{week}:{kw.get('opp_id_prefix')}") or {"auto_accepted": 3},
     )
     monkeypatch.setattr(
         module.execute, "run",
-        lambda week: calls.append(f"proposals:{week}") or {
+        lambda week, **kw: calls.append(
+            f"proposals:{week}:{kw.get('opp_id_prefix')}") or {
             "MERGE": 3, "SPLIT": 0, "skipped": 0, "failed": 0,
         },
     )
 
     module._execute_proposals("2026-W34", _Ctx())
 
-    assert calls == ["auto:2026-W34", "proposals:2026-W34"]
+    assert calls == [
+        "auto:2026-W34:OPP2-", "proposals:2026-W34:OPP2-",
+    ]
 
 
 def test_revive_runs_after_snapshot_and_before_release(monkeypatch) -> None:
@@ -92,30 +98,37 @@ def test_revive_runs_after_snapshot_and_before_release(monkeypatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
         module.lifecycle, "check_revive",
-        lambda week: calls.append(f"revive:{week}") or 4,
+        lambda week, **kw: calls.append(
+            f"revive:{week}:{kw.get('opp_id_prefix')}") or 4,
     )
     ctx = _Ctx()
 
     assert module._check_revive("2026-W34", ctx) == 4
-    assert calls == ["revive:2026-W34"]
+    assert calls == ["revive:2026-W34:OPP2-"]
     assert ctx.metrics["finalize"]["revive_proposals"] == 4
 
     text = SCRIPT.read_text()
     snapshot = text.index("INSERT INTO voc_opp_snapshot")
     revive = text.index("revive_total = _check_revive(")
-    release = text.index("release = lifecycle.release_to_pm()")
+    release = text.index(
+        'release = lifecycle.release_to_pm(opp_id_prefix="OPP2-")')
     finalize_start = text.index("def _finalize(")
     finalize_end = text.index("def _parse_args(")
     assert finalize_start < snapshot < revive < release < finalize_end
 
 
-def test_full_rebuild_reaches_both_hooks_after_cleanup() -> None:
+def test_full_rebuild_freezes_once_before_both_children_and_defaults_no_clear() -> None:
     text = RERUN.read_text()
-    cleanup = text.index("== 清空机会点层")
-    generate = text.index("nohup .venv/bin/python -u scripts/run_generate.py", cleanup)
+    warm = text.index("scripts/warm_value_gate.py")
+    cleanup = text.index("== 显式清空机会点层")
+    snapshot = text.index("db.prepare_assign_snapshot(")
+    generate = text.index("nohup .venv/bin/python -u scripts/run_generate.py", snapshot)
     finalize = text.index("--finalize-only", generate)
 
-    assert cleanup < generate < finalize
+    assert 'VOC_RESET_OPPORTUNITY_LAYER="${VOC_RESET_OPPORTUNITY_LAYER:-0}"' in text
+    assert warm < cleanup < snapshot < generate < finalize
+    assert text.count("db.prepare_assign_snapshot(") == 1
+    assert text.count("--run-id \"$RUN_ID\"") >= 3
     assert "执行 PM 提案落地" in text[cleanup:generate]
     assert "REVIVE 检测" in text[cleanup:generate]
 

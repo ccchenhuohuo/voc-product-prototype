@@ -312,6 +312,9 @@ def test_grounding_rejection_closes_existing_generation_ledger() -> None:
         grounding_orphan_issues=3, grounding_polarity_issues=0,
         grounding_title_subject_issues=0, grounding_short_evidence_issues=3,
         grounding_rejected_groups=1,
+        assignment_snapshot_rows=0, assignment_unique_facts=0,
+        assignment_expected_rows=0, assignment_routed_rows=0,
+        assignment_conservation=True,
     )
 
     result = generation_reconciliation(ctx)

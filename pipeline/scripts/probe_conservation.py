@@ -5,6 +5,8 @@
 走的是生产代码的 generation_pool() 与 route_social_value_evidence()，
 不是重写的近似 SQL —— 口径必须与真实路由一致。
 
+必须显式传入已准备好的 --run-id；探针只读该轮归属快照，不回读消息数组。
+
 规格 §5 定义：
   U = 唯一事实数 count(DISTINCT (message_id, seq))
   F = 扇出后应有行数 Σ count(DISTINCT assigned_spu)
@@ -13,6 +15,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from collections import Counter
 from pathlib import Path
@@ -31,7 +34,13 @@ GATES = """SELECT message_id, cls FROM voc_social_gate
 
 
 def main() -> None:
-    rows = db.generation_pool()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-id", required=True,
+                        help="已由 voc_prepare_assign_snapshot 准备的运行 ID")
+    args = parser.parse_args()
+
+    db.verify_assign_snapshot(args.run_id)
+    rows = db.generation_pool(assign_run_id=args.run_id)
     gate = {r["message_id"]: r["cls"] for r in db.q(GATES)}
     print(f"[池] generation_pool 全量 {len(rows)} 行")
 
@@ -70,15 +79,14 @@ def main() -> None:
 
     # ---- 守恒等式：只对老品有意义（新品无 SPU）----
     U = len({(r["message_id"], r["seq"]) for r in old})
-    fan: dict[tuple, set] = {}
+    fan: dict[tuple, set[str]] = {}
     for r in old:
         key = (r["message_id"], r["seq"])
-        spus = {s.strip() for s in
-                (list(r.get("spu") or []) + list(r.get("spu_inherited") or []))
-                if s and s.strip()}
-        fan.setdefault(key, set()).update(spus)
+        assigned_spu = (r.get("assigned_spu") or "").strip()
+        if assigned_spu:
+            fan.setdefault(key, set()).add(assigned_spu)
     F = sum(len(v) for v in fan.values())
-    R = F                      # 路由按每个 assigned_spu 分发一行，构造上恒等
+    R = len(old)
     multi = sum(1 for v in fan.values() if len(v) > 1)
 
     print("\n" + "=" * 54)

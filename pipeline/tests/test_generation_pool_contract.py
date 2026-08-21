@@ -75,7 +75,7 @@ def test_g3_official_author_pattern_is_derived_from_all_own_aliases(alias: str) 
     ) == db.SOCIAL_G3_TERMINAL
 
 
-def test_generation_pool_has_unchanged_ecommerce_and_new_social_entry(monkeypatch) -> None:
+def test_generation_pool_reads_formal_v3_assignment_only_from_snapshot(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def capture_only(sql: str, params) -> list[dict]:
@@ -83,7 +83,9 @@ def test_generation_pool_has_unchanged_ecommerce_and_new_social_entry(monkeypatc
         return []
 
     monkeypatch.setattr(db, "q", capture_only)
-    assert db.generation_pool("2026-08-10", "2026-08-17") == []
+    assert db.generation_pool(
+        "2026-08-10", "2026-08-17", assign_run_id="run-v3"
+    ) == []
 
     sql = re.sub(r"\s+", " ", str(captured["sql"])).strip()
     params = dict(captured["params"])
@@ -92,7 +94,12 @@ def test_generation_pool_has_unchanged_ecommerce_and_new_social_entry(monkeypatc
     assert "e.is_product" in sql
     assert "e.sentiment = '负面'" in sql
     assert "NULLIF(btrim(e.snippet), '') IS NOT NULL" in sql
-    assert "NOT p.requires_spu OR COALESCE(cardinality(m.spu), 0) > 0" in sql
+    assert "FROM voc_assign_snapshot fact_assignment" in sql
+    assert "fact_assignment.run_id = %(assign_run_id)s" in sql
+    assert "fact_assignment.source = 'fact'" in sql
+    assert "FROM voc_assign_snapshot s" in sql
+    assert "s.run_id = %(assign_run_id)s" in sql
+    assert "m.spu" not in sql and "m.spu_inherited" not in sql
 
     assert "m.src_line = '社媒'" in sql
     assert "b <> ALL(%(own_brands)s)" in sql
@@ -102,7 +109,6 @@ def test_generation_pool_has_unchanged_ecommerce_and_new_social_entry(monkeypatc
     assert "m.author_name !~* %(official_pattern)s" in sql
     assert "m.message_type IN ('评论','回复')" in sql
     assert "parent.message_title" in sql
-    assert "m.spu_inherited" in sql
     assert "content_branch" not in sql
     assert "comparison" not in sql
     assert params["own_brands"] == list(C.OWN_BRANDS)
@@ -111,6 +117,21 @@ def test_generation_pool_has_unchanged_ecommerce_and_new_social_entry(monkeypatc
     assert params["official_pattern"] == C.OFFICIAL_AUTHOR_PATTERN
     assert params["week_start"] == "2026-08-10"
     assert params["week_end"] == "2026-08-17"
+    assert params["assign_run_id"] == "run-v3"
+
+
+def test_generation_pool_prewarm_path_has_no_snapshot_projection_requirement(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        db, "q", lambda sql, params: captured.update(sql=sql, params=params) or [])
+
+    assert db.generation_pool() == []
+
+    sql = re.sub(r"\s+", " ", str(captured["sql"])).strip()
+    assert "voc_has_spu(m.message_id)" in sql
+    assert dict(captured["params"])["assign_run_id"] is None
 
 
 def test_structural_count_query_reuses_the_same_conditions(monkeypatch) -> None:

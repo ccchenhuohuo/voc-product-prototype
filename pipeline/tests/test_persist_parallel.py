@@ -29,7 +29,10 @@ def _pool_row(mid: str, spu: str, seq: int = 0) -> dict:
     """一条最小可路由的电商证据：电商走 R3 契约，必挂事实 SPU，不经 G4。"""
     return {
         "message_id": mid, "seq": seq, "src_line": "电商",
-        "source_requires_spu": True, "spu": [spu], "spu_inherited": [],
+        "source_requires_spu": True, "assign_run_id": "test_parallel",
+        "spu_assignments": [
+            {"assigned_spu": spu, "assignment_source": "fact"},
+        ],
         "tag": f"标签-{spu}", "snippet": f"{spu} 的问题描述",
         "evidence_text": f"{spu} 的问题描述", "full_text": f"{spu} 的问题描述",
         "content": f"{spu} 的问题描述", "star": 2, "category": "支架类",
@@ -49,6 +52,7 @@ def test_persistence_happens_in_worker_threads(monkeypatch) -> None:
     monkeypatch.setattr(P.db, "social_structural_gate_counts",
                         lambda *a, **k: {})
     monkeypatch.setattr(P.db, "generation_pool", lambda *a, **k: rows)
+    monkeypatch.setattr(P.db, "verify_assign_snapshot", lambda _run_id: len(rows))
     monkeypatch.setattr(P.db, "save_unclassified", lambda *a, **k: 0)
     monkeypatch.setattr(P.db, "q", lambda *a, **k: [])
 

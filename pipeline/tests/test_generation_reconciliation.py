@@ -18,7 +18,15 @@ from voc_analytics.pipeline import generation_reconciliation  # noqa: E402
 
 def _ctx_with_generation(**values: int) -> RunCtx:
     ctx = RunCtx(run_id="offline-reconcile", week="2026-W34")
-    ctx.metric_update(("generation",), **values)
+    assignment = {
+        "assignment_snapshot_rows": 0,
+        "assignment_unique_facts": 0,
+        "assignment_expected_rows": 0,
+        "assignment_routed_rows": 0,
+        "assignment_conservation": True,
+    }
+    assignment.update(values)
+    ctx.metric_update(("generation",), **assignment)
     return ctx
 
 
@@ -184,6 +192,20 @@ def test_social_terminal_gap_is_never_silently_accepted() -> None:
     ))
 
     assert result["social_terminal_complete"] is False
+    assert result["complete"] is False
+
+
+def test_assignment_conservation_is_a_required_completion_gate() -> None:
+    result = generation_reconciliation(_ctx_with_generation(
+        planned_buckets=0, completed_buckets=0, failed_buckets=0,
+        cancelled_buckets=0, planned_groups=0, completed_groups=0,
+        failed_groups=0, cancelled_groups=0, planned_persistence=0,
+        completed_persistence=0, failed_persistence=0,
+        assignment_expected_rows=2, assignment_routed_rows=1,
+        assignment_conservation=False,
+    ))
+
+    assert result["assignment_conservation"] is False
     assert result["complete"] is False
 
 

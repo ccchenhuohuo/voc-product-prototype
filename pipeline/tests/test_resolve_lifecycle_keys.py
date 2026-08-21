@@ -17,7 +17,7 @@ ensure_psycopg_importable()
 from voc_analytics import resolve  # noqa: E402
 
 
-def test_old_product_l1_key_uses_type_and_tag_without_source(monkeypatch) -> None:
+def test_old_product_l1_key_uses_type_and_spu_without_source(monkeypatch) -> None:
     calls: list[tuple[str, list]] = []
 
     def fake_q(sql: str, params: list) -> list[dict]:
@@ -33,30 +33,33 @@ def test_old_product_l1_key_uses_type_and_tag_without_source(monkeypatch) -> Non
 
     assert "opp_type IS NOT DISTINCT FROM %s" in sql
     assert "core_tag IS NOT DISTINCT FROM %s" in sql
+    assert "opp_id LIKE 'OPP2-%%'" in sql
     assert "src_line" not in sql
     assert params == ["按键卡滞", "老品迭代"]
 
 
-def test_innovation_l1_key_uses_the_same_type_and_tag_domain(monkeypatch) -> None:
-    calls: list[tuple[str, list]] = []
+def test_innovation_resolve_never_calls_l1(monkeypatch) -> None:
     monkeypatch.setattr(
-        resolve.db,
-        "q",
-        lambda sql, params: calls.append((sql, params)) or [],
+        resolve, "l1_candidates",
+        lambda *_a, **_k: pytest.fail("新品不得进入 L1"),
     )
 
-    resolve.l1_candidates("自定义功能", "新品创新")
-    sql, params = calls.pop()
+    result = resolve.resolve_one(
+        {"opp_type": "新品创新", "core_tag": None}, object())
 
-    assert "core_tag IS NOT DISTINCT FROM %s" in sql
-    assert "opp_type IS NOT DISTINCT FROM %s" in sql
-    assert "src_line" not in sql
-    assert params == ["自定义功能", "新品创新"]
+    assert result == {"action": "create", "opp_id": None, "proposals": []}
 
 
 def test_l1_rejects_unknown_lifecycle_before_query(monkeypatch) -> None:
     query = pytest.fail
     monkeypatch.setattr(resolve.db, "q", query)
 
-    with pytest.raises(ValueError, match="未知机会类型"):
+    with pytest.raises(ValueError, match="L1 只支持老品迭代"):
         resolve.l1_candidates("标签", "不存在的生命周期")
+
+
+def test_l1_rejects_innovation_even_if_called_directly(monkeypatch) -> None:
+    monkeypatch.setattr(resolve.db, "q", pytest.fail)
+
+    with pytest.raises(ValueError, match="L1 只支持老品迭代"):
+        resolve.l1_candidates("不应存在", "新品创新")

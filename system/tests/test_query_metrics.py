@@ -144,7 +144,23 @@ def test_innovation_rollups_use_all_evidence_without_brand_multiplication():
 
 
 def test_strategy_counts_distinct_spus():
-    assert "count(distinct i.spu)" in compact(Q.STRATEGY_OPPORTUNITIES)
+    text = compact(Q.STRATEGY_OPPORTUNITIES)
+    assert "count(distinct i.spu)" in text
+    assert "o.scope_source" in text
+    assert "o.scope_source is distinct from 'v3-未计算'" in text
+    assert "o.opp_id like 'opp2-%'" in text
+
+
+def test_v3_strategy_empty_state_and_issue_readout_contract():
+    root = __import__("pathlib").Path(__file__).resolve().parents[1] / "app"
+    strategy = (root / "templates" / "strategy.html").read_text(encoding="utf-8")
+    voices = (root / "templates" / "issue-voices.html").read_text(encoding="utf-8")
+    route = (root / "routes" / "strategy.py").read_text(encoding="utf-8")
+
+    assert "scope_unavailable" in route
+    assert "v3 战略口径尚未计算" in strategy
+    assert "不展示旧版扩散结果" in strategy
+    assert "有效产品数" not in voices
 
 
 def test_opportunity_boards_exclude_invalid_classifications():
@@ -177,15 +193,18 @@ def test_new_read_queries_use_explicit_join_conditions():
         assert " using " not in compact(sql)
 
 
-def test_raw_voice_queries_match_inherited_spus_and_exclude_used_messages():
+def test_raw_voice_queries_use_published_snapshot_and_exclude_used_messages():
     for sql in (Q.BOARD_SPUS, Q.SPU_RAW_VOICES):
         text = compact(sql)
         assert "join voc_social_gate" in text
-        assert "spu_inherited" in text
+        assert "from voc_assign_snapshot" in text
+        assert "snapshot_message_spu" in text
+        assert "oe.assigned_spu" in text
         assert "g.cls in ('诉求缺口', '产品缺陷')" in text
         assert "not exists" in text
         assert "from voc_opp_evidence" in text
-        assert "oe.message_id = msg.message_id" in text
+        assert ("oe.message_id = msg.message_id" in text
+                or "oe.message_id = x.message_id" in text)
 
 
 def test_removed_channel_is_absent_from_innovation_and_home_queries():

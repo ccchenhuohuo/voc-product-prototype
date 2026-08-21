@@ -67,10 +67,10 @@ def _execute_proposals(week: str, ctx) -> dict:
     """在生成前消费 PM 裁决，确保新证据挂到合并后的目标条目。"""
     # 静默自动融合默认关闭；只有显式设置 VOC_AUTO_MERGE=1 才改变 pending
     # 提案状态，沿用原资产图的开关语义。
-    auto = (execute.run_auto(week)
+    auto = (execute.run_auto(week, opp_id_prefix="OPP2-")
             if os.environ.get("VOC_AUTO_MERGE") == "1"
             else {"auto_accepted": "已关闭"})
-    stat = execute.run(week)
+    stat = execute.run(week, opp_id_prefix="OPP2-")
     result = {**auto, **stat}
     # 提案动作会改写机会点层，属于 finalize 账本；run log 会完整保存 metrics。
     ctx.metric_update(("finalize",), proposal_execution=result)
@@ -80,93 +80,124 @@ def _execute_proposals(week: str, ctx) -> dict:
 
 def _check_revive(week: str, ctx) -> int:
     """收尾快照后检查完成态/墓碑条目并提 REVIVE 提案。"""
-    count = lifecycle.check_revive(week)
+    count = lifecycle.check_revive(week, opp_id_prefix="OPP2-")
     ctx.metric_update(("finalize",), revive_proposals=count)
     print(f"[复活检测] 新增 {count} 条 REVIVE 提案", flush=True)
     return count
 
 
 def _finalize(args, ctx) -> dict:
+    assignment_stat = pipeline.validate_assignment_projection(ctx.run_id, ctx)
     created = [r for r in db.q("""
-      SELECT opp_id, mode_vec::text AS v, opp_type, source_lines
+      SELECT opp_id
         FROM voc_opportunity
-       WHERE classification_state='确定' AND merged_into IS NULL
-         AND mode_vec IS NOT NULL
+       WHERE opp_id LIKE 'OPP2-%%'
+         AND classification_state='确定' AND merged_into IS NULL
        ORDER BY opp_id
     """)]
-    print(f"[收尾] 覆盖库内全部 {len(created)} 个有效机会点")
+    print(f"[收尾] 仅处理 v3 命名空间 {len(created)} 个有效机会点")
 
     ctx.metric_update(
         ("finalize",), status="running", planned_targets=len(created),
         completed_targets=0, failed_targets=0, cancelled_targets=0,
-        attached_evidence=0)
-    attached_total = 0
+        attached_evidence=0, assignment_projection=assignment_stat)
     try:
+        split_total = 0
         for row in created:
             try:
-                opp_type, source_lines = pipeline.validate_lifecycle_sources(row)
-                vec = [float(value) for value in row["v"].strip("[]").split(",")]
-                attached = resolve.cross_source_merge(
-                    row["opp_id"], vec, opp_type, source_lines, args.week, ctx)
-                attached_count = 0
-                if attached:
-                    attached_count = pipeline.attach_evidence(row["opp_id"], attached)
-                    attached_total += attached_count
-                ctx.metric_incr(
-                    ("finalize",), completed_targets=1,
-                    attached_evidence=attached_count)
+                proposal = resolve.detect_split(row["opp_id"])
+                if proposal:
+                    db.execute(
+                        "INSERT INTO voc_proposal(op_type,opp_ids,rationale,week) "
+                        "VALUES(%s,%s,%s,%s)",
+                        [proposal["op_type"], proposal["opp_ids"],
+                         proposal["rationale"], args.week])
+                    split_total += 1
+                ctx.metric_incr(("finalize",), completed_targets=1)
             except BaseException:
                 ctx.metric_incr(("finalize",), failed_targets=1)
                 raise
 
-        split_total = 0
-        for row in created:
-            proposal = resolve.detect_split(row["opp_id"])
-            if proposal:
-                db.execute(
-                    "INSERT INTO voc_proposal(op_type,opp_ids,rationale,week) "
-                    "VALUES(%s,%s,%s,%s)",
-                    [proposal["op_type"], proposal["opp_ids"],
-                     proposal["rationale"], args.week])
-                split_total += 1
-
         db.execute("""
-          INSERT INTO voc_opp_snapshot(opp_id,week,evi_total,rank_score,base_total,neg_total,
+          INSERT INTO voc_opp_snapshot(opp_id,week,evi_total,rank_score,
+                                       base_total,neg_total,denominator_scope,
                                        title,problem_mode,desc_phenomenon,desc_attribution,
                                        desc_suggestion,prompt_ver,model_ver)
           SELECT o.opp_id,%s,o.evi_total,o.rank_score,
-                 (SELECT count(*) FROM voc_evidence e JOIN voc_message m USING(message_id)
-                   WHERE e.is_product AND e.tag IS NOT DISTINCT FROM o.core_tag),
-                 (SELECT count(*) FROM voc_evidence e JOIN voc_message m USING(message_id)
-                   WHERE e.is_product AND e.sentiment='负面'
-                     AND e.tag IS NOT DISTINCT FROM o.core_tag),
+                 CASE WHEN o.opp_type = '老品迭代' THEN (
+                   SELECT count(*)::int
+                     FROM (
+                       SELECT DISTINCT e.message_id, e.seq
+                         FROM voc_assign_snapshot s
+                         JOIN voc_evidence e
+                           ON e.message_id = s.message_id AND e.seq = s.seq
+                        WHERE s.run_id = %s
+                          AND s.assigned_spu = o.core_tag
+                     ) base_rows
+                 ) END,
+                 CASE WHEN o.opp_type = '老品迭代' THEN (
+                   SELECT count(*)::int
+                     FROM (
+                       SELECT DISTINCT e.message_id, e.seq
+                         FROM voc_assign_snapshot s
+                         JOIN voc_evidence e
+                           ON e.message_id = s.message_id AND e.seq = s.seq
+                        WHERE s.run_id = %s
+                          AND s.assigned_spu = o.core_tag
+                          AND e.sentiment = '负面'
+                     ) negative_rows
+                 ) END,
+                 CASE WHEN o.opp_type = '老品迭代'
+                      THEN 'assigned_spu' ELSE 'not_applicable' END,
                  o.title,o.problem_mode,o.desc_phenomenon,o.desc_attribution,
                  o.desc_suggestion,o.prompt_ver,o.model_ver
-            FROM voc_opportunity o WHERE o.last_week=%s
+            FROM voc_opportunity o
+           WHERE o.last_week=%s AND o.opp_id LIKE 'OPP2-%%'
           ON CONFLICT (opp_id,week) DO UPDATE SET
             evi_total=EXCLUDED.evi_total, rank_score=EXCLUDED.rank_score,
-            title=EXCLUDED.title, desc_suggestion=EXCLUDED.desc_suggestion
-        """, [args.week, args.week])
+            base_total=EXCLUDED.base_total, neg_total=EXCLUDED.neg_total,
+            denominator_scope=EXCLUDED.denominator_scope,
+            title=EXCLUDED.title, problem_mode=EXCLUDED.problem_mode,
+            desc_phenomenon=EXCLUDED.desc_phenomenon,
+            desc_attribution=EXCLUDED.desc_attribution,
+            desc_suggestion=EXCLUDED.desc_suggestion,
+            prompt_ver=EXCLUDED.prompt_ver, model_ver=EXCLUDED.model_ver
+        """, [args.week, ctx.run_id, ctx.run_id, args.week])
+        bad_denominator = int(db.q1("""
+          SELECT count(*)
+            FROM voc_opp_snapshot s
+            JOIN voc_opportunity o ON o.opp_id = s.opp_id
+           WHERE s.week = %s
+             AND o.opp_id LIKE 'OPP2-%%'
+             AND o.opp_type = '老品迭代'
+             AND (s.denominator_scope IS DISTINCT FROM 'assigned_spu'
+                  OR COALESCE(s.base_total, 0) <= 0
+                  OR COALESCE(s.neg_total, 0) > COALESCE(s.base_total, 0))
+        """, [args.week]) or 0)
+        if bad_denominator:
+            raise RuntimeError(
+                f"v3 快照分母自检失败：{bad_denominator} 张老品卡分母为空或倒挂")
         revive_total = _check_revive(args.week, ctx)
-        # 派生层必须在证据挂靠、跨源合并完成之后刷新，否则 SPU 卡片层与
-        # 战略视图读到的还是上一轮（甚至指向已删 opp_id）的物化视图。
+        # 派生层必须在证据落库与快照完成之后刷新，否则产品页仍读上一轮。
         # 派生层必须由手工收尾刷新；全量重跑不能只更新机会点机器表。
         spu_stat = explode.refresh(args.week)
         print(f"[派生层] SPU {spu_stat['spu_count']} 个 / "
-              f"SPU-问题 {spu_stat['issue_count']} 条 / "
-              f"n_eff 覆盖 {spu_stat['n_eff_count']} 个机会点")
+              f"兼容问题 {spu_stat['issue_count']} 条 / "
+              f"v2 {spu_stat['v2_issue_count']} 条 / "
+              f"v3 {spu_stat['v3_issue_count']} 条")
         nn_stat = pipeline.refresh_opportunity_neighbors(ctx)
         print(f"[最近邻] 刷新 {nn_stat['nn_rows']} 条 / "
               f"悬空 {nn_stat['nn_orphan_rows']} 条")
         # 最近邻断链是收尾失败，必须在改变 PM 可见性之前拦住。
-        release = lifecycle.release_to_pm()
+        release = lifecycle.release_to_pm(opp_id_prefix="OPP2-")
 
         ctx.metric_update(
             ("finalize",), status="completed", opportunities=len(created),
-            attached_evidence=attached_total, split_proposals=split_total,
+            attached_evidence=0, split_proposals=split_total,
             revive_proposals=revive_total, release=release,
+            assignment_projection=assignment_stat,
             spu_layer=spu_stat, opp_nn=nn_stat)
-        return {"opportunities": len(created), "attached": attached_total,
+        return {"opportunities": len(created), "attached": 0,
                 "splits": split_total, "revive": revive_total,
                 "release": release,
                 "spu_layer": spu_stat, "opp_nn": nn_stat}
@@ -189,10 +220,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-buckets", type=int, default=0)
     parser.add_argument("--limit-rows", "--limit", dest="limit_rows", type=int, default=0)
     parser.add_argument("--no-vote", action="store_true")
-    parser.add_argument("--skip-finalize", "--skip-cross", action="store_true",
-                        dest="skip_finalize")
-    parser.add_argument("--finalize-only", "--cross-only", action="store_true",
-                        dest="finalize_only")
+    parser.add_argument("--skip-finalize", action="store_true")
+    parser.add_argument("--finalize-only", action="store_true")
     # 默认按 --week 的窗口取池，服务周度增量。全量重建必须显式打开本开关：
     # 机会点层是【跨周去重】的结构，逐周分别生成得到的结果与一次全量生成
     # 并不等价（消解在整池上做才能把跨周的同一问题收敛成一条）。

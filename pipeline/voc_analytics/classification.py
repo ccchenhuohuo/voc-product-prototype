@@ -15,7 +15,30 @@ class Classification:
 
 
 def _has_spu(evidence: Mapping[str, object]) -> bool:
-    """与 PostgreSQL ``spu ∪ spu_inherited`` 非空同口径。"""
+    """按冻结归属判断 v3 行；兼容迁移前纯函数夹具的两个数组字段。"""
+    if "assigned_spu" in evidence or "spu_assignments" in evidence:
+        assigned = evidence.get("assigned_spu")
+        if assigned is not None and (
+            not isinstance(assigned, str) or not assigned.strip()
+        ):
+            raise ValueError("证据 assigned_spu 必须是非空字符串或 None")
+        assignments = evidence.get("spu_assignments")
+        if assignments is None:
+            assignments = []
+        if not isinstance(assignments, (list, tuple)):
+            raise ValueError("证据 spu_assignments 必须是数组或 None")
+        for item in assignments:
+            if not isinstance(item, Mapping):
+                raise ValueError("证据 spu_assignments 的元素必须是对象")
+            value = item.get("assigned_spu")
+            if value is not None and (
+                not isinstance(value, str) or not value.strip()
+            ):
+                raise ValueError("快照 assigned_spu 必须是非空字符串")
+        return bool(assigned) or any(item.get("assigned_spu") for item in assignments)
+
+    # 历史迁移/夹具仍需覆盖 voc_has_spu() 的四种数组状态；正式 v3 取数不会
+    # 投影这两个字段，因此运行时不会绕过物理快照。
     has_value = False
     for field in ("spu", "spu_inherited"):
         values = evidence.get(field)

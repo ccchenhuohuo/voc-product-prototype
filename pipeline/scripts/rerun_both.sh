@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# 清库 + 两个生命周期并行重跑 + 统一收尾。
+# 默认不清库：两个生命周期并行追加 v3 命名空间，再统一收尾。
 # 用法：bash ~/voc-analytics/scripts/rerun_both.sh
 # 前置条件：~/voc-analytics 下已有 .env、.venv 与事实层数据；voc-postgres 正常；
 #   百炼/LLM 凭据与配额可用。目标周当前固定为 2026-W33；
 #   PER_PROC_CONCURRENCY 可调整并发。BUCKETS 默认 0（全量），若设置后实际
 #   截断了桶，生成程序会在调用 LLM 前失败，绝不以子集冒充全量。
-# 警告：脚本会终止匹配 run_generate.py 的进程并清空机会点层；若存在受外键保护的
-# 人工决策则按设计中止。执行前应确认备份并排除其他生成任务。
+# 脚本会终止匹配 run_generate.py 的进程。只有显式设置
+# VOC_RESET_OPPORTUNITY_LAYER=1 才允许进入旧清库路径；默认值 0 用于 shadow。
 #
-# 两段式是正确性要求：并行阶段在清库后先执行生成前提案钩子，再只做生成；
-# 汇聚/拆分/快照/复活检测/放行必须等老品迭代与新品创新都成功后再统一做一遍。
+# 两段式是正确性要求：并行阶段只做生成；拆分/快照/复活检测/放行必须等
+# 老品迭代与新品创新都成功后再统一做一遍。
 set -euo pipefail
 
 # 有超时的子进程监督是正确性硬依赖（见 wait_with_timeout）。必须在停止进程、清库等任何
@@ -46,6 +46,43 @@ wait_with_timeout() {
 
 # 所有应用环境变量都在任何停止/清库动作前加载；后续监督契约据最终值校验。
 set -a; . ./.env; set +a
+
+VOC_RESET_OPPORTUNITY_LAYER="${VOC_RESET_OPPORTUNITY_LAYER:-0}"
+case "$VOC_RESET_OPPORTUNITY_LAYER" in
+  0|1) ;;
+  *)
+    echo "!! VOC_RESET_OPPORTUNITY_LAYER 只接受 0/1，未做任何变更。" >&2
+    exit 2
+    ;;
+esac
+
+# 清库开关必须与灰度状态绑定：兼容视图仍指向 v2 时直接拒绝，不能只警告。
+# 该检查发生在停止进程与清库之前。
+if [[ "$VOC_RESET_OPPORTUNITY_LAYER" == "1" ]]; then
+  COMPAT_TARGET=$(.venv/bin/python - <<'PYEOF'
+from voc_analytics import db
+rows = db.q("""
+  SELECT c.relkind,
+         CASE WHEN c.relkind = 'v' THEN pg_get_viewdef(c.oid, true) ELSE '' END AS definition
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname = 'voc_spu_issue'
+""")
+if not rows or rows[0]["relkind"] != "v":
+    print("unknown")
+elif "voc_spu_issue_v3" in (rows[0].get("definition") or ""):
+    print("v3")
+elif "voc_spu_issue_v2" in (rows[0].get("definition") or ""):
+    print("v2")
+else:
+    print("unknown")
+PYEOF
+  )
+  if [[ "$COMPAT_TARGET" != "v3" ]]; then
+    echo "!! 兼容视图尚未完成 v3 灰度，禁止清库（当前状态：$COMPAT_TARGET）。" >&2
+    exit 2
+  fi
+fi
 
 # 全局闸门 _GATE 是【进程内】的信号量，两个进程各持一份，所以每个进程分一半。
 # 2026-08-17 复测拐点由 64 上移到 96（128 起连接被对端掐断），故每进程 48。
@@ -284,22 +321,36 @@ echo "== 阶段零：G4 判定预热（并发 ${VOC_LLM_CONCURRENCY}，run_id=${
   echo "!! G4 预热失败，中止重跑（机会层尚未清空，无损失）"; exit 1
 }
 
-echo "== 清空机会点层（保留事实层）=="
-# 人工决策表不在清理范围内：它没有 ON DELETE CASCADE 是有意的保护。
-# 库里若已有人工决策，DELETE 会因外键失败。整段清理必须同时
-# 回滚，不能先提交 TRUNCATE 留下半清库。
-docker exec voc-postgres psql -U voc_admin -d voc -q \
-  -v ON_ERROR_STOP=1 \
-  --single-transaction \
-  -c "TRUNCATE voc_opp_evidence, voc_opp_snapshot, voc_proposal, voc_opp_lineage CASCADE;" \
-  -c "DELETE FROM voc_opportunity;" \
-  -c "DELETE FROM voc_unclassified_evidence;" || {
-    echo "!! 清库失败（可能存在人工决策行）；本次清理已整体回滚。"
-    exit 1
-  }
-OPP_COUNT="$(docker exec voc-postgres psql -U voc_admin -d voc -tAc \
-  'SELECT count(*) FROM voc_opportunity')"
-echo "   机会点: $OPP_COUNT"
+if [[ "$VOC_RESET_OPPORTUNITY_LAYER" == "1" ]]; then
+  echo "== 显式清空机会点层（保留事实层）=="
+  # 人工决策表不在清理范围内：它没有 ON DELETE CASCADE 是有意的保护。
+  # 库里若已有人工决策，DELETE 会因外键失败。整段清理必须同时
+  # 回滚，不能先提交 TRUNCATE 留下半清库。
+  docker exec voc-postgres psql -U voc_admin -d voc -q \
+    -v ON_ERROR_STOP=1 \
+    --single-transaction \
+    -c "TRUNCATE voc_opp_evidence, voc_opp_snapshot, voc_proposal, voc_opp_lineage CASCADE;" \
+    -c "DELETE FROM voc_opportunity;" \
+    -c "DELETE FROM voc_unclassified_evidence;" || {
+      echo "!! 清库失败（可能存在人工决策行）；本次清理已整体回滚。"
+      exit 1
+    }
+  OPP_COUNT="$(docker exec voc-postgres psql -U voc_admin -d voc -tAc \
+    'SELECT count(*) FROM voc_opportunity')"
+  echo "   机会点: $OPP_COUNT"
+else
+  echo "== shadow 模式：保留 v2 与既有 v3 行，不执行清库 =="
+fi
+
+# 快照必须由 supervisor 单进程准备一次，且位于两个生命周期进程启动之前。
+echo "== 冻结归属快照（run_id=${RUN_ID}）=="
+SNAPSHOT_ROWS=$(.venv/bin/python - "$RUN_ID" <<'PYEOF'
+import sys
+from voc_analytics import db
+print(db.prepare_assign_snapshot(sys.argv[1]))
+PYEOF
+)
+echo "   冻结归属 ${SNAPSHOT_ROWS} 行"
 
 export VOC_LLM_CONCURRENCY="$PER_PROC_CONCURRENCY"
 
@@ -384,7 +435,7 @@ if (( RC_EXISTING != 0 || RC_INNOVATION != 0 )); then
   exit "$FAIL_RC"
 fi
 
-echo "== 阶段二：统一收尾（汇聚 + 拆分检测 + 快照 + 复活检测 + 放行）=="
+echo "== 阶段二：统一收尾（拆分检测 + 快照 + 复活检测 + 放行）=="
 # 收尾单进程，可以用满整个并发额度
 export VOC_LLM_CONCURRENCY=64
 RC_FINALIZE=0

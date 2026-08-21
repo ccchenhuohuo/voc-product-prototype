@@ -30,19 +30,29 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "run_generate
 EXPLODE = pathlib.Path(__file__).resolve().parents[1] / "voc_analytics" / "explode.py"
 
 
-def test_finalize_refreshes_the_derived_layer_after_attaching_evidence() -> None:
+def test_finalize_verifies_assignment_then_refreshes_both_derived_generations() -> None:
     text = SCRIPT.read_text()
 
     assert "explode" in text, "run_generate 必须导入 explode 才能刷新派生层"
     refresh = text.index("explode.refresh(")
     nn_refresh = text.index("pipeline.refresh_opportunity_neighbors(")
-    release = text.index("release = lifecycle.release_to_pm()")
+    release = text.index(
+        'release = lifecycle.release_to_pm(opp_id_prefix="OPP2-")')
 
-    # 刷新必须发生在证据挂靠与跨源合并之后，否则刷出来的还是半成品。
-    attach = text.index("pipeline.attach_evidence(")
+    # v3 不再做收尾补证；指纹/投影校验必须在任何派生刷新之前完成。
+    projection = text.index("pipeline.validate_assignment_projection(")
     snapshot = text.index("INSERT INTO voc_opp_snapshot")
-    assert attach < refresh, "派生层刷新早于证据挂靠，会漏掉本轮新挂的证据"
+    assert "pipeline.attach_evidence(" not in text
+    assert projection < snapshot < refresh
     assert snapshot < refresh, "派生层刷新应在快照落库之后收口"
+    denominator_block = text[snapshot:refresh]
+    assert "FROM voc_assign_snapshot s" in denominator_block
+    assert "SELECT DISTINCT e.message_id, e.seq" in denominator_block
+    assert "s.assigned_spu = o.core_tag" in denominator_block
+    assert "denominator_scope" in denominator_block
+    assert "e.tag IS NOT DISTINCT FROM o.core_tag" not in denominator_block
+    assert "COALESCE(s.base_total, 0) <= 0" in denominator_block
+    assert "COALESCE(s.neg_total, 0) > COALESCE(s.base_total, 0)" in denominator_block
     assert refresh < nn_refresh, "最近邻必须在机会点与派生层写入完成后刷新"
     assert nn_refresh < release, "悬空校验失败时不得先改变 PM 可见性"
 
@@ -61,7 +71,10 @@ def test_refresh_helper_calls_the_database_function() -> None:
     text = EXPLODE.read_text()
 
     assert "voc_refresh_spu_layer()" in text
-    for key in ("spu_count", "issue_count", "n_eff_count"):
+    for key in (
+        "spu_count", "issue_count", "v2_issue_count", "v3_issue_count",
+        "scope_pending_count",
+    ):
         assert key in text, f"刷新统计缺少 {key}，收尾日志无法自证"
 
 

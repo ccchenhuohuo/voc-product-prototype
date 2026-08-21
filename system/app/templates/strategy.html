@@ -23,7 +23,7 @@
         <td class="r n dim">{{ (row.evi_total or 0)|num }}</td>
       </tr>
     {% else %}
-      <tr><td class="empty" colspan="4">当前范围下没有战略机会。</td></tr>
+      <tr><td class="empty" colspan="4">{% if scope_unavailable %}v3 战略口径尚未计算，当前不展示旧版扩散结果。{% else %}当前范围下没有战略机会。{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>

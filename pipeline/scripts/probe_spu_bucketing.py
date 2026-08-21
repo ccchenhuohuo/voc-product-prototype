@@ -10,8 +10,7 @@
 
   2. **质量**：同一批证据在 v2 标签桶与 v3 SPU 桶下的分组差异。
 
-同时按规格 §7.1 做「桶内标签直方图」提示词特征的成对对比（--tag-hist），
-因为该特征目前【没有实现】，不做 A/B 就无法声称 v3 分桶更好。
+归属必须来自一个已冻结的 v3 快照；不得从消息数组重新推导。
 
 安全边界：本脚本只 SELECT，不 INSERT/UPDATE/DELETE，不调用 db.save_*，
 不写 voc_run_log。RunCtx 是纯内存对象，账本不落库。
@@ -35,49 +34,35 @@ from voc_analytics.stages import stage1  # noqa: E402
 
 OUT_DEFAULT = "/tmp/probe_spu_bucketing.json"
 
-# 与 v2 同一批证据：本轮生成期挂靠到老品卡的行（排除 cross_line —— 那是
-# 收尾跨源汇聚的产物，正是 v3 要删掉的环节，计入会污染对比基底）。
+# 直接读取本轮冻结快照。快照已按 G5 口径筛选，并对多 SPU 证据逐行展开。
 POOL_SQL = """
-WITH fact AS (
-  SELECT DISTINCT oe.message_id, oe.seq
-    FROM voc_opp_evidence oe
-    JOIN voc_opportunity o ON o.opp_id = oe.opp_id
-   WHERE o.opp_type = '老品迭代' AND oe.match_by IN ('rule','llm')
-)
-SELECT f.message_id, f.seq, e.snippet, e.tag, e.tax_path, e.tax_domain,
+SELECT s.message_id, s.seq, s.assigned_spu, s.source AS assignment_source,
+       e.snippet, e.tag, e.tax_path, e.tax_domain,
        m.star, m.category, m.prod_line, m.src_line, m.content,
        left(COALESCE(NULLIF(btrim(m.content_zh), ''),
                      NULLIF(btrim(m.content), '')), 400) AS full_text,
        COALESCE(NULLIF(btrim(e.snippet), ''),
-                NULLIF(btrim(m.content), '')) AS evidence_text,
-       COALESCE(m.spu, '{}'::text[]) || COALESCE(m.spu_inherited, '{}'::text[])
-         AS spu_all,
-       COALESCE(cardinality(m.spu), 0) > 0 AS has_fact_spu
-  FROM fact f
-  JOIN voc_evidence e ON e.message_id = f.message_id AND e.seq = f.seq
-  JOIN voc_message m ON m.message_id = f.message_id
- ORDER BY f.message_id, f.seq
+                NULLIF(btrim(m.content), '')) AS evidence_text
+  FROM voc_assign_snapshot s
+  JOIN voc_evidence e ON e.message_id = s.message_id AND e.seq = s.seq
+  JOIN voc_message m ON m.message_id = s.message_id
+ WHERE s.run_id = %s
+ ORDER BY s.message_id, s.seq, s.assigned_spu
 """
 
 
 def fan_out(rows: list[dict]) -> dict[str, list[dict]]:
-    """按 spu ∪ spu_inherited 扇出分桶。多 SPU 证据进入每个被提及的桶。"""
+    """按快照已展开的 assigned_spu 分桶。"""
     buckets: dict[str, list[dict]] = {}
     for row in rows:
-        seen: set[str] = set()
-        for raw in row.get("spu_all") or []:
-            spu = (raw or "").strip()
-            if not spu or spu in seen:
-                continue
-            seen.add(spu)
-            item = dict(row)
-            item["assigned_spu"] = spu
-            item["assignment_source"] = "fact" if row["has_fact_spu"] else "inherited"
-            buckets.setdefault(spu, []).append(item)
+        spu = (row.get("assigned_spu") or "").strip()
+        if not spu:
+            raise ValueError("快照行缺 assigned_spu")
+        buckets.setdefault(spu, []).append(dict(row))
     return buckets
 
 
-def bucket_context(spu: str, items: list[dict], tag_hist: bool) -> dict:
+def bucket_context(spu: str, items: list[dict]) -> dict:
     """镜像 pipeline._bucket_context，但分块键换成 SPU。"""
     categories = sorted({r.get("category") for r in items if r.get("category")})
     prod_lines = sorted({r.get("prod_line") for r in items if r.get("prod_line")})
@@ -85,20 +70,12 @@ def bucket_context(spu: str, items: list[dict], tag_hist: bool) -> dict:
     stars = [r["star"] for r in items if r.get("star") is not None]
     low = (sum(1 for s in stars if s <= 2) / len(stars)) if stars else None
 
-    tag = spu
-    if tag_hist:
-        # 规格 §7.1 的待实现特征：桶内标签直方图，只作特征不作硬分块。
-        hist = Counter(r.get("tag") for r in items if r.get("tag"))
-        top = "、".join(f"{name}×{n}" for name, n in hist.most_common(8))
-        if top:
-            tag = f"{spu}（桶内标签分布：{top}）"
-
     return {
         "bucket_key": f"老品迭代|{spu}",
         "category": categories[0] if len(categories) == 1 else (
             "跨品类" if categories else "未定"),
         "storage_category": categories[0] if len(categories) == 1 else None,
-        "tag": tag,
+        "tag": spu,
         "tax_path": paths.most_common(1)[0][0] if paths else "",
         "prod_line": prod_lines[0] if len(prod_lines) == 1 else (
             "通用" if prod_lines else "未定"),
@@ -106,8 +83,8 @@ def bucket_context(spu: str, items: list[dict], tag_hist: bool) -> dict:
     }
 
 
-def run_bucket(spu: str, items: list[dict], ctx, tag_hist: bool) -> dict:
-    info = bucket_context(spu, items, tag_hist)
+def run_bucket(spu: str, items: list[dict], ctx) -> dict:
+    info = bucket_context(spu, items)
     started = time.time()
     split = stage1.split_bucket(items, "老品迭代", info, ctx, vote=False)
     groups = stage1.merge_similar_modes(split["groups"], ctx)
@@ -120,8 +97,8 @@ def run_bucket(spu: str, items: list[dict], ctx, tag_hist: bool) -> dict:
         "singletons": sum(1 for g in groups if len(g.get("members", [])) == 1),
         "unclassified": len(split["unclassified"]),
         "dropped": len(split["dropped"]),
-        "inherited_rows": sum(1 for i in items
-                              if i["assignment_source"] == "inherited"),
+        "root_rows": sum(1 for i in items
+                         if i["assignment_source"] == "root"),
         "elapsed_s": round(time.time() - started, 1),
         "mode_names": [g.get("mode_name") for g in groups],
         "sample": [
@@ -136,25 +113,19 @@ def run_bucket(spu: str, items: list[dict], ctx, tag_hist: bool) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--run-id", required=True,
+                    help="已由 voc_prepare_assign_snapshot 准备的运行 ID")
     ap.add_argument("--limit-buckets", type=int, default=0,
                     help="只跑最大的 N 个 SPU 桶；0 = 全部 277 个")
     ap.add_argument("--min-rows", type=int, default=1,
                     help="跳过小于该行数的桶")
-    ap.add_argument("--tag-hist", action="store_true",
-                    help="启用规格 §7.1 的桶内标签直方图特征（成对对比用）")
     ap.add_argument("--concurrency", type=int, default=8,
                     help="并行桶数；桶内批次另有 LLM_CONCURRENCY")
-    ap.add_argument("--merge-cos", type=float, default=None,
-                    help="覆盖 MODE_MERGE_COS（默认 0.85）。它只决定跨批模式归并的"
-                         "【候选】，判同仍由 L3 做——降低它是把漏合并的对子送进 L3，"
-                         "误合并由 L3 挡。规格 §8.3 的主门槛就是漏合并。")
     ap.add_argument("--out", default=OUT_DEFAULT)
     args = ap.parse_args()
 
-    if args.merge_cos is not None:
-        C.MODE_MERGE_COS = args.merge_cos    # 探针内存态覆盖，不改配置文件
-
-    rows = db.q(POOL_SQL)
+    db.verify_assign_snapshot(args.run_id)
+    rows = db.q(POOL_SQL, (args.run_id,))
     buckets = fan_out(rows)
     unique_facts = len({(r["message_id"], r["seq"]) for r in rows})
     fanned = sum(len(v) for v in buckets.values())
@@ -167,7 +138,6 @@ def main() -> None:
     print(f"[探针] 唯一事实 U={unique_facts}  扇出行 F={fanned}  "
           f"F/U={fanned/unique_facts:.3f}")
     print(f"[探针] SPU 桶 {len(buckets)} 个，本次跑 {len(picked)} 个，"
-          f"标签直方图={'开' if args.tag_hist else '关'}，"
           f"MODE_MERGE_COS={C.MODE_MERGE_COS}")
 
     ctx = C.RunCtx(run_id=f"probe_spu_{int(time.time())}", week="probe")
@@ -175,7 +145,7 @@ def main() -> None:
     started = time.time()
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = {pool.submit(run_bucket, s, i, ctx, args.tag_hist): s
+        futures = {pool.submit(run_bucket, s, i, ctx): s
                    for s, i in picked}
         for done, fut in enumerate(as_completed(futures), 1):
             spu = futures[fut]
@@ -196,7 +166,7 @@ def main() -> None:
 
     usage = llm.usage()
     summary = {
-        "config": {"tag_hist": args.tag_hist, "buckets_run": len(picked),
+        "config": {"assign_run_id": args.run_id, "buckets_run": len(picked),
                    "min_rows": args.min_rows, "concurrency": args.concurrency,
                    "merge_cos": C.MODE_MERGE_COS},
         "pool": {"unique_facts_U": unique_facts, "fanned_rows_F": fanned,
@@ -213,7 +183,7 @@ def main() -> None:
             if total_groups else None,
             "unclassified": sum(r["unclassified"] for r in ok),
             "dropped": sum(r["dropped"] for r in ok),
-            "inherited_rows": sum(r["inherited_rows"] for r in ok),
+            "root_rows": sum(r["root_rows"] for r in ok),
             "elapsed_s": round(elapsed, 1),
             "llm_calls": ctx.llm_calls, "llm_tokens": ctx.llm_tokens,
             "llm_failed_modes": ctx.llm_failed_modes,

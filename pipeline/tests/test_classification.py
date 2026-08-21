@@ -45,6 +45,22 @@ class ClassificationTest(unittest.TestCase):
         )
         self.assertEqual(evidence[0]["spu"], [])
 
+    def test_has_spu_four_array_states_match_sql_contract(self) -> None:
+        cases = (
+            (["SPU-FACT"], [], "R1"),
+            ([], ["SPU-ROOT"], "R1"),
+            (["SPU-FACT"], ["SPU-ROOT"], "R1"),
+            ([], [], "R2"),
+        )
+        for fact, root, expected_rule in cases:
+            with self.subTest(fact=fact, root=root):
+                result = classify_evidence([{
+                    "source_requires_spu": False,
+                    "spu": fact,
+                    "spu_inherited": root,
+                }])
+                self.assertEqual(result.classify_rule, expected_rule)
+
     def test_r2_social_without_spu_is_innovation(self) -> None:
         result = classify_evidence(
             [{"source_requires_spu": False, "spu": []}]

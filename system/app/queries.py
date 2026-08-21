@@ -1,6 +1,36 @@
 """VOC 看板的全部 SQL。路由中不得散落查询语句。"""
 
 
+def _assignment_snapshot_ctes() -> str:
+    """当前已发布 v3 问题层对应的消息级冻结归属。"""
+    return """
+latest_assignment_run AS MATERIALIZED (
+  SELECT split_part(r.run_id, ':', 1) AS run_id
+    FROM voc_run_log r
+   WHERE r.stage = 'finalize' AND r.status = 'success'
+     -- shadow 期间兼容视图仍指向 v2，不能提前把 v3 原声混进产品页。
+     AND position(
+           'voc_spu_issue_v3'
+           IN pg_get_viewdef('voc_spu_issue'::regclass, true)
+         ) > 0
+     AND EXISTS (
+       SELECT 1
+         FROM voc_run_log snapshot_log
+        WHERE snapshot_log.run_id =
+              split_part(r.run_id, ':', 1) || ':assign_snapshot'
+          AND snapshot_log.stage = 'assign_snapshot'
+          AND snapshot_log.status = 'success'
+     )
+   ORDER BY r.finished_at DESC NULLS LAST, r.run_id DESC
+   LIMIT 1
+), snapshot_message_spu AS MATERIALIZED (
+  SELECT DISTINCT s.message_id, s.assigned_spu AS spu
+    FROM voc_assign_snapshot s
+    JOIN latest_assignment_run r ON r.run_id = s.run_id
+)
+"""
+
+
 # 侧栏读数与 base.html 的 nav_counts 键一一对应。老品迭代双数分别是
 # voc_spu 全量产品数，以及至少有一张现存问题卡的 SPU 数。
 SHELL_COUNTS = """
@@ -13,12 +43,15 @@ SELECT
       AND o.merged_into IS NULL) AS iter,
   (SELECT count(*)::int
     FROM voc_opportunity o
-    WHERE o.opp_type = '新品创新'
+    WHERE o.opp_id LIKE 'OPP2-%'
+      AND o.opp_type = '新品创新'
       AND o.classification_state = '确定'
       AND o.merged_into IS NULL) AS inno,
   (SELECT count(*)::int
     FROM voc_opportunity o
-    WHERE o.scope = '品线级'
+    WHERE o.opp_id LIKE 'OPP2-%'
+      AND o.scope_source IS DISTINCT FROM 'v3-未计算'
+      AND o.scope = '品线级'
       AND o.classification_state = '确定'
       AND o.merged_into IS NULL) AS strategy,
   (SELECT count(DISTINCT m.spu)::int
@@ -102,6 +135,7 @@ WITH label_defs(label_order, label) AS (
     JOIN voc_opportunity o ON o.opp_id = x.opp_id
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
+     AND o.opp_id LIKE 'OPP2-%'
      AND o.opp_type IN ('老品迭代', '新品创新')
    GROUP BY x.message_id
 ), aggregated AS (
@@ -159,6 +193,7 @@ WITH primary_evidence AS MATERIALIZED (
     JOIN voc_opportunity o ON o.opp_id = x.opp_id
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
+     AND o.opp_id LIKE 'OPP2-%'
      AND o.opp_type IN ('老品迭代', '新品创新')
    GROUP BY x.message_id
 ), tag_counts AS (
@@ -238,7 +273,8 @@ WITH statuses(status_order, status) AS (
          count(*)::bigint AS item_count
     FROM voc_opportunity o
     LEFT JOIN voc_opportunity_manual m ON m.opp_id = o.opp_id
-   WHERE o.opp_type = '新品创新'
+   WHERE o.opp_id LIKE 'OPP2-%'
+     AND o.opp_type = '新品创新'
    GROUP BY COALESCE(m.status, '考虑中')
 ), lifecycle_rows AS (
   SELECT 1 AS lifecycle_order, '老品迭代'::text AS lifecycle,
@@ -263,6 +299,7 @@ WITH statuses(status_order, status) AS (
              count(*) FILTER (WHERE COALESCE(o.backlog, true))::bigint
                AS unreleased_count
         FROM voc_opportunity o
+       WHERE o.opp_id LIKE 'OPP2-%'
     ) c
    CROSS JOIN LATERAL (
      VALUES (1, '已放行'::text, c.released_count),
@@ -515,7 +552,7 @@ WITH filters AS (
          %s::text AS name_pattern,
          %s::text AS sku_pattern,
          %s::text AS category
-), issue_state AS (
+), """ + _assignment_snapshot_ctes() + """, issue_state AS (
   SELECT i.spu, i.opp_id,
          COALESCE(m.status, '考虑中') AS status,
          m.revived_at
@@ -534,24 +571,16 @@ WITH filters AS (
 ), recent AS (
   SELECT x.spu, count(*)::int AS recent_evi_count
     FROM issue_state x
-    JOIN voc_opp_evidence oe ON oe.opp_id = x.opp_id
+    JOIN voc_opp_evidence oe
+      ON oe.opp_id = x.opp_id AND oe.assigned_spu = x.spu
     JOIN voc_message msg ON msg.message_id = oe.message_id
-   WHERE (x.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-          OR x.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
-     AND msg.publish_time >= now() - interval '60 days'
+   WHERE msg.publish_time >= now() - interval '60 days'
    GROUP BY x.spu
 ), raw_voice_counts AS (
-  SELECT x.spu, count(DISTINCT msg.message_id)::int AS raw_voice_count
-    FROM voc_message msg
+  SELECT x.spu, count(DISTINCT x.message_id)::int AS raw_voice_count
+    FROM snapshot_message_spu x
+    JOIN voc_message msg ON msg.message_id = x.message_id
     JOIN voc_social_gate g ON g.message_id = msg.message_id
-   CROSS JOIN LATERAL (
-     SELECT DISTINCT raw.spu
-       FROM unnest(
-         COALESCE(msg.spu, ARRAY[]::text[])
-         || COALESCE(msg.spu_inherited, ARRAY[]::text[])
-       ) AS raw(spu)
-      WHERE NULLIF(btrim(raw.spu), '') IS NOT NULL
-   ) x
    WHERE g.cls IN ('诉求缺口', '产品缺陷')
      AND g.prompt_ver = (SELECT prompt_ver FROM voc_social_gate
                           ORDER BY judged_at DESC LIMIT 1)
@@ -563,7 +592,8 @@ WITH filters AS (
          FROM voc_opp_evidence oe
          JOIN voc_spu_issue i
            ON i.opp_id = oe.opp_id AND i.spu = x.spu
-        WHERE oe.message_id = msg.message_id
+        WHERE oe.message_id = x.message_id
+          AND oe.assigned_spu = x.spu
      )
    GROUP BY x.spu
 ), category_counts AS (
@@ -654,12 +684,11 @@ WITH keys AS (
          mode() WITHIN GROUP (ORDER BY e.tax_leaf)
            FILTER (WHERE e.tax_leaf IS NOT NULL) AS tax_leaf
     FROM keys k
-    JOIN voc_opp_evidence oe ON oe.opp_id = k.opp_id
+    JOIN voc_opp_evidence oe
+      ON oe.opp_id = k.opp_id AND oe.assigned_spu = k.spu
     JOIN voc_message msg ON msg.message_id = oe.message_id
     JOIN voc_evidence e
       ON e.message_id = oe.message_id AND e.seq = oe.seq
-   WHERE (k.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-          OR k.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
    GROUP BY k.spu, k.opp_id
 )
 SELECT k.spu, k.opp_id,
@@ -695,8 +724,8 @@ SELECT k.spu, k.opp_id,
 """
 
 
-# 新品页只有需求缺口一种业务性质，列表直接以 core_tag 表达预聚类簇，
-# 再按证据数组织。互动、标签覆盖与品牌都从机会点证据实时聚合；品牌单独
+# 新品页只有需求缺口一种业务性质，v3 的 core_tag 固定为空，列表按机会点
+# 标题与证据数组织。互动、标签覆盖与品牌都从机会点证据实时聚合；品牌单独
 # 拆分为 CTE，避免 unnest(brands) 把 interactions 与覆盖计数成倍放大。
 BOARD_INNOVATIONS = """
 WITH evidence_agg AS (
@@ -735,7 +764,8 @@ SELECT o.opp_id, o.title, o.prod_line, o.core_tag,
   LEFT JOIN voc_opportunity_manual m ON m.opp_id = o.opp_id
   LEFT JOIN evidence_agg a ON a.opp_id = o.opp_id
   LEFT JOIN brand_agg b ON b.opp_id = o.opp_id
- WHERE o.opp_type = '新品创新'
+ WHERE o.opp_id LIKE 'OPP2-%'
+   AND o.opp_type = '新品创新'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
  ORDER BY o.evi_total DESC NULLS LAST,
@@ -786,12 +816,11 @@ SELECT s.*,
 """
 
 
-# SPU 原声完整列表与列表页计数严格同口径：直接或继承命中 SPU，social gate
-# 分类为诉求缺口/产品缺陷，且消息尚未被任一现存机会点证据引用。
+# SPU 原声完整列表与列表页计数严格读当前已发布的冻结归属。
 SPU_RAW_VOICES = """
 WITH target AS (
   SELECT %s::text AS spu
-)
+), """ + _assignment_snapshot_ctes() + """
 SELECT msg.message_id, g.cls, NULLIF(btrim(g.claim), '') AS claim,
        COALESCE(NULLIF(btrim(msg.content_zh), ''),
                 NULLIF(btrim(msg.content), ''), '—') AS content,
@@ -799,12 +828,10 @@ SELECT msg.message_id, g.cls, NULLIF(btrim(g.claim), '') AS claim,
        msg.message_group_id, msg.message_type,
        msg.author_name, msg.message_title,
        g.confidence, g.votes, g.prompt_ver, g.judged_at
-  FROM voc_message msg
+  FROM snapshot_message_spu a
+  JOIN voc_message msg ON msg.message_id = a.message_id
   JOIN voc_social_gate g ON g.message_id = msg.message_id
-  JOIN target t
-    ON t.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
-    OR t.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+  JOIN target t ON t.spu = a.spu
  WHERE g.cls IN ('诉求缺口', '产品缺陷')
    AND g.prompt_ver = (SELECT prompt_ver FROM voc_social_gate
                         ORDER BY judged_at DESC LIMIT 1)
@@ -815,6 +842,7 @@ SELECT msg.message_id, g.cls, NULLIF(btrim(g.claim), '') AS claim,
        JOIN voc_spu_issue i
          ON i.opp_id = oe.opp_id AND i.spu = t.spu
       WHERE oe.message_id = msg.message_id
+        AND oe.assigned_spu = t.spu
    )
  ORDER BY msg.publish_time DESC NULLS LAST, msg.message_id
 """
@@ -831,6 +859,7 @@ WITH keys AS (
     FROM voc_spu_issue_manual m
     JOIN voc_opportunity o ON o.opp_id = m.opp_id
    WHERE m.spu = %s
+     AND o.opp_id LIKE 'OPP2-%'
      AND o.classification_state = '确定'
      AND o.opp_type = '老品迭代'
 ), evidence_agg AS (
@@ -848,12 +877,11 @@ WITH keys AS (
          mode() WITHIN GROUP (ORDER BY e.tax_leaf)
            FILTER (WHERE e.tax_leaf IS NOT NULL) AS tax_leaf
     FROM keys k
-    JOIN voc_opp_evidence oe ON oe.opp_id = k.opp_id
+    JOIN voc_opp_evidence oe
+      ON oe.opp_id = k.opp_id AND oe.assigned_spu = k.spu
     JOIN voc_message msg ON msg.message_id = oe.message_id
     JOIN voc_evidence e
       ON e.message_id = oe.message_id AND e.seq = oe.seq
-   WHERE (k.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-          OR k.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
    GROUP BY k.spu, k.opp_id
 )
 SELECT k.spu, k.opp_id,
@@ -907,12 +935,11 @@ WITH key AS (
          mode() WITHIN GROUP (ORDER BY e.tax_leaf)
            FILTER (WHERE e.tax_leaf IS NOT NULL) AS tax_leaf
     FROM key k
-    JOIN voc_opp_evidence oe ON oe.opp_id = k.opp_id
+    JOIN voc_opp_evidence oe
+      ON oe.opp_id = k.opp_id AND oe.assigned_spu = k.spu
     JOIN voc_message msg ON msg.message_id = oe.message_id
     JOIN voc_evidence e
       ON e.message_id = oe.message_id AND e.seq = oe.seq
-   WHERE (k.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-          OR k.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
    GROUP BY k.spu, k.opp_id
 )
 SELECT k.spu, k.opp_id,
@@ -968,12 +995,7 @@ SELECT oe.message_id, oe.seq,
     ON e.message_id = oe.message_id AND e.seq = oe.seq
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE oe.opp_id = %s
-   -- 必须与 voc_spu_issue 的成卡口径一致（026 用 spu ∪ spu_inherited）。
-   -- 只查 msg.spu 会让「卡片显示 4 条证据、点进去空白」：社媒消息的 SPU
-   -- 多来自组内继承，事实数组是空的。2026-08-19 生产实测 879 个
-   -- (SPU,问题) 组合里 24 个全空、72 个少显示。
-   AND %s = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+   AND oe.assigned_spu = %s
  ORDER BY msg.publish_time DESC NULLS LAST, oe.message_id, oe.seq
 """
 
@@ -1017,6 +1039,7 @@ SELECT o.opp_id, o.opp_type, o.prod_line, o.core_tag, o.title,
   LEFT JOIN evidence_agg a ON a.opp_id = o.opp_id
   LEFT JOIN brand_agg b ON b.opp_id = o.opp_id
  WHERE o.opp_id = %s
+   AND o.opp_id LIKE 'OPP2-%'
    AND o.opp_type = '新品创新'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
@@ -1050,12 +1073,15 @@ WITH spread AS (
    GROUP BY i.opp_id
 )
 SELECT o.opp_id, o.title, o.prod_line, o.core_tag, o.n_eff, o.scope,
+       o.scope_source,
        o.evi_total, o.released_at,
        COALESCE(s.spu_count, 0)::int AS spu_count
   FROM voc_opportunity o
   LEFT JOIN spread s ON s.opp_id = o.opp_id
  WHERE o.merged_into IS NULL
+   AND o.opp_id LIKE 'OPP2-%'
    AND o.classification_state = '确定'
+   AND o.scope_source IS DISTINCT FROM 'v3-未计算'
    AND o.scope IN ('品线级', '多品', '单品')
  ORDER BY o.n_eff DESC NULLS LAST, o.evi_total DESC, o.opp_id
 """
@@ -1123,11 +1149,11 @@ SELECT m.spu, m.opp_id, m.baseline_evi_count,
   JOIN voc_opp_evidence oe ON oe.opp_id = m.opp_id
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE m.status = '已完成'
+   AND o.opp_id LIKE 'OPP2-%'
    AND o.classification_state = '确定'
    AND o.opp_type = '老品迭代'
    AND m.release_date IS NOT NULL
-   AND (m.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-        OR m.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
+   AND oe.assigned_spu = m.spu
    AND msg.publish_time::date > m.release_date
  GROUP BY m.spu, m.opp_id, m.baseline_evi_count, i.evi_count,
           m.target_release, m.release_date
@@ -1163,6 +1189,7 @@ WITH relation_requirements(object_name, tier, capability) AS (
     ('public.voc_board', 'core', NULL),
     ('public.voc_opp_nn', 'core', NULL),
     ('public.voc_source_probe', 'core', NULL),
+    ('public.voc_assign_snapshot', 'core', NULL),
     ('public.voc_source_policy', 'optional', 'source_attribution'),
     ('public.voc_social_gate', 'optional', 'unclaimed_social')
 ), column_requirements(table_name, column_name, tier, capability) AS (
@@ -1173,7 +1200,6 @@ WITH relation_requirements(object_name, tier, capability) AS (
     ('voc_message', 'content', 'core', NULL),
     ('voc_message', 'content_zh', 'core', NULL),
     ('voc_message', 'retention_until', 'core', NULL),
-    ('voc_message', 'spu', 'core', NULL),
     ('voc_evidence', 'seq', 'core', NULL),
     ('voc_evidence', 'snippet', 'core', NULL),
     ('voc_evidence', 'sentiment', 'core', NULL),
@@ -1182,13 +1208,19 @@ WITH relation_requirements(object_name, tier, capability) AS (
     ('voc_opportunity', 'classify_rule', 'core', NULL),
     ('voc_opportunity', 'merged_into', 'core', NULL),
     ('voc_opportunity', 'rank_score', 'core', NULL),
+    ('voc_opportunity', 'scope_source', 'core', NULL),
+    ('voc_opp_evidence', 'assigned_spu', 'core', NULL),
+    ('voc_opp_evidence', 'assignment_source', 'core', NULL),
+    ('voc_opp_evidence', 'assign_run_id', 'core', NULL),
+    ('voc_assign_snapshot', 'run_id', 'core', NULL),
+    ('voc_assign_snapshot', 'assigned_spu', 'core', NULL),
+    ('voc_assign_snapshot', 'source', 'core', NULL),
     ('voc_opportunity', 'source_lines', 'optional', 'source_attribution'),
     ('voc_opportunity', 'evi_by_source', 'optional', 'source_attribution'),
     ('voc_message', 'message_group_id', 'optional', 'social_threads'),
     ('voc_message', 'message_type', 'optional', 'social_threads'),
     ('voc_message', 'parent_id', 'optional', 'social_threads'),
     ('voc_message', 'message_title', 'optional', 'social_threads'),
-    ('voc_message', 'spu_inherited', 'optional', 'spu_inherited'),
     ('voc_spu_issue', 'msg_count', 'optional', 'spu_msg_count'),
     ('voc_message', 'msg_sentiment', 'optional', 'msg_sentiment')
 ), index_requirements(object_name, tier, capability) AS (
@@ -1313,6 +1345,7 @@ WITH args AS (
    CROSS JOIN settings h
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
+     AND o.opp_id LIKE 'OPP2-%'
      AND o.mode_vec IS NOT NULL
      AND (
        NOT a.exclude_generic
@@ -1388,6 +1421,7 @@ WITH args AS (
    CROSS JOIN args a
    WHERE o.classification_state = '确定'
      AND o.merged_into IS NULL
+     AND o.opp_id LIKE 'OPP2-%'
      AND (a.opp_type = '' OR o.opp_type = a.opp_type)
      AND (a.src_line = '' OR o.src_line = a.src_line)
      AND (a.category = '' OR o.category = a.category)
@@ -1471,6 +1505,7 @@ SELECT o.opp_id, o.opp_type, o.src_line, o.prod_line, o.category,
  CROSS JOIN args a
  WHERE o.classification_state = '确定'
    AND o.merged_into IS NULL
+   AND o.opp_id LIKE 'OPP2-%'
    AND (o.title ILIKE a.pattern ESCAPE E'\\'
         OR o.problem_mode ILIKE a.pattern ESCAPE E'\\'
         OR o.core_tag ILIKE a.pattern ESCAPE E'\\')
@@ -1566,6 +1601,7 @@ WITH args AS (
           WHERE i.spu = s.spu
             AND o.classification_state = '确定'
             AND o.merged_into IS NULL
+            AND o.opp_id LIKE 'OPP2-%'
             AND (a.opp_type = '' OR o.opp_type = a.opp_type)
             AND (a.src_line = '' OR o.src_line = a.src_line)
             AND (a.week_from = '' OR o.last_week >= a.week_from)
@@ -1625,15 +1661,12 @@ SELECT oe.opp_id AS via_opp_id, oe.message_id, oe.seq, oe.attach_week,
  WHERE e.snippet ILIKE a.pattern ESCAPE E'\\'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
+   AND o.opp_id LIKE 'OPP2-%'
    AND (a.opp_type = '' OR o.opp_type = a.opp_type)
    AND (msg.retention_until IS NULL OR msg.retention_until >= current_date)
    AND (a.src_line = '' OR msg.src_line = a.src_line)
    AND (a.category = '' OR o.category = a.category)
-   AND (a.spu = '' OR EXISTS (
-     SELECT 1
-       FROM voc_spu_issue i
-      WHERE i.opp_id = oe.opp_id AND i.spu = a.spu
-   ))
+   AND (a.spu = '' OR oe.assigned_spu = a.spu)
    AND (a.week_from = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') >= a.week_from)
    AND (a.week_to = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') <= a.week_to)
    AND (
@@ -1684,14 +1717,11 @@ SELECT count(*) FILTER (
  WHERE e.snippet ILIKE a.pattern ESCAPE E'\\'
    AND o.classification_state = '确定'
    AND o.merged_into IS NULL
+   AND o.opp_id LIKE 'OPP2-%'
    AND (a.opp_type = '' OR o.opp_type = a.opp_type)
    AND (a.src_line = '' OR msg.src_line = a.src_line)
    AND (a.category = '' OR o.category = a.category)
-   AND (a.spu = '' OR EXISTS (
-     SELECT 1
-       FROM voc_spu_issue i
-      WHERE i.opp_id = oe.opp_id AND i.spu = a.spu
-   ))
+   AND (a.spu = '' OR oe.assigned_spu = a.spu)
    AND (a.week_from = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') >= a.week_from)
    AND (a.week_to = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') <= a.week_to)
    AND (
@@ -1764,11 +1794,7 @@ SELECT oe.opp_id AS via_opp_id, oe.message_id, oe.seq, oe.attach_week,
  WHERE oe.opp_id = ANY(a.opp_ids)
    AND (msg.retention_until IS NULL OR msg.retention_until >= current_date)
    AND (a.src_line = '' OR msg.src_line = a.src_line)
-   AND (a.spu = '' OR EXISTS (
-     SELECT 1
-       FROM voc_spu_issue i
-      WHERE i.opp_id = oe.opp_id AND i.spu = a.spu
-   ))
+   AND (a.spu = '' OR oe.assigned_spu = a.spu)
    AND (a.week_from = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') >= a.week_from)
    AND (a.week_to = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') <= a.week_to)
  ORDER BY array_position(a.opp_ids, oe.opp_id),
@@ -1796,11 +1822,7 @@ SELECT count(*) FILTER (WHERE msg.retention_until < current_date)::int
  CROSS JOIN args a
  WHERE oe.opp_id = ANY(a.opp_ids)
    AND (a.src_line = '' OR msg.src_line = a.src_line)
-   AND (a.spu = '' OR EXISTS (
-     SELECT 1
-       FROM voc_spu_issue i
-      WHERE i.opp_id = oe.opp_id AND i.spu = a.spu
-   ))
+   AND (a.spu = '' OR oe.assigned_spu = a.spu)
    AND (a.week_from = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') >= a.week_from)
    AND (a.week_to = '' OR to_char(msg.publish_time AT TIME ZONE 'Asia/Shanghai', 'IYYY-"W"IW') <= a.week_to)
 """
@@ -1948,7 +1970,8 @@ SELECT msg.message_id, msg.msg_sentiment
 
 
 MCP_VOICES_UNCLAIMED = """
-WITH target AS (SELECT %s::text AS spu)
+WITH target AS (SELECT %s::text AS spu),
+""" + _assignment_snapshot_ctes() + """
 SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
        msg.publish_time, msg.country, msg.lang, msg.url,
        msg.content AS content_raw, msg.content_zh, msg.star, msg.interactions,
@@ -1957,11 +1980,10 @@ SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
        g.cls, g.claim,
        g.confidence, g.votes, g.prompt_ver, g.judged_at,
        count(*) OVER ()::int AS available_total
-  FROM voc_message msg
+  FROM snapshot_message_spu a
+  JOIN voc_message msg ON msg.message_id = a.message_id
   JOIN voc_social_gate g ON g.message_id = msg.message_id
-  JOIN target t
-    ON t.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+  JOIN target t ON t.spu = a.spu
  WHERE g.cls IN ('诉求缺口', '产品缺陷')
    AND g.prompt_ver = (
      SELECT prompt_ver FROM voc_social_gate
@@ -1974,6 +1996,7 @@ SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
        JOIN voc_spu_issue i
          ON i.opp_id = oe.opp_id AND i.spu = t.spu
       WHERE oe.message_id = msg.message_id
+        AND oe.assigned_spu = t.spu
    )
  ORDER BY msg.publish_time DESC NULLS LAST, msg.message_id
  OFFSET %s LIMIT %s
@@ -1981,7 +2004,8 @@ SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
 
 
 MCP_VOICES_UNCLAIMED_INHERITED = """
-WITH target AS (SELECT %s::text AS spu)
+WITH target AS (SELECT %s::text AS spu),
+""" + _assignment_snapshot_ctes() + """
 SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
        msg.publish_time, msg.country, msg.lang, msg.url,
        msg.content AS content_raw, msg.content_zh, msg.star, msg.interactions,
@@ -1990,12 +2014,10 @@ SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
        g.cls, g.claim,
        g.confidence, g.votes, g.prompt_ver, g.judged_at,
        count(*) OVER ()::int AS available_total
-  FROM voc_message msg
+  FROM snapshot_message_spu a
+  JOIN voc_message msg ON msg.message_id = a.message_id
   JOIN voc_social_gate g ON g.message_id = msg.message_id
-  JOIN target t
-    ON t.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
-    OR t.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+  JOIN target t ON t.spu = a.spu
  WHERE g.cls IN ('诉求缺口', '产品缺陷')
    AND g.prompt_ver = (
      SELECT prompt_ver FROM voc_social_gate
@@ -2008,6 +2030,7 @@ SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
        JOIN voc_spu_issue i
          ON i.opp_id = oe.opp_id AND i.spu = t.spu
       WHERE oe.message_id = msg.message_id
+        AND oe.assigned_spu = t.spu
    )
  ORDER BY msg.publish_time DESC NULLS LAST, msg.message_id
  OFFSET %s LIMIT %s
@@ -2015,13 +2038,13 @@ SELECT msg.message_id, NULL::int AS seq, msg.src_line, msg.platform,
 
 
 MCP_VOICES_UNCLAIMED_COUNTS = """
-WITH target AS (SELECT %s::text AS spu), eligible AS (
+WITH target AS (SELECT %s::text AS spu),
+""" + _assignment_snapshot_ctes() + """, eligible AS (
   SELECT msg.retention_until
-    FROM voc_message msg
+    FROM snapshot_message_spu a
+    JOIN voc_message msg ON msg.message_id = a.message_id
     JOIN voc_social_gate g ON g.message_id = msg.message_id
-    JOIN target t
-      ON t.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+    JOIN target t ON t.spu = a.spu
    WHERE g.cls IN ('诉求缺口', '产品缺陷')
      AND g.prompt_ver = (
        SELECT prompt_ver FROM voc_social_gate
@@ -2033,6 +2056,7 @@ WITH target AS (SELECT %s::text AS spu), eligible AS (
          JOIN voc_spu_issue i
            ON i.opp_id = oe.opp_id AND i.spu = t.spu
         WHERE oe.message_id = msg.message_id
+          AND oe.assigned_spu = t.spu
      )
 )
 SELECT count(*) FILTER (WHERE retention_until < current_date)::int
@@ -2045,14 +2069,13 @@ SELECT count(*) FILTER (WHERE retention_until < current_date)::int
 
 
 MCP_VOICES_UNCLAIMED_COUNTS_INHERITED = """
-WITH target AS (SELECT %s::text AS spu), eligible AS (
+WITH target AS (SELECT %s::text AS spu),
+""" + _assignment_snapshot_ctes() + """, eligible AS (
   SELECT msg.retention_until
-    FROM voc_message msg
+    FROM snapshot_message_spu a
+    JOIN voc_message msg ON msg.message_id = a.message_id
     JOIN voc_social_gate g ON g.message_id = msg.message_id
-    JOIN target t
-      ON t.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
-      OR t.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+    JOIN target t ON t.spu = a.spu
    WHERE g.cls IN ('诉求缺口', '产品缺陷')
      AND g.prompt_ver = (
        SELECT prompt_ver FROM voc_social_gate
@@ -2064,6 +2087,7 @@ WITH target AS (SELECT %s::text AS spu), eligible AS (
          JOIN voc_spu_issue i
            ON i.opp_id = oe.opp_id AND i.spu = t.spu
         WHERE oe.message_id = msg.message_id
+          AND oe.assigned_spu = t.spu
      )
 )
 SELECT count(*) FILTER (WHERE retention_until < current_date)::int
@@ -2086,8 +2110,7 @@ SELECT oe.opp_id, oe.message_id, oe.seq, oe.attach_week,
     ON e.message_id = oe.message_id AND e.seq = oe.seq
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE i.spu = %s
-   AND i.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+   AND oe.assigned_spu = i.spu
    AND (msg.retention_until IS NULL OR msg.retention_until >= current_date)
  ORDER BY (e.sentiment = '负面') DESC,
           msg.publish_time DESC NULLS LAST, oe.message_id, oe.seq, oe.opp_id
@@ -2106,8 +2129,7 @@ SELECT oe.opp_id, oe.message_id, oe.seq, oe.attach_week,
     ON e.message_id = oe.message_id AND e.seq = oe.seq
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE i.spu = %s
-   AND (i.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-        OR i.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
+   AND oe.assigned_spu = i.spu
    AND (msg.retention_until IS NULL OR msg.retention_until >= current_date)
  ORDER BY (e.sentiment = '负面') DESC,
           msg.publish_time DESC NULLS LAST, oe.message_id, oe.seq, oe.opp_id
@@ -2125,8 +2147,7 @@ SELECT count(*) FILTER (
   JOIN voc_opp_evidence oe ON oe.opp_id = i.opp_id
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE i.spu = %s
-   AND i.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[])
-                    || COALESCE(msg.spu_inherited, ARRAY[]::text[]))
+   AND oe.assigned_spu = i.spu
 """
 
 
@@ -2140,8 +2161,7 @@ SELECT count(*) FILTER (
   JOIN voc_opp_evidence oe ON oe.opp_id = i.opp_id
   JOIN voc_message msg ON msg.message_id = oe.message_id
  WHERE i.spu = %s
-   AND (i.spu = ANY(COALESCE(msg.spu, ARRAY[]::text[]))
-        OR i.spu = ANY(COALESCE(msg.spu_inherited, ARRAY[]::text[])))
+   AND oe.assigned_spu = i.spu
 """
 
 

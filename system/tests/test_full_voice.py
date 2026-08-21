@@ -69,23 +69,16 @@ def test_innovation_template_prefers_normalized_voice() -> None:
     assert "row.snippet or row.voice_text" not in tpl
 
 
-def test_issue_voices_covers_inherited_spu() -> None:
-    """原声过滤必须与 voc_spu_issue 的成卡口径一致（spu ∪ spu_inherited）。
-
-    只查 msg.spu 会让卡片显示「4 条证据」、点进去空白——社媒消息的 SPU
-    多来自组内继承，事实数组为空。2026-08-19 生产实测：879 个 (SPU,问题)
-    组合里 24 个全空、72 个少显示，波及 11 个 SPU。
-    """
-    assert "spu_inherited" in Q.ISSUE_VOICES
+def test_issue_voices_uses_the_frozen_relation_assignment() -> None:
+    """卡片与原声必须共享关系行归属，不能从可变消息数组二次推导。"""
+    assert "oe.assigned_spu = %s" in Q.ISSUE_VOICES
+    assert "msg.spu" not in Q.ISSUE_VOICES
 
 
 def test_no_query_matches_fact_spu_alone() -> None:
-    """全局守卫：任何对 voc_message.spu 的数组成员匹配都必须带上继承数组。"""
-    lines = Q.__file__ and __import__("pathlib").Path(Q.__file__).read_text(
-        encoding="utf-8").splitlines()
-    offenders = [
-        i + 1 for i, ln in enumerate(lines)
-        if "ANY(COALESCE(msg.spu" in ln
-        and "spu_inherited" not in " ".join(lines[i:i + 3])
-    ]
-    assert not offenders, f"以下行只按事实 SPU 过滤，漏了 spu_inherited：{offenders}"
+    """全局守卫：v3 消费 SQL 不得再读消息 SPU 数组。"""
+    source = __import__("pathlib").Path(Q.__file__).read_text(encoding="utf-8")
+    assert "ANY(COALESCE(msg.spu" not in source
+    assert "ANY(COALESCE(m.spu" not in source
+    assert "msg.spu_inherited" not in source
+    assert "m.spu_inherited" not in source

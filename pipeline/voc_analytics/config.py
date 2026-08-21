@@ -181,7 +181,7 @@ PRECLUSTER_MAX = MAX_GROUP_SIZE
 
 # 去重（§6.3）
 L2_TOPK_MIN, L2_TOPK_MAX, L2_TOPK_RATIO = 3, 10, 0.3
-MODE_MERGE_COS = 0.85      # 跨批模式归并候选阈值（仅召回，判定仍交 L3）
+MODE_MERGE_COS = 0.75      # 三档探针选定；仅召回，判定仍交 L3
 
 # 冷启动放行（§12.2）
 BACKLOG_TOP_N = 50

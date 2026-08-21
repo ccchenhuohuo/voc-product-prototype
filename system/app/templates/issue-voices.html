@@ -15,7 +15,6 @@
     <div class="ro"><div class="v">{{ (issue.evi_count or 0)|num }}</div><div class="k">条证据</div></div>
     <div class="ro"><div class="v{% if not recent %} dim{% endif %}">{{ recent if recent else '·' }}</div><div class="k">近60天新增</div><div class="cmp">{{ '仍在产出' if recent else '已沉寂' }}</div></div>
     <div class="ro"><div class="v">{{ summary.avg_star|num }}</div><div class="k">原声均星</div></div>
-    <div class="ro"><div class="v">{{ issue.n_eff|num }}</div><div class="k">有效产品数</div><div class="cmp">{{ issue.scope or '—' }}</div></div>
   </div>
 
   <div class="grp"><h2>原声</h2><span class="c">{{ voices|length }} / {{ issue.evi_count or 0 }}</span><span class="r">问题条目就是最小分析单位，其下不再分级</span></div>

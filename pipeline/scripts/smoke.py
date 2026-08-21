@@ -2,12 +2,11 @@
 """机会点生成与收尾最小探针：基于已有事实层跑小切片并执行验收口径。
 
 为什么需要它——冷启动跑了两轮才发现的问题，本来都该在这里被挡住：
-  · 放行策略、跨来源补证与派生层必须在手工收尾中完整执行
+  · 放行策略与派生层必须在手工收尾中完整执行
   · 生成阶段 build 完必须落库
-  · 跨来源汇聚 350/350 空转（旧按渠道分组使 core_tag 取值域不相交）
   · problem_mode 退化成分类名，593 条只有 63 个不同向量
   · opp_id 碰撞导致「evi_total=91 而描述只讲了 1 条」
-上一个探针漏掉它们，是因为：在脏库上跑、被 timeout 砍在跨线汇聚之前、只跑了电商。
+上一个探针漏掉它们，是因为：在脏库上跑、被 timeout 砍断、只跑了电商。
 所以本脚本的三条硬要求是：干净切片、跑到最后一步、两个生命周期都覆盖。
 
 用法：
@@ -26,7 +25,7 @@ import argparse, re, subprocess, sys, time, unicodedata
 
 sys.path.insert(0, "/home/sdy/voc-analytics")
 from voc_analytics import (  # noqa: E402
-    config as C, db, lifecycle, llm, pipeline, resolve, routing,
+    config as C, db, lifecycle, llm, pipeline, routing,
 )
 from voc_analytics.stages import precluster, stage1, validate, value_gate  # noqa: E402
 
@@ -76,6 +75,14 @@ def cleanup() -> None:
         # 删掉挂到真实机会的哨兵关系后，在同一事务内恢复权威分类与计数。
         for opp_id in real_targets:
             pipeline.recount(opp_id, c)
+
+    # 归属快照只允许按 run_id 整轮删除；清掉历次哨兵，避免测试资产累积。
+    smoke_runs = db.q("""SELECT DISTINCT run_id FROM voc_assign_snapshot
+                            WHERE run_id LIKE 'smoke_%%' ORDER BY run_id""")
+    for row in smoke_runs:
+        db.execute("DELETE FROM voc_assign_snapshot WHERE run_id=%s", [row["run_id"]])
+        db.execute("DELETE FROM voc_run_log WHERE run_id=%s",
+                   [f"{row['run_id']}:assign_snapshot"])
 
     print(f"  已清理哨兵机会 {len(ids)} 条，回算真实目标 {len(real_targets)} 条")
 
@@ -143,7 +150,7 @@ def run_acceptance(week: str) -> None:
                  "WHERE first_week=%s", [week]) or 0
     chk("problem_mode 基本互异（>=90%）", uniq >= n * 0.9, f"{uniq}/{n}")
 
-    # 2. 向量 —— 没有向量则 L2/墓碑/跨线全废
+    # 2. 向量 —— 没有向量则老品 L2 与相似检索失效
     novec = db.q1("SELECT count(*) FROM voc_opportunity WHERE first_week=%s "
                   "AND mode_vec IS NULL", [week]) or 0
     chk("每条都有 mode_vec", novec == 0, f"缺失 {novec} 条")
@@ -176,17 +183,12 @@ def run_acceptance(week: str) -> None:
                       WHERE o.first_week=%s AND m.message_id IS NULL""", [week]) or 0
     chk("挂载证据都能溯到原始消息", orphan == 0, f"断链 {orphan} 条")
 
-    # 7. 跨来源汇聚 —— 关系表 match_by 保留兼容值 cross_line
-    xline = db.q1("""SELECT count(*) FROM voc_opp_evidence oe JOIN voc_opportunity o USING(opp_id)
-                      WHERE o.first_week=%s AND oe.match_by='cross_line'""", [week]) or 0
-    chk("跨来源汇聚有挂载产生", xline > 0, f"{xline} 条其他来源证据")
-
-    # 8. 放行 —— 不放行等于 PM 什么都看不到
+    # 7. 放行 —— 不放行等于 PM 什么都看不到
     rel = db.q1("SELECT count(*) FROM voc_opportunity WHERE first_week=%s "
                 "AND NOT backlog", [week]) or 0
     chk("放行策略已执行", rel > 0, f"放行 {rel}/{n}")
 
-    # 9. 快照 —— 回滚与闭环验证的依据
+    # 8. 快照 —— 回滚与闭环验证的依据
     snap = db.q1("SELECT count(*) FROM voc_opp_snapshot WHERE week=%s", [week]) or 0
     chk("已写周度快照", snap > 0, f"{snap} 条")
 
@@ -198,7 +200,15 @@ def _route_current_generation_pool(ctx):
     探针仍只在后续挑少量桶跑 Stage1+，但社媒不得绕过 G4/G5，
     新品也不得绕过与正式主流程相同的预聚类。
     """
-    rows = db.generation_pool()
+    # G4 必须先物化，033 才能用同一份判定冻结完整 G5 归属池。
+    warm_rows = db.generation_pool()
+    warm_social = [row for row in warm_rows if row.get("src_line") == "社媒"]
+    warm_gate = value_gate.apply_value_gate(warm_social, ctx)
+    if warm_gate.failed_rows:
+        raise llm.LLMError(f"探针 G4 预热失败 {len(warm_gate.failed_rows)} 条")
+    db.prepare_assign_snapshot(ctx.run_id)
+
+    rows = db.generation_pool(assign_run_id=ctx.run_id)
     ecommerce = [row for row in rows if row.get("src_line") == "电商"]
     social = [row for row in rows if row.get("src_line") == "社媒"]
     ecommerce_classified, invalid = routing.classify_evidence_by_lifecycle(ecommerce)
@@ -274,25 +284,15 @@ def run_script_path(ctx) -> None:
         pipeline.persist_opportunities([(o, rows) for o in bbuilt], SMOKE_WEEK, ctx,
                                        verbose=True)
 
-    # 收尾三件套：上一个探针就是死在没跑到这里
-    print("[收尾] 跨来源汇聚 / 拆分 / 快照 / 放行")
-    for r in db.q("SELECT opp_id, mode_vec::text v, opp_type, source_lines, src_line "
-                  "FROM voc_opportunity "
-                  "WHERE first_week=%s AND mode_vec IS NOT NULL", [SMOKE_WEEK]):
-        vec = resolve._parse_vec(r["v"])
-        if vec:
-            attached = resolve.cross_source_merge(
-                r["opp_id"], vec, r["opp_type"],
-                r.get("source_lines") or [r["src_line"]], SMOKE_WEEK, ctx)
-            if attached:
-                pipeline.attach_evidence(r["opp_id"], attached)
+    # 收尾：新品与老品生成后不再发生跨生命周期或跨来源补证。
+    print("[收尾] 快照 / 放行")
     db.execute("""INSERT INTO voc_opp_snapshot(opp_id,week,evi_total,rank_score,title,
                     problem_mode,desc_phenomenon,desc_attribution,desc_suggestion)
                   SELECT opp_id,%s,evi_total,rank_score,title,problem_mode,desc_phenomenon,
                          desc_attribution,desc_suggestion
                     FROM voc_opportunity WHERE first_week=%s
                   ON CONFLICT (opp_id,week) DO NOTHING""", [SMOKE_WEEK, SMOKE_WEEK])
-    print(f"  放行: {lifecycle.release_to_pm()}")
+    print(f"  放行: {lifecycle.release_to_pm(opp_id_prefix='OPP2-')}")
 
 
 def main() -> int:

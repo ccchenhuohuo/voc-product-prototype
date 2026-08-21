@@ -5,17 +5,17 @@
   · 「不考虑」必填理由（trg_voc_log_status），状态变更写审计日志（trg_voc_audit_opp_status）
   · 安全类不得机器自动合并（trg_voc_guard_safety）
 
-本模块补上应用层三件事：墓碑抑制、墓碑唤醒、陈旧检测。
+本模块保留墓碑唤醒与陈旧检测；新品墓碑抑制已按 v3 决议删除。
 """
 from __future__ import annotations
-from . import db, resolve
+from . import db
 
 LOCKED = ("在跟进", "项目中", "已完成", "不考虑")
 PRIORITY = {"项目中": 5, "在跟进": 4, "已完成": 3, "考虑中": 2, "不考虑": 1}
 
 
 # ---------------------------------------------------------------- 放行（§12.2）
-def release_to_pm() -> dict:
+def release_to_pm(*, opp_id_prefix: str | None = None) -> dict:
     """安全类 / 双源印证 / rank Top-N 放行进 PM 视野，其余留 backlog。
 
     这段逻辑早期只写在旧调度资产里，而冷启动直接跑
@@ -27,20 +27,29 @@ def release_to_pm() -> dict:
     留在 backlog 反而没人看得见。
     """
     from . import config as C
+    pattern = f"{opp_id_prefix}%" if opp_id_prefix is not None else None
     db.execute("""
       WITH ranked AS (
         SELECT opp_id, row_number() OVER (ORDER BY rank_score DESC NULLS LAST) rn
-          FROM voc_opportunity WHERE backlog)
+          FROM voc_opportunity
+         WHERE backlog AND (%s IS NULL OR opp_id LIKE %s))
       UPDATE voc_opportunity o SET backlog = false, released_at = now()
         FROM ranked r WHERE o.opp_id = r.opp_id
-         AND (o.safety_flag OR o.dual_source OR r.rn <= %s)""", [C.BACKLOG_TOP_N])
+         AND (o.safety_flag OR o.dual_source OR r.rn <= %s)""",
+        [pattern, pattern, C.BACKLOG_TOP_N])
     return {
-        "已放行": db.q1("SELECT count(*) FROM voc_opportunity WHERE NOT backlog") or 0,
-        "留 backlog": db.q1("SELECT count(*) FROM voc_opportunity WHERE backlog") or 0,
-        "其中安全类": db.q1("SELECT count(*) FROM voc_opportunity "
-                            "WHERE NOT backlog AND safety_flag") or 0,
-        "其中待复核": db.q1("SELECT count(*) FROM voc_opportunity "
-                            "WHERE NOT backlog AND needs_review") or 0,
+        "已放行": db.q1(
+            "SELECT count(*) FROM voc_opportunity WHERE NOT backlog "
+            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+        "留 backlog": db.q1(
+            "SELECT count(*) FROM voc_opportunity WHERE backlog "
+            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+        "其中安全类": db.q1(
+            "SELECT count(*) FROM voc_opportunity WHERE NOT backlog AND safety_flag "
+            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
+        "其中待复核": db.q1(
+            "SELECT count(*) FROM voc_opportunity WHERE NOT backlog AND needs_review "
+            "AND (%s IS NULL OR opp_id LIKE %s)", [pattern, pattern]) or 0,
     }
 
 
@@ -55,41 +64,17 @@ def is_locked(opp_id: str) -> bool:
 
 
 # ---------------------------------------------------------------- 墓碑
-def tombstones(require_vec: bool = False) -> list[dict]:
-    """「不考虑」的机会点。
-
-    require_vec=True 用于【抑制】——需要向量做相似度召回。
-    require_vec=False 用于【唤醒】——只看证据计数，不该被向量有无卡住，
-    否则没跑过 embedding 的墓碑永远不会被复议。
-    """
+def tombstones(opp_id_prefix: str | None = None) -> list[dict]:
+    """用于证据增长复议的「不考虑」机会点，可按代次隔离。"""
     sql = """
-      SELECT o.opp_id, o.problem_mode, o.title, o.rep_snippets,
-             o.mode_vec::text AS vec, o.core_tag, o.opp_type,
-             o.safety_flag, o.evi_total
+      SELECT o.opp_id, o.opp_type, o.evi_total
         FROM voc_opportunity o JOIN voc_opportunity_manual m USING(opp_id)
        WHERE m.status='不考虑'"""
-    if require_vec:
-        sql += " AND o.mode_vec IS NOT NULL"
-    return db.q(sql)
-
-
-def check_tombstone(new: dict, ctx) -> dict | None:
-    """新机会点是否命中墓碑。命中则抑制，但【证据仍要落库】——
-    否则"累计到 3 倍"永远没有落点，REVIVE 永不触发（§7.3）。"""
-    if new.get("safety_flag"):
-        return None                     # 安全类不受墓碑抑制（§10.1）
-    cands = [t for t in tombstones(require_vec=True)
-             if t["core_tag"] == new.get("core_tag") and t["opp_type"] == new.get("opp_type")]
-    if not cands:
-        return None
-    ranked = resolve.l2_rank(new["mode_vec"], cands)
-    for score, c in ranked:
-        v = resolve.l3_verdict(new["problem_mode"], new.get("title", ""),
-                               new.get("rep_snippets") or [], c, ctx)
-        if v["verdict"] == "same":
-            return {"opp_id": c["opp_id"], "confidence": v["confidence"],
-                    "rationale": v["rationale"]}
-    return None
+    params: list[str] = []
+    if opp_id_prefix is not None:
+        sql += " AND o.opp_id LIKE %s"
+        params.append(f"{opp_id_prefix}%")
+    return db.q(sql, params)
 
 
 def tombstone_baseline(opp_id: str) -> int | None:
@@ -103,11 +88,11 @@ def tombstone_baseline(opp_id: str) -> int | None:
        ORDER BY l.changed_at DESC, s.week DESC LIMIT 1""", [opp_id])
 
 
-def check_revive(week: str) -> int:
+def check_revive(week: str, *, opp_id_prefix: str | None = None) -> int:
     """墓碑证据累计达基准 3 倍 => 提 REVIVE 提案。
     被拒后基准重置为当时的 evi_total，避免每周重复提案。"""
     n = 0
-    for t in tombstones():
+    for t in tombstones(opp_id_prefix):
         base = tombstone_baseline(t["opp_id"])
         if not base:
             continue
